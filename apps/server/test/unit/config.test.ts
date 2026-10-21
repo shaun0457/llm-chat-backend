@@ -115,6 +115,8 @@ describe("loadConfig", () => {
 
     expect(message).toContain("JSON_DEFAULT_WAIT_MS");
     expect(message).toContain("JSON_MAX_WAIT_MS");
+    // Only the maximum was set: say where the other value came from.
+    expect(message).toContain("default 30000");
   });
 
   it("accepts a default JSON wait equal to the maximum", () => {

@@ -120,6 +120,10 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
               "cache-control": "no-store",
             })
             .send(turn);
+        default: {
+          const unknownKind: never = outcome.kind;
+          throw new Error(`unhandled JSON outcome: ${String(unknownKind)}`);
+        }
       }
     },
   );

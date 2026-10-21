@@ -17,6 +17,7 @@ const commaList = z
   .pipe(z.array(z.string()).min(1));
 
 const MAX_JSON_WAIT_MS = 600_000;
+const DEFAULT_JSON_WAIT_MS = 30_000;
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
@@ -36,7 +37,12 @@ const envSchema = z.object({
   FLUSH_INTERVAL_MS: z.coerce.number().int().min(10).max(60_000).default(1000),
   DEMO_DELAY_MS: z.coerce.number().int().min(0).max(10_000).default(50),
   // Capped well below setTimeout's 2^31-1 ms limit, past which a timer fires at once.
-  JSON_DEFAULT_WAIT_MS: z.coerce.number().int().min(0).max(MAX_JSON_WAIT_MS).default(30_000),
+  JSON_DEFAULT_WAIT_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_JSON_WAIT_MS)
+    .default(DEFAULT_JSON_WAIT_MS),
   JSON_MAX_WAIT_MS: z.coerce.number().int().min(0).max(MAX_JSON_WAIT_MS).default(195_000),
 });
 
@@ -97,7 +103,10 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   const parsed = result.data;
   if (parsed.JSON_DEFAULT_WAIT_MS > parsed.JSON_MAX_WAIT_MS) {
     throw new ConfigError([
-      { key: "JSON_DEFAULT_WAIT_MS", reason: "greater than JSON_MAX_WAIT_MS" },
+      {
+        key: "JSON_DEFAULT_WAIT_MS",
+        reason: `greater than JSON_MAX_WAIT_MS; lower both (default ${DEFAULT_JSON_WAIT_MS})`,
+      },
     ]);
   }
   return Object.freeze({
