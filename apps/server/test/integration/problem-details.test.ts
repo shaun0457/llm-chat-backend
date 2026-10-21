@@ -152,6 +152,37 @@ describe("problem details", () => {
     expect(response.json()).toMatchObject({ status: 416, code: "request_error" });
   });
 
+  it("keeps the status of an http-errors client error but not its message", async () => {
+    app = makeTestApp();
+    app.get("/test/exposed", async () => {
+      throw Object.assign(new Error("upstream rejected key sk-123"), {
+        statusCode: 401,
+        expose: true,
+      });
+    });
+
+    const response = await app.inject({ method: "GET", url: "/test/exposed" });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({
+      type: "about:blank",
+      title: "Unauthorized",
+      status: 401,
+      code: "request_error",
+    });
+  });
+
+  it("keeps the status of a pre-routing framework error other than a bad URL", async () => {
+    app = makeTestApp();
+    app.get("/test/items/:id", async () => ({ ok: true }));
+
+    const response = await app.inject({ method: "GET", url: `/test/items/${"x".repeat(150)}` });
+
+    expect(response.statusCode).toBe(414);
+    expect(response.headers["content-type"]).toMatch(PROBLEM_JSON);
+    expect(response.json()).toMatchObject({ status: 414, code: "request_error" });
+  });
+
   it("answers an undecodable URL with a 400 problem carrying the request id", async () => {
     app = makeTestApp();
 

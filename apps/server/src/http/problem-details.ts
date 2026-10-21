@@ -1,4 +1,4 @@
-import type { FastifyError, FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyBaseLogger, FastifyError, FastifyInstance, FastifyReply } from "fastify";
 import { STATUS_CODES } from "node:http";
 
 /** The only way a handler signals an expected error; mapped to RFC 9457 problem details. */
@@ -59,33 +59,42 @@ export function registerProblemDetails(app: FastifyInstance): void {
     );
   });
 
-  // Typed as unknown: a handler can throw or reject with anything, including null.
-  app.setErrorHandler((error: unknown, request, reply) => {
-    if (error instanceof ProblemError) {
-      return sendProblem(reply, problem(error.status, error.code, error.detail));
-    }
-    if (!(error instanceof Error)) {
-      request.log.error({ thrown: typeof error }, "unhandled non-Error thrown");
-      return sendProblem(reply, problem(500, "internal_error"));
-    }
-    const fastifyError = error as FastifyError & { expose?: unknown };
-    if (fastifyError.validation !== undefined) {
-      return sendProblem(reply, problem(400, "validation_error", validationDetail(fastifyError)));
-    }
-    // Client errors deliberately raised by Fastify (FST_ERR_*: malformed JSON, oversized body) or
-    // by plugins through http-errors (expose: true, e.g. 416 from the static file server) keep
-    // their status. Any other error carrying a statusCode (e.g. an unwrapped upstream SDK error)
-    // is unexpected and must not leak its status or message.
-    const status = fastifyError.statusCode;
-    const isClientError =
-      (typeof fastifyError.code === "string" && fastifyError.code.startsWith("FST_ERR_")) ||
-      fastifyError.expose === true;
-    if (isClientError && status !== undefined && status >= 400 && status < 500) {
-      const code = status === 400 ? "validation_error" : "request_error";
-      return sendProblem(reply, problem(status, code, fastifyError.message));
-    }
+  app.setErrorHandler((error: unknown, request, reply) =>
+    sendProblem(reply, toProblem(error, request.log)),
+  );
+}
 
-    request.log.error({ err: error }, "unhandled error");
-    return sendProblem(reply, problem(500, "internal_error"));
-  });
+/**
+ * Maps anything thrown to a problem. Typed as unknown: a handler can throw anything, even null.
+ * Client errors keep their status: Fastify's own (FST_ERR_*: malformed JSON, oversized body,
+ * bad URL) with their message, and http-errors ones from plugins (expose: true, e.g. 416 from
+ * the static file server) without it, since any library can create those. Everything else is
+ * unexpected: logged, and answered as 500 without status or message of its own.
+ */
+export function toProblem(error: unknown, log: FastifyBaseLogger): Problem {
+  if (error instanceof ProblemError) {
+    return problem(error.status, error.code, error.detail);
+  }
+  if (!(error instanceof Error)) {
+    log.error({ thrown: typeof error }, "unhandled non-Error thrown");
+    return problem(500, "internal_error");
+  }
+
+  const fastifyError = error as FastifyError & { expose?: unknown };
+  if (fastifyError.validation !== undefined) {
+    return problem(400, "validation_error", validationDetail(fastifyError));
+  }
+  const status = fastifyError.statusCode;
+  if (status !== undefined && status >= 400 && status < 500) {
+    const code = status === 400 ? "validation_error" : "request_error";
+    if (typeof fastifyError.code === "string" && fastifyError.code.startsWith("FST_ERR_")) {
+      return problem(status, code, fastifyError.message);
+    }
+    if (fastifyError.expose === true) {
+      return problem(status, code);
+    }
+  }
+
+  log.error({ err: error }, "unhandled error");
+  return problem(500, "internal_error");
 }

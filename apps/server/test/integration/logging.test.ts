@@ -25,7 +25,12 @@ describe("logging", () => {
   });
 
   describe("credential redaction", () => {
-    const secretHeaders = { "x-llm-api-key": SENTINEL, "authorization": `Bearer ${SENTINEL}` };
+    const secretHeaders = {
+      "x-llm-api-key": SENTINEL,
+      "authorization": `Bearer ${SENTINEL}`,
+      "proxy-authorization": `Basic ${SENTINEL}`,
+      "cookie": `session=${SENTINEL}`,
+    };
 
     // Regression guard: Fastify's default request serializer logs no headers today.
     it("default request logging never writes the API key or bearer token", async () => {

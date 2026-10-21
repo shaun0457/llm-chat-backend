@@ -5,7 +5,7 @@ import type { IncomingMessage } from "node:http";
 
 import type { AppConfig } from "./config.js";
 import { registerApiDocs } from "./http/plugins.js";
-import { problem, registerProblemDetails, sendProblem } from "./http/problem-details.js";
+import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-details.js";
 import { healthRoutes } from "./modules/health/routes.js";
 
 export type AppDeps = {
@@ -24,8 +24,12 @@ const VALID_REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 const REDACTED_PATHS = [
   'req.headers["x-llm-api-key"]',
   "req.headers.authorization",
+  'req.headers["proxy-authorization"]',
+  "req.headers.cookie",
   'headers["x-llm-api-key"]',
   "headers.authorization",
+  'headers["proxy-authorization"]',
+  "headers.cookie",
 ];
 
 function requestId(request: IncomingMessage): string {
@@ -47,7 +51,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // Errors raised before routing (e.g. an undecodable URL) bypass hooks and the error handler.
     frameworkErrors: (error, request, reply) => {
       void reply.header(REQUEST_ID_HEADER, request.id);
-      return sendProblem(reply, problem(400, "validation_error", error.message));
+      return sendProblem(reply, toProblem(error, request.log));
     },
   });
 
