@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HUSKY: "0"
+  NODE_VERSION: "22.23.3"
+
+jobs:
+  check:
+    name: Lint, typecheck, test, audit
+    runs-on: ubuntu-24.04
+    env:
+      # Never reuse cached test results in CI.
+      TURBO_FORCE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint:ci
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
+
+  image:
+    name: Container image builds and starts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build image
+        run: docker build -t llm-chat-backend:ci .
+      - name: Start container
+        run: docker run -d --name api -p 3000:3000 llm-chat-backend:ci
+      - name: Wait for /health (30 s)
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3000/health; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "/health did not answer 200 within 30 s"
+          exit 1
+      - name: Check docs and their local assets
+        run: |
+          curl -sf -o /dev/null http://127.0.0.1:3000/openapi.json
+          html=$(curl -sfL http://127.0.0.1:3000/docs)
+          refs=$(echo "$html" | grep -oE '(src|href)="/[^"]+"' | sed -E 's/^(src|href)="//; s/"$//')
+          test -n "$refs" || { echo "/docs references no local assets"; exit 1; }
+          for ref in $refs; do
+            curl -sf -o /dev/null "http://127.0.0.1:3000$ref" || { echo "missing asset $ref"; exit 1; }
+          done
+      - name: Runs as non-root without dev dependencies
+        run: |
+          test "$(docker run --rm llm-chat-backend:ci id -u)" != "0"
+          docker run --rm llm-chat-backend:ci sh -c 'test -d node_modules/.pnpm && ! ls node_modules/.pnpm | grep -qE "^(vitest|typescript|eslint|tsup)@"'
+      - name: Stops cleanly on SIGTERM
+        run: |
+          docker stop -t 15 api
+          test "$(docker inspect -f '{{.State.ExitCode}}' api)" = "0"
+      - name: Container logs
+        if: always()
+        run: docker logs api || true
+
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # The action lists the pull request's commits through the API.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Personal-account repository: no GITLEAKS_LICENSE needed. Comments need write access.
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  commits:
+    name: Conventional commit messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check commit subjects
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          pattern='^(feat|fix|refactor|docs|test|chore|perf|ci|revert)(\([a-z0-9-]+\))?!?: .+'
+          bad=$(git log --no-merges --format=%s "$BASE..$HEAD" | grep -vE "$pattern" || true)
+          if [ -n "$bad" ]; then
+            echo "Commit subjects not in conventional-commit form:"
+            echo "$bad"
+            exit 1
+          fi

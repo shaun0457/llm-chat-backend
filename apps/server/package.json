@@ -1,26 +1,42 @@
 {
   "name": "server",
   "version": "0.4.3",
+  "files": [
+    "dist"
+  ],
   "dependencies": {
-    "tsup": "8.3.0"
+    "@fastify/swagger": "9.9.2",
+    "@fastify/swagger-ui": "6.1.2",
+    "fastify": "5.12.7",
+    "fastify-type-provider-zod": "7.0.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@typescript-eslint/eslint-plugin": "^5.45.0",
-    "@typescript-eslint/parser": "^5.45.0",
+    "@types/eslint": "8.56.12",
+    "@types/node": "22.20.5",
+    "@typescript-eslint/eslint-plugin": "8.72.0",
+    "@typescript-eslint/parser": "8.72.0",
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^8.5.0",
+    "eslint-import-resolver-typescript": "4.4.5",
     "eslint-plugin-import": "2.31.0",
-    "eslint-plugin-prettier": "^5.2.1",
     "eslint-plugin-import-esm": "^1.2.1",
+    "eslint-plugin-prettier": "^5.2.1",
+    "pino-pretty": "13.2.0",
     "prettier": "^3.3.3",
-    "typescript": "^5.6.3"
+    "tsup": "8.3.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
   },
   "scripts": {
     "build": "tsup ./src/index.ts --format esm",
     "dev": "tsup ./src/index.ts --format esm --watch --onSuccess \"pnpm run start\"",
     "format": "prettier --write .",
     "lint": "eslint --fix .",
-    "start": "node dist/index.js"
+    "lint:ci": "eslint . --max-warnings 0",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "type": "module"
 }
