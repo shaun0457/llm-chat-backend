@@ -218,11 +218,10 @@ export function createMessagesService(deps: {
 
       const turn = await attach.json(assistantMessage.id, attempt);
       if (turn === undefined) {
-        // Deleted while generating: the session went with it.
-        throw sessionNotFound();
+        // Deleted while generating, normally together with its session.
+        throw (await sessionExists(db.drizzle, sessionId)) ? messageNotFound() : sessionNotFound();
       }
-      const status = turn.assistantMessage.status;
-      return { status, turn };
+      return { status: turn.assistantMessage.status, turn };
     },
 
     async list(sessionId, { limit, before }) {

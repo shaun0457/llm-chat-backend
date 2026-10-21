@@ -17,8 +17,10 @@ export type FakeScript = {
   delayMs?: number;
   /** Throw an upstream error after emitting this many chunks. */
   throwAfter?: number;
-  /** After the chunks, wait for this promise (or the abort signal) before finishing. */
+  /** Wait for this promise (or the abort signal) after `gateAfter` chunks. */
   gate?: Promise<void>;
+  /** How many chunks to emit before waiting at the gate. Default: all of them. */
+  gateAfter?: number;
   /** After the chunks, wait until the signal aborts; never finishes on its own. */
   hang?: boolean;
   finishReason?: LlmFinishReason;
@@ -81,7 +83,11 @@ export class FakeLlmProvider implements LlmProvider {
 
   async *#run(script: FakeScript, signal: AbortSignal): AsyncIterable<LlmEvent> {
     const deltas = script.deltas ?? ["Hel", "lo"];
+    const gateAfter = Math.min(script.gateAfter ?? deltas.length, deltas.length);
     for (const [index, text] of deltas.entries()) {
+      if (script.gate !== undefined && index === gateAfter) {
+        await Promise.race([script.gate, untilAborted(signal)]);
+      }
       if (script.throwAfter === index) {
         throw new FakeUpstreamError();
       }
@@ -94,7 +100,7 @@ export class FakeLlmProvider implements LlmProvider {
     if (script.throwAfter !== undefined && script.throwAfter >= deltas.length) {
       throw new FakeUpstreamError();
     }
-    if (script.gate !== undefined) {
+    if (script.gate !== undefined && gateAfter === deltas.length) {
       await Promise.race([script.gate, untilAborted(signal)]);
     }
     if (script.hang === true) {
