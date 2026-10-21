@@ -9,7 +9,7 @@ import type { LlmProvider } from "../../llm/port.js";
 import type { ProviderRegistry } from "../../llm/registry.js";
 import { type LockedSession, lockSession } from "../sessions/repository.js";
 import { resolvedPair, sessionNotFound } from "../sessions/service.js";
-import type { Attach } from "./attach.js";
+import type { Attach, JsonOutcome } from "./attach.js";
 import type { JobRegistry, Reservation } from "./jobs.js";
 import {
   findMessage,
@@ -28,10 +28,14 @@ const TITLE_MAX_CODE_POINTS = 60;
 
 export type MessagesService = {
   /**
-   * Admits a turn, starts its generation and waits for it. The assistant message's status is
-   * the outcome: completed, failed, or still generating (the server is shutting down).
+   * Admits a turn, starts its generation and waits for it at most `waitMs`: completed, failed,
+   * or pending when the answer is still being generated (also when the server shuts down).
    */
-  send(sessionId: string, input: SendMessageInput): Promise<Turn>;
+  send(
+    sessionId: string,
+    input: SendMessageInput,
+    options: { waitMs: number },
+  ): Promise<JsonOutcome>;
   list(sessionId: string, page: ListMessagesInput): Promise<MessagePage>;
   /** Throws 404 message_not_found unless the message belongs to this session. */
   get(sessionId: string, messageId: string): Promise<Message>;
@@ -204,7 +208,7 @@ export function createMessagesService(deps: {
   }
 
   return {
-    async send(sessionId, input) {
+    async send(sessionId, input, { waitMs }) {
       const { admitted, reservation } = await admit(sessionId, input.content);
       const { userMessage, assistantMessage } = admitted.turn;
       const { attempt } = assistantMessage;
@@ -225,12 +229,12 @@ export function createMessagesService(deps: {
         reservation,
       });
 
-      const turn = await attach.json(assistantMessage.id, attempt);
-      if (turn === undefined) {
+      const outcome = await attach.json(assistantMessage.id, attempt, waitMs);
+      if (outcome === undefined) {
         // Deleted while generating, normally together with its session.
         throw (await sessionExists(db.drizzle, sessionId)) ? messageNotFound() : sessionNotFound();
       }
-      return turn;
+      return outcome;
     },
 
     async list(sessionId, { limit, before }) {

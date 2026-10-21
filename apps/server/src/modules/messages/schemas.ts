@@ -20,6 +20,21 @@ export const messageParams = z.object({ id: z.uuid(), mid: z.uuid() });
 /** Strict: unknown fields are a 400, so later fields cannot be sent to a server ignoring them. */
 export const sendMessageBody = z.strictObject({ content });
 
+/** Fastify merges the validated headers over the raw ones, so the other headers stay as sent. */
+export const sendMessageHeaders = z.object({
+  prefer: z
+    .string()
+    .optional()
+    .describe(
+      "RFC 7240 preferences for the JSON response. wait=N: wait up to N seconds for the " +
+        "answer, capped by the server's maximum (JSON_MAX_WAIT_MS, 195 s unless " +
+        "configured); without it the server's default applies (JSON_DEFAULT_WAIT_MS, 30 s " +
+        "unless configured); " +
+        "respond-async: answer at once without waiting. respond-async wins when both are " +
+        "sent. Unknown or malformed preferences are ignored, never an error.",
+    ),
+});
+
 export const listMessagesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50).describe("Page size, 1–200"),
   before: z

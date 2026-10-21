@@ -46,11 +46,13 @@ export function send(
   app: FastifyInstance,
   sessionId: string,
   payload: unknown,
+  headers: Record<string, string> = {},
 ): Promise<LightMyRequestResponse> {
   return app.inject({
     method: "POST",
     url: `/sessions/${sessionId}/messages`,
     payload: payload as Record<string, unknown>,
+    headers,
   });
 }
 

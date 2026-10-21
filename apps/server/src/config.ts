@@ -16,6 +16,9 @@ const commaList = z
   )
   .pipe(z.array(z.string()).min(1));
 
+const MAX_JSON_WAIT_MS = 600_000;
+const DEFAULT_JSON_WAIT_MS = 30_000;
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -33,6 +36,14 @@ const envSchema = z.object({
     .optional(),
   FLUSH_INTERVAL_MS: z.coerce.number().int().min(10).max(60_000).default(1000),
   DEMO_DELAY_MS: z.coerce.number().int().min(0).max(10_000).default(50),
+  // Capped well below setTimeout's 2^31-1 ms limit, past which a timer fires at once.
+  JSON_DEFAULT_WAIT_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_JSON_WAIT_MS)
+    .default(DEFAULT_JSON_WAIT_MS),
+  JSON_MAX_WAIT_MS: z.coerce.number().int().min(0).max(MAX_JSON_WAIT_MS).default(195_000),
 });
 
 /** Holds the database password: never log it. */
@@ -53,6 +64,10 @@ export type AppConfig = Readonly<{
   flushIntervalMs: number;
   /** Pause between the demo provider's chunks. */
   demoDelayMs: number;
+  /** How long a JSON send waits for its answer without a `Prefer: wait`. */
+  jsonDefaultWaitMs: number;
+  /** The longest a JSON send ever waits; keep it below the proxy's response timeout. */
+  jsonMaxWaitMs: number;
 }>;
 
 /** Names the invalid keys and why; never includes the values, which may be secrets. */
@@ -86,6 +101,14 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   }
 
   const parsed = result.data;
+  if (parsed.JSON_DEFAULT_WAIT_MS > parsed.JSON_MAX_WAIT_MS) {
+    throw new ConfigError([
+      {
+        key: "JSON_DEFAULT_WAIT_MS",
+        reason: `greater than JSON_MAX_WAIT_MS; lower both (default ${DEFAULT_JSON_WAIT_MS})`,
+      },
+    ]);
+  }
   return Object.freeze({
     port: parsed.PORT,
     host: parsed.HOST,
@@ -99,5 +122,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     defaultSystemPrompt: parsed.DEFAULT_SYSTEM_PROMPT,
     flushIntervalMs: parsed.FLUSH_INTERVAL_MS,
     demoDelayMs: parsed.DEMO_DELAY_MS,
+    jsonDefaultWaitMs: parsed.JSON_DEFAULT_WAIT_MS,
+    jsonMaxWaitMs: parsed.JSON_MAX_WAIT_MS,
   });
 }

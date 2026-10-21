@@ -13,6 +13,7 @@ import type { ProviderRegistry } from "./llm/registry.js";
 import { healthRoutes } from "./modules/health/routes.js";
 import { createAttach } from "./modules/messages/attach.js";
 import { type JobRegistry, createJobRegistry } from "./modules/messages/jobs.js";
+import { findTurn } from "./modules/messages/repository.js";
 import { messagesRoutes } from "./modules/messages/routes.js";
 import { createMessagesService } from "./modules/messages/service.js";
 import { providersRoutes } from "./modules/providers/routes.js";
@@ -97,10 +98,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     registry,
     catalog,
     jobs,
-    attach: createAttach({ db, jobs }),
+    attach: createAttach({ jobs, readTurn: (assistantId) => findTurn(db.drizzle, assistantId) }),
     defaultSystemPrompt: config.defaultSystemPrompt,
   });
-  void app.register(messagesRoutes, { service: messages });
+  void app.register(messagesRoutes, {
+    service: messages,
+    jsonWait: { defaultMs: config.jsonDefaultWaitMs, maxMs: config.jsonMaxWaitMs },
+  });
   // Before the server stops accepting: running generations end, so waiting responses finish
   // instead of holding the close open. An aborted row stays generating for now.
   app.addHook("preClose", async () => {

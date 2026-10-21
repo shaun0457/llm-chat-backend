@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
+import { sendMessageHeaders } from "../../src/modules/messages/schemas.js";
 import { TEST_ENV, makeTestApp } from "../helpers/app.js";
 import { type LogCapture, captureLogs } from "../helpers/log-capture.js";
 
@@ -53,6 +54,36 @@ describe("logging", () => {
       await app.inject({ method: "GET", url: "/test/log-headers", headers: secretHeaders });
 
       expect(logs.lines().some((line) => line.includes("[REDACTED]"))).toBe(true);
+      expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
+    });
+
+    it("still redacts them after a route's header schema (the send route's Prefer) has run", async () => {
+      app = makeLoggingApp();
+      app.get(
+        "/test/log-validated-headers",
+        { schema: { headers: sendMessageHeaders } },
+        async (request) => {
+          request.log.info({ headers: request.headers }, "validated headers");
+          return { kept: Object.keys(request.headers).sort() };
+        },
+      );
+
+      const response = await app.inject({
+        method: "GET",
+        url: "/test/log-validated-headers",
+        headers: { ...secretHeaders, prefer: "respond-async" },
+      });
+
+      // Fastify merges the validated headers over the raw ones: every header is still there.
+      expect(response.json().kept).toEqual(
+        expect.arrayContaining(["authorization", "cookie", "prefer", "x-llm-api-key"]),
+      );
+      const logged = logs.entries().find((entry) => entry.msg === "validated headers");
+      expect(logged?.headers).toMatchObject({
+        "x-llm-api-key": "[REDACTED]",
+        "authorization": "[REDACTED]",
+        "prefer": "respond-async",
+      });
       expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
     });
 

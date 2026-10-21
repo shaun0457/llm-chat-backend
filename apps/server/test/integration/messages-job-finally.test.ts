@@ -88,6 +88,13 @@ describe("job.finally", () => {
     expect(fake.signals[0]?.aborted).toBe(true);
     const response = await pending;
     expect(response.statusCode).toBe(202);
-    expect(response.json().assistantMessage).toMatchObject({ status: "generating" });
+    const { assistantMessage } = response.json();
+    expect(assistantMessage).toMatchObject({ status: "generating" });
+    // The full 202 contract: the client knows where to look later.
+    expect(response.headers.location).toBe(
+      `/sessions/${session.id}/messages/${assistantMessage.id}`,
+    );
+    expect(response.headers["retry-after"]).toBe("2");
+    expect(response.headers["cache-control"]).toBe("no-store");
   });
 });
