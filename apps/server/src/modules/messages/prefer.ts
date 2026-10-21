@@ -93,3 +93,33 @@ export function parsePrefer(headerValues: readonly string[]): Preferences {
   }
   return { respondAsync, waitSeconds };
 }
+
+export type WaitConfig = Readonly<{ defaultMs: number; maxMs: number }>;
+
+/**
+ * How long a JSON send waits for its answer: none for `respond-async` (it wins over `wait`),
+ * otherwise the requested `wait` or the default, never more than the maximum.
+ */
+export function effectiveWaitMs(preferences: Preferences, cfg: WaitConfig): number {
+  if (preferences.respondAsync) {
+    return 0;
+  }
+  const requestedMs =
+    preferences.waitSeconds === null ? cfg.defaultMs : preferences.waitSeconds * 1000;
+  return Math.min(requestedMs, cfg.maxMs);
+}
+
+/**
+ * The `Preference-Applied` value (RFC 7240 §3): `respond-async` when it was honoured, otherwise
+ * `wait=<seconds actually waited at most>` (the cap, rounded down, when the request asked for
+ * more) when a valid wait was sent. Undefined when no preference changed the behaviour.
+ */
+export function preferenceApplied(preferences: Preferences, cfg: WaitConfig): string | undefined {
+  if (preferences.respondAsync) {
+    return "respond-async";
+  }
+  if (preferences.waitSeconds === null) {
+    return undefined;
+  }
+  return `wait=${Math.floor(effectiveWaitMs(preferences, cfg) / 1000)}`;
+}

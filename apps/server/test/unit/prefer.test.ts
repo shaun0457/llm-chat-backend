@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parsePrefer } from "../../src/modules/messages/prefer.js";
+import {
+  effectiveWaitMs,
+  parsePrefer,
+  preferenceApplied,
+} from "../../src/modules/messages/prefer.js";
 
 const none = { respondAsync: false, waitSeconds: null };
 
@@ -65,5 +69,55 @@ describe("prefer.parse", () => {
 
   it("caps an absurdly long wait at a safe integer instead of failing", () => {
     expect(parsePrefer([`wait=${"9".repeat(40)}`]).waitSeconds).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+describe("prefer.effective-wait", () => {
+  const cfg = { defaultMs: 30_000, maxMs: 195_000 };
+
+  it("waits the default without a wait preference", () => {
+    expect(effectiveWaitMs(none, cfg)).toBe(30_000);
+  });
+
+  it("waits what the client asked for, below the maximum", () => {
+    expect(effectiveWaitMs({ respondAsync: false, waitSeconds: 2 }, cfg)).toBe(2_000);
+    expect(effectiveWaitMs({ respondAsync: false, waitSeconds: 0 }, cfg)).toBe(0);
+  });
+
+  it("caps the wait at the maximum", () => {
+    expect(effectiveWaitMs({ respondAsync: false, waitSeconds: 600 }, cfg)).toBe(195_000);
+    expect(
+      effectiveWaitMs({ respondAsync: false, waitSeconds: Number.MAX_SAFE_INTEGER }, cfg),
+    ).toBe(195_000);
+  });
+
+  it("does not wait at all for respond-async, whatever wait says", () => {
+    expect(effectiveWaitMs({ respondAsync: true, waitSeconds: null }, cfg)).toBe(0);
+    expect(effectiveWaitMs({ respondAsync: true, waitSeconds: 5 }, cfg)).toBe(0);
+  });
+});
+
+describe("prefer.applied", () => {
+  const cfg = { defaultMs: 30_000, maxMs: 195_000 };
+
+  it("names nothing when no preference was honoured", () => {
+    expect(preferenceApplied(none, cfg)).toBeUndefined();
+  });
+
+  it("reports the wait used", () => {
+    expect(preferenceApplied({ respondAsync: false, waitSeconds: 2 }, cfg)).toBe("wait=2");
+    expect(preferenceApplied({ respondAsync: false, waitSeconds: 0 }, cfg)).toBe("wait=0");
+  });
+
+  it("reports the cap when the wait was capped, in whole seconds", () => {
+    expect(preferenceApplied({ respondAsync: false, waitSeconds: 900 }, cfg)).toBe("wait=195");
+    expect(
+      preferenceApplied({ respondAsync: false, waitSeconds: 9 }, { defaultMs: 200, maxMs: 1_500 }),
+    ).toBe("wait=1");
+  });
+
+  it("reports only respond-async when both were sent", () => {
+    expect(preferenceApplied({ respondAsync: true, waitSeconds: 5 }, cfg)).toBe("respond-async");
+    expect(preferenceApplied({ respondAsync: true, waitSeconds: null }, cfg)).toBe("respond-async");
   });
 });
