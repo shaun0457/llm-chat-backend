@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.turbo
+.git
+.github
+.husky
+.env
+**/.env
+*.log
+Dockerfile
+.dockerignore

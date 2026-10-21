@@ -1,6 +1,9 @@
 {
   "name": "server",
   "version": "0.4.3",
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@fastify/swagger": "9.9.2",
     "@fastify/swagger-ui": "6.1.2",
