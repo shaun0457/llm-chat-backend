@@ -20,8 +20,8 @@ export const messageParams = z.object({ id: z.uuid(), mid: z.uuid() });
 /** Strict: unknown fields are a 400, so later fields cannot be sent to a server ignoring them. */
 export const sendMessageBody = z.strictObject({ content });
 
-/** Loose: validated headers replace the request's, so every other header must pass through. */
-export const sendMessageHeaders = z.looseObject({
+/** Fastify merges the validated headers over the raw ones, so the other headers stay as sent. */
+export const sendMessageHeaders = z.object({
   prefer: z
     .string()
     .optional()
