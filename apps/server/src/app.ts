@@ -5,7 +5,7 @@ import type { IncomingMessage } from "node:http";
 
 import type { AppConfig } from "./config.js";
 import { registerApiDocs } from "./http/plugins.js";
-import { registerProblemDetails } from "./http/problem-details.js";
+import { problem, registerProblemDetails, sendProblem } from "./http/problem-details.js";
 import { healthRoutes } from "./modules/health/routes.js";
 
 export type AppDeps = {
@@ -16,7 +16,11 @@ export type AppDeps = {
 const REQUEST_ID_HEADER = "x-request-id";
 const VALID_REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 
-/** Credential headers, wherever a request's headers end up in a log object. */
+/**
+ * Credential headers when a request's headers are logged as `headers` or `req.headers`.
+ * Not covered: headers nested in error objects (e.g. an upstream SDK error); the credentials
+ * ticket adds error scrubbing.
+ */
 const REDACTED_PATHS = [
   'req.headers["x-llm-api-key"]',
   "req.headers.authorization",
@@ -40,6 +44,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     },
     requestIdHeader: false,
     genReqId: requestId,
+    // Errors raised before routing (e.g. an undecodable URL) bypass hooks and the error handler.
+    frameworkErrors: (error, request, reply) => {
+      void reply.header(REQUEST_ID_HEADER, request.id);
+      return sendProblem(reply, problem(400, "validation_error", error.message));
+    },
   });
 
   app.addHook("onRequest", async (request, reply) => {

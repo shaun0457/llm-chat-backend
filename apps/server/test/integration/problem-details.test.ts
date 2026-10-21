@@ -125,6 +125,48 @@ describe("problem details", () => {
     expect(response.body).not.toContain("sk-123");
   });
 
+  it("hides a thrown non-Error value behind 500 internal_error", async () => {
+    app = makeTestApp();
+    app.get("/test/null", async () => {
+      throw null;
+    });
+
+    const response = await app.inject({ method: "GET", url: "/test/null" });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.headers["content-type"]).toMatch(PROBLEM_JSON);
+    expect(response.json()).toMatchObject({ code: "internal_error" });
+  });
+
+  it("keeps a plugin's deliberate client error status", async () => {
+    app = makeTestApp();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/docs/static/swagger-ui.css",
+      headers: { range: "bytes=999999999-" },
+    });
+
+    expect(response.statusCode).toBe(416);
+    expect(response.headers["content-type"]).toMatch(PROBLEM_JSON);
+    expect(response.json()).toMatchObject({ status: 416, code: "request_error" });
+  });
+
+  it("answers an undecodable URL with a 400 problem carrying the request id", async () => {
+    app = makeTestApp();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/%E0%A4%A",
+      headers: { "x-request-id": "req-bad-url" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers["content-type"]).toMatch(PROBLEM_JSON);
+    expect(response.headers["x-request-id"]).toBe("req-bad-url");
+    expect(response.json()).toMatchObject({ status: 400, code: "validation_error" });
+  });
+
   it("carries the request id on error responses", async () => {
     app = makeTestApp();
     app.get("/test/boom", async () => {

@@ -31,7 +31,7 @@ export function problem(status: number, code: string, detail?: string): Problem 
   };
 }
 
-function sendProblem(reply: FastifyReply, body: Problem): FastifyReply {
+export function sendProblem(reply: FastifyReply, body: Problem): FastifyReply {
   return reply.code(body.status).type("application/problem+json").send(JSON.stringify(body));
 }
 
@@ -59,21 +59,30 @@ export function registerProblemDetails(app: FastifyInstance): void {
     );
   });
 
-  app.setErrorHandler((error: FastifyError, request, reply) => {
+  // Typed as unknown: a handler can throw or reject with anything, including null.
+  app.setErrorHandler((error: unknown, request, reply) => {
     if (error instanceof ProblemError) {
       return sendProblem(reply, problem(error.status, error.code, error.detail));
     }
-    if (error.validation !== undefined) {
-      return sendProblem(reply, problem(400, "validation_error", validationDetail(error)));
+    if (!(error instanceof Error)) {
+      request.log.error({ thrown: typeof error }, "unhandled non-Error thrown");
+      return sendProblem(reply, problem(500, "internal_error"));
     }
-    // Fastify's own client errors (malformed JSON, oversized or unsupported body) keep their
-    // status. Any other error carrying a statusCode (e.g. an unwrapped upstream SDK error) is
-    // unexpected and must not leak its status or message.
-    const status = error.statusCode;
-    const isFrameworkError = typeof error.code === "string" && error.code.startsWith("FST_ERR_");
-    if (isFrameworkError && status !== undefined && status >= 400 && status < 500) {
+    const fastifyError = error as FastifyError & { expose?: unknown };
+    if (fastifyError.validation !== undefined) {
+      return sendProblem(reply, problem(400, "validation_error", validationDetail(fastifyError)));
+    }
+    // Client errors deliberately raised by Fastify (FST_ERR_*: malformed JSON, oversized body) or
+    // by plugins through http-errors (expose: true, e.g. 416 from the static file server) keep
+    // their status. Any other error carrying a statusCode (e.g. an unwrapped upstream SDK error)
+    // is unexpected and must not leak its status or message.
+    const status = fastifyError.statusCode;
+    const isClientError =
+      (typeof fastifyError.code === "string" && fastifyError.code.startsWith("FST_ERR_")) ||
+      fastifyError.expose === true;
+    if (isClientError && status !== undefined && status >= 400 && status < 500) {
       const code = status === 400 ? "validation_error" : "request_error";
-      return sendProblem(reply, problem(status, code, error.message));
+      return sendProblem(reply, problem(status, code, fastifyError.message));
     }
 
     request.log.error({ err: error }, "unhandled error");
