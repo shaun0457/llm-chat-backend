@@ -7,7 +7,7 @@ const providersResponse = z.object({
   providers: z.array(
     z.object({
       id: z.string(),
-      requiresKey: z.boolean().describe("A key is needed: X-LLM-Api-Key or an operator key"),
+      requiresKey: z.boolean().describe("Whether generating with this provider needs an API key"),
       defaultModel: z.string(),
       models: z.array(
         z.object({
