@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { LlmProvider } from "../../src/llm/port.js";
 import { makeTestApp, testJobs } from "../helpers/app.js";
@@ -27,39 +27,6 @@ describe("generation robustness", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().assistantMessage).toMatchObject({ status: "completed", content: "abc" });
-  });
-
-  describe("when the terminal write fails", () => {
-    // Only rows whose answer is exactly this text are refused, so other tests are unaffected.
-    beforeAll(async () => {
-      await testDb.db.pool.query(`
-        CREATE FUNCTION refuse_doomed() RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          IF NEW.status <> 'generating' AND NEW.content = 'Doomed' THEN
-            RAISE EXCEPTION 'terminal write refused by the test';
-          END IF;
-          RETURN NEW;
-        END $$;
-        CREATE TRIGGER refuse_doomed BEFORE UPDATE ON messages
-          FOR EACH ROW EXECUTE FUNCTION refuse_doomed();
-      `);
-    });
-    afterAll(async () => {
-      await testDb.db.pool.query(
-        "DROP TRIGGER refuse_doomed ON messages; DROP FUNCTION refuse_doomed();",
-      );
-    });
-
-    it("answers 500 internal_error instead of pretending the answer is still coming", async () => {
-      fake = new FakeLlmProvider().script({ deltas: ["Doomed"] });
-      app = makeTestApp({ db: testDb.db, ...testProviders({ llm: fake }) });
-      const session = await createSession(app);
-
-      const response = await send(app, session.id, { content: "Hi" });
-
-      expect(response.statusCode).toBe(500);
-      expect(response.json()).toMatchObject({ code: "internal_error" });
-    });
   });
 
   it("refuses a send once shutdown began with 503 server_busy, before writing anything", async () => {

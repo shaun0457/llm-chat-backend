@@ -1,0 +1,99 @@
+import { sql } from "drizzle-orm";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import type { Clock } from "../../clock.js";
+import type { Db, Tx } from "../../db/client.js";
+import { remainingMs } from "./deadline.js";
+
+/** The first pause between tries; it doubles after every failed try (100, 200, 400 … ms). */
+const FIRST_BACKOFF_MS = 100;
+
+/** Every try failed or the budget ran out; the row is left for stale reclaim. */
+export class TerminalWriteError extends Error {
+  constructor(
+    /** How many tries were started. */
+    readonly attempts: number,
+    options: { cause: unknown },
+  ) {
+    super(`the terminal write did not succeed within its budget (${attempts} tries)`, options);
+    this.name = "TerminalWriteError";
+  }
+}
+
+class BudgetExhausted extends Error {
+  constructor() {
+    super("the terminal-write budget ran out during a try");
+    this.name = "BudgetExhausted";
+  }
+}
+
+/** `promise`, or a rejection once `ms` have passed; the timer never outlives the call. */
+async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  // A try abandoned here still ends on its own (at its statement timeout, V2); its outcome is
+  // then of no interest, but must not surface as an unhandled rejection.
+  promise.catch(() => {});
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new BudgetExhausted()), ms);
+  });
+  try {
+    return await Promise.race([promise, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export type TerminalWriteLimits = {
+  /** Upper limit of each statement of one try. */
+  statementTimeoutMs: number;
+  /** Limit of the whole operation: connection, transaction, statements and backoff. */
+  budgetMs: number;
+};
+
+/**
+ * Runs `write` (a fenced terminal update) in its own short transaction, retrying failed tries
+ * with doubling backoff, all within one absolute budget measured on `clock`. Each try's
+ * statements are limited to the smaller of the statement timeout and what is left of the
+ * budget (`SET LOCAL statement_timeout`), and the whole try, including getting a connection
+ * and committing, to what is left. A backoff that could not end within the budget is not
+ * started. Throws TerminalWriteError when the budget runs out.
+ */
+export async function writeWithinBudget<T>(
+  deps: { db: Db; clock: Clock; limits: TerminalWriteLimits },
+  write: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  const { db, clock, limits } = deps;
+  const started = clock.monotonicNow();
+  const left = () => remainingMs(limits.budgetMs, started, clock.monotonicNow());
+  let attempts = 0;
+  let lastError: unknown;
+  let backoffMs = FIRST_BACKOFF_MS;
+
+  for (;;) {
+    const available = left();
+    if (available === 0) {
+      break;
+    }
+    attempts += 1;
+    const statementMs = Math.min(limits.statementTimeoutMs, available);
+    try {
+      return await within(
+        db.tx(async (tx) => {
+          await tx.execute(
+            sql`SELECT set_config('statement_timeout', ${`${statementMs}ms`}, true)`,
+          );
+          return write(tx);
+        }),
+        available,
+      );
+    } catch (error) {
+      lastError = error;
+    }
+    if (backoffMs >= left()) {
+      break;
+    }
+    await sleep(backoffMs);
+    backoffMs *= 2;
+  }
+  throw new TerminalWriteError(attempts, { cause: lastError });
+}

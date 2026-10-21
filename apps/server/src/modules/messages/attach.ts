@@ -15,9 +15,9 @@ export type Attach = {
   /**
    * The turn's state for a JSON response. With a local job for this attempt, waits until that
    * job has ended or `waitMs` has passed, whichever comes first; then reads the rows as they
-   * are. Undefined when the turn no longer exists (its session was deleted). Throws when the
-   * job could not store the answer's final state: the row would claim to be generating
-   * although nothing is.
+   * are. Undefined when the turn no longer exists (its session was deleted). A job that could
+   * not store the final state leaves its row generating: that is reported as pending, and
+   * stale reclaim fails the row later.
    */
   json(assistantId: string, attempt: number, waitMs: number): Promise<JsonOutcome | undefined>;
 };
@@ -57,11 +57,7 @@ export function createAttach(deps: {
     async json(assistantId, attempt, waitMs) {
       const job = jobs.get(assistantId);
       if (job !== undefined && job.attempt === attempt) {
-        // A terminal write that fails after the wait is only logged by the job: the response
-        // already said 202, and the row stays generating until stale reclaim fails it.
-        if ((await endWithin(job.finished, waitMs)) === "write_failed") {
-          throw new Error("the answer's final state could not be stored");
-        }
+        await endWithin(job.finished, waitMs);
       }
       const turn = await readTurn(assistantId);
       if (turn === undefined) {

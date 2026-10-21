@@ -3,13 +3,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import type { Clock } from "../../clock.js";
 import type { AppConfig } from "../../config.js";
-import type { Db } from "../../db/client.js";
+import type { Db, Tx } from "../../db/client.js";
+import { pgErrorCode } from "../../db/errors.js";
 import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
 import { remainingMs } from "./deadline.js";
 import { completeAssistant, failAssistant, flushContent, historyBefore } from "./repository.js";
 import type { Message } from "./schemas.js";
+import { TerminalWriteError, writeWithinBudget } from "./terminal-write.js";
 
 /**
  * A slot of generation capacity, held from admission to the end of the job and released
@@ -41,6 +43,22 @@ function stopReasonOf(signal: AbortSignal): StopReason | undefined {
   return signal.aborted && signal.reason instanceof JobStopped ? signal.reason.stop : undefined;
 }
 
+/**
+ * What to log about a failed database write: its SQLSTATE and the innermost message, never
+ * drizzle's own message, which repeats the query's parameters (the answer's text).
+ */
+function describeFailure(error: unknown): { code: string | undefined; reason: string | undefined } {
+  const seen = new Set<unknown>();
+  let current = error;
+  let reason: string | undefined;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    reason = current.message;
+    current = current.cause;
+  }
+  return { code: pgErrorCode(error), reason };
+}
+
 /** Everything a job needs, frozen at admission. */
 export type JobSpec = {
   assistantId: string;
@@ -59,9 +77,10 @@ export type JobSpec = {
 };
 
 /**
- * How a job ended. `terminal`: it wrote completed or failed. `aborted`: it wrote no terminal
- * state on purpose (shutdown, or its row was deleted or superseded). `write_failed`: storing
- * the terminal state failed, so the row is left generating.
+ * How a job ended. `terminal`: it wrote completed or failed (or found its row gone or
+ * superseded when it tried). `aborted`: it wrote no terminal state on purpose, because its row
+ * was deleted or superseded. `write_failed`: storing the terminal state did not succeed within
+ * the terminal-write budget, so the row is left generating for stale reclaim.
  */
 export type JobEnd = "terminal" | "aborted" | "write_failed";
 
@@ -110,6 +129,19 @@ export function createJobRegistry(deps: {
   async function run(spec: JobSpec, job: RunningJob): Promise<Message | undefined> {
     const fence = { id: spec.assistantId, attempt: spec.attempt };
     const jobLog = log.child({ assistantId: spec.assistantId, attempt: spec.attempt });
+    /** Every terminal write goes through the budget; it throws TerminalWriteError. */
+    const store = (write: (tx: Tx) => Promise<Message | undefined>) =>
+      writeWithinBudget(
+        {
+          db,
+          clock,
+          limits: {
+            statementTimeoutMs: timing.terminalStatementTimeoutMs,
+            budgetMs: timing.terminalWriteBudgetMs,
+          },
+        },
+        write,
+      );
     const { controller, bus } = job;
     let fenceLost = false;
     let flushed = "";
@@ -150,11 +182,13 @@ export function createJobRegistry(deps: {
     );
     if (leftMs === 0) {
       jobLog.warn("no time left before the deadline; the provider is not called");
-      return failAssistant(db.drizzle, fence, {
-        content: "",
-        errorCode: "llm_timeout",
-        errorDetail: TIMEOUT_DETAIL,
-      });
+      return store((tx) =>
+        failAssistant(tx, fence, {
+          content: "",
+          errorCode: "llm_timeout",
+          errorDetail: TIMEOUT_DETAIL,
+        }),
+      );
     }
     // One timer per job, cleared below; AbortSignal.timeout() could not be cleared (V1).
     const deadline = setTimeout(() => controller.abort(new JobStopped("deadline")), leftMs);
@@ -202,11 +236,13 @@ export function createJobRegistry(deps: {
     const answered = finish !== undefined && !generationFailed;
     if (!answered && !fenceLost && stopReasonOf(controller.signal) === "deadline") {
       jobLog.warn("the generation deadline passed");
-      return failAssistant(db.drizzle, fence, {
-        content: bus.snapshot(),
-        errorCode: "llm_timeout",
-        errorDetail: TIMEOUT_DETAIL,
-      });
+      return store((tx) =>
+        failAssistant(tx, fence, {
+          content: bus.snapshot(),
+          errorCode: "llm_timeout",
+          errorDetail: TIMEOUT_DETAIL,
+        }),
+      );
     }
     if (fenceLost || (controller.signal.aborted && !answered)) {
       // Fencing lost (nothing more may be written) or shutdown before the answer was complete
@@ -221,20 +257,27 @@ export function createJobRegistry(deps: {
       jobLog.warn("the provider ended the stream without a finish event");
     }
 
-    // A thrown terminal write propagates: the caller reports it and the row stays generating.
+    // A terminal write that fails within its budget propagates: the caller logs it and the row
+    // stays generating until stale reclaim fails it.
+    const content = bus.snapshot();
+    const latencyMs = Math.max(0, Math.round(clock.monotonicNow() - spec.startedAtMonotonic));
     const terminal =
       finish === undefined || generationFailed
-        ? await failAssistant(db.drizzle, fence, {
-            content: bus.snapshot(),
-            errorCode: "llm_upstream_error",
-            errorDetail: UPSTREAM_ERROR_DETAIL,
-          })
-        : await completeAssistant(db.drizzle, fence, {
-            content: bus.snapshot(),
-            usage: finish.usage,
-            finishReason: finish.reason,
-            latencyMs: Math.max(0, Math.round(clock.monotonicNow() - spec.startedAtMonotonic)),
-          });
+        ? await store((tx) =>
+            failAssistant(tx, fence, {
+              content,
+              errorCode: "llm_upstream_error",
+              errorDetail: UPSTREAM_ERROR_DETAIL,
+            }),
+          )
+        : await store((tx) =>
+            completeAssistant(tx, fence, {
+              content,
+              usage: finish.usage,
+              finishReason: finish.reason,
+              latencyMs,
+            }),
+          );
     if (terminal === undefined) {
       jobLog.info("terminal write matched no row; the turn was deleted or superseded");
     }
@@ -281,8 +324,15 @@ export function createJobRegistry(deps: {
             end = message === undefined ? "aborted" : "terminal";
           },
           (error: unknown) => {
-            // A terminal write failed: the row stays generating until stale reclaim exists.
-            log.error({ err: error, assistantId: spec.assistantId }, "terminal write failed");
+            const ids = { assistantId: spec.assistantId, attempt: spec.attempt };
+            if (error instanceof TerminalWriteError) {
+              log.error(
+                { ...ids, writeAttempts: error.attempts, ...describeFailure(error.cause) },
+                "the terminal write did not succeed within its budget; stale reclaim will fail the turn",
+              );
+            } else {
+              log.error({ ...ids, err: error }, "the generation job failed unexpectedly");
+            }
             end = "write_failed";
           },
         )
