@@ -10,23 +10,11 @@ import { completeAssistant, failAssistant, flushContent, historyBefore } from ".
 import type { Message } from "./schemas.js";
 
 /**
- * A slot of generation capacity, held from admission to the end of the job. A no-op until the
- * capacity limits exist; the call sites (reserve at admission, release on rollback and in the
- * job's `finally`) are already in place.
+ * A slot of generation capacity, held from admission to the end of the job and released
+ * exactly once (on rollback, or in the job's `finally`). Only shutdown refuses one today; the
+ * capacity limits fill in the counting behind the same call sites.
  */
 export type Reservation = { release(): void };
-
-export function reserveCapacity(): Reservation {
-  let released = false;
-  return {
-    release() {
-      if (released) {
-        return;
-      }
-      released = true;
-    },
-  };
-}
 
 const UPSTREAM_ERROR_DETAIL = "The model provider returned an error.";
 const shuttingDown = () => new Error("the server is shutting down");
@@ -64,6 +52,8 @@ export type Job = Readonly<{
 }>;
 
 export interface JobRegistry {
+  /** A capacity slot for a new generation; undefined once shutdown has begun. */
+  reserve(): Reservation | undefined;
   /** Starts generating in the background. Call only after the admitting transaction commits. */
   start(spec: JobSpec): Job;
   /** The job running for this assistant message in this process, if any. */
@@ -159,9 +149,11 @@ export function createJobRegistry(deps: {
       await flushing;
     }
 
-    if (controller.signal.aborted) {
-      // Fencing lost (nothing more may be written) or shutdown (the row stays generating until
-      // stale reclaim exists).
+    const answered = finish !== undefined && !generationFailed;
+    if (fenceLost || (controller.signal.aborted && !answered)) {
+      // Fencing lost (nothing more may be written) or shutdown before the answer was complete
+      // (the row stays generating until stale reclaim exists). A complete answer is still
+      // stored below, even if shutdown began meanwhile.
       jobLog.info({ fenceLost }, "generation aborted");
       return undefined;
     }
@@ -192,6 +184,14 @@ export function createJobRegistry(deps: {
   }
 
   return {
+    reserve() {
+      if (closing) {
+        return undefined;
+      }
+      // Nothing is counted yet, so releasing has nothing to give back.
+      return { release: () => {} };
+    },
+
     start(spec) {
       const controller = new AbortController();
       const bus = createBus((error) =>

@@ -33,7 +33,8 @@ export type SessionsService = {
 export const sessionNotFound = () =>
   new ProblemError(404, "session_not_found", "No session with this id");
 
-function resolvedPair(resolution: PairResolution): ModelPair {
+/** The resolved pair, or the 422 problem a client gets when it does not resolve. */
+export function resolvedPair(resolution: PairResolution): ModelPair {
   if (resolution.ok) {
     return resolution.pair;
   }

@@ -31,7 +31,8 @@ export const messagesRoutes: FastifyPluginAsyncZod<{ service: MessagesService }>
           "both messages when it failed, 202 with both messages when the server shut down " +
           "before the answer finished. 404 session_not_found; 409 session_busy while an " +
           "earlier answer in the session is still being generated; 422 provider_unavailable " +
-          "or model_not_supported when the session's settings no longer resolve.",
+          "or model_not_supported when the session's settings no longer resolve; 503 " +
+          "server_busy (Retry-After) while the server is shutting down.",
         tags: ["messages"],
         params: sessionIdParams,
         body: sendMessageBody,
@@ -46,7 +47,8 @@ export const messagesRoutes: FastifyPluginAsyncZod<{ service: MessagesService }>
       },
     },
     async (request, reply) => {
-      const { status, turn } = await service.send(request.params.id, request.body);
+      const turn = await service.send(request.params.id, request.body);
+      const { status } = turn.assistantMessage;
       if (status === "failed") {
         const { errorCode, errorDetail } = turn.assistantMessage;
         throw new ProblemError(

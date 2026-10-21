@@ -8,9 +8,9 @@ import type { ModelCatalog } from "../../llm/catalog.js";
 import type { LlmProvider } from "../../llm/port.js";
 import type { ProviderRegistry } from "../../llm/registry.js";
 import { type LockedSession, lockSession } from "../sessions/repository.js";
-import { sessionNotFound } from "../sessions/service.js";
+import { resolvedPair, sessionNotFound } from "../sessions/service.js";
 import type { Attach } from "./attach.js";
-import { type JobRegistry, type Reservation, reserveCapacity } from "./jobs.js";
+import type { JobRegistry, Reservation } from "./jobs.js";
 import {
   findMessage,
   findSeq,
@@ -26,15 +26,12 @@ const UNIQUE_VIOLATION = "23505";
 const ONE_GENERATING_INDEX = "messages_one_generating_per_session";
 const TITLE_MAX_CODE_POINTS = 60;
 
-/** How a send ended, as far as this response is concerned. */
-export type SendOutcome =
-  | { status: "completed"; turn: Turn }
-  | { status: "failed"; turn: Turn }
-  | { status: "generating"; turn: Turn };
-
 export type MessagesService = {
-  /** Admits a turn, starts its generation and waits for the JSON outcome. */
-  send(sessionId: string, input: SendMessageInput): Promise<SendOutcome>;
+  /**
+   * Admits a turn, starts its generation and waits for it. The assistant message's status is
+   * the outcome: completed, failed, or still generating (the server is shutting down).
+   */
+  send(sessionId: string, input: SendMessageInput): Promise<Turn>;
   list(sessionId: string, page: ListMessagesInput): Promise<MessagePage>;
   /** Throws 404 message_not_found unless the message belongs to this session. */
   get(sessionId: string, messageId: string): Promise<Message>;
@@ -45,6 +42,16 @@ export const sessionBusy = () =>
     409,
     "session_busy",
     "An answer is still being generated in this session; wait for it to finish",
+  );
+
+/** Capacity refused: today only because the server is shutting down. */
+export const serverBusy = () =>
+  new ProblemError(
+    503,
+    "server_busy",
+    "The server cannot start another answer right now; try again later",
+    undefined,
+    { "retry-after": "10" },
   );
 
 export const messageNotFound = () =>
@@ -104,21 +111,18 @@ export function createMessagesService(deps: {
     model: string;
     maxOutputTokens: number;
   } {
-    const resolution = registry.resolve({}, session);
-    if (!resolution.ok) {
-      throw resolution.reason === "provider_unavailable"
-        ? new ProblemError(422, "provider_unavailable", "The provider is unknown or not enabled")
-        : new ProblemError(
-            422,
-            "model_not_supported",
-            "The model is not in the provider's catalog",
-          );
-    }
-    const { pair } = resolution;
+    const pair = resolvedPair(registry.resolve({}, session));
     const adapter = registry.adapter(pair.provider);
-    const entry = catalog.find(pair.provider, pair.model);
-    if (adapter === undefined || entry === undefined) {
+    if (adapter === undefined) {
       throw new ProblemError(422, "provider_unavailable", "The provider is unknown or not enabled");
+    }
+    const entry = catalog.find(pair.provider, pair.model);
+    if (entry === undefined) {
+      throw new ProblemError(
+        422,
+        "model_not_supported",
+        "The model is not in the provider's catalog",
+      );
     }
     return {
       adapter,
@@ -181,7 +185,10 @@ export function createMessagesService(deps: {
         const session = await lockStep(tx, sessionId);
         const resolved = resolveStep(session);
         await busyStep(tx, sessionId);
-        const reservation = reserveCapacity();
+        const reservation = jobs.reserve();
+        if (reservation === undefined) {
+          throw serverBusy();
+        }
         held = reservation;
         const admitted = await insertStep(tx, sessionId, session, content, resolved);
         return { admitted, reservation };
@@ -223,7 +230,7 @@ export function createMessagesService(deps: {
         // Deleted while generating, normally together with its session.
         throw (await sessionExists(db.drizzle, sessionId)) ? messageNotFound() : sessionNotFound();
       }
-      return { status: turn.assistantMessage.status, turn };
+      return turn;
     },
 
     async list(sessionId, { limit, before }) {

@@ -1,11 +1,12 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import type { LlmProvider } from "../../src/llm/port.js";
 import { createJobRegistry } from "../../src/modules/messages/jobs.js";
 import { makeTestApp } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider } from "../helpers/fake-llm.js";
-import { allMessages, createSession, send } from "../helpers/messages.js";
+import { allMessages, createSession, getSession, send } from "../helpers/messages.js";
 import { testProviders } from "../helpers/providers.js";
 
 const testDb = useTestDatabase();
@@ -62,7 +63,7 @@ describe("generation robustness", () => {
     });
   });
 
-  it("aborts a generation admitted after shutdown began, so closing is not held open", async () => {
+  it("refuses a send once shutdown began with 503 server_busy, before writing anything", async () => {
     fake = new FakeLlmProvider().script({ hang: true });
     const jobs = createJobRegistry({ db: testDb.db, flushIntervalMs: 50, log: Fastify().log });
     app = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
@@ -71,8 +72,34 @@ describe("generation robustness", () => {
 
     const response = await send(app, session.id, { content: "Late" });
 
-    expect(response.statusCode).toBe(202);
-    expect(response.json().assistantMessage).toMatchObject({ status: "generating" });
-    expect(await allMessages(app, session.id)).toHaveLength(2);
+    expect(response.statusCode).toBe(503);
+    expect(response.headers["retry-after"]).toBe("10");
+    expect(response.json()).toMatchObject({ status: 503, code: "server_busy" });
+    expect(await allMessages(app, session.id)).toEqual([]);
+    expect(fake.requests).toEqual([]);
+    expect((await getSession(app, session.id)).title).toBeNull();
+  });
+
+  it("stores an answer that finished just before shutdown aborted its job", async () => {
+    const jobs = createJobRegistry({ db: testDb.db, flushIntervalMs: 50, log: Fastify().log });
+    const finishesThenShutsDown: LlmProvider = {
+      id: "late",
+      async *stream() {
+        yield { type: "delta", text: "Complete answer" };
+        yield { type: "finish", reason: "stop", usage: null };
+        // The job has its finish event; shutdown now aborts it before the terminal write.
+        void jobs.shutdown(1_000);
+      },
+    };
+    app = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: finishesThenShutsDown }) });
+    const session = await createSession(app);
+
+    const response = await send(app, session.id, { content: "Hi" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().assistantMessage).toMatchObject({
+      status: "completed",
+      content: "Complete answer",
+    });
   });
 });

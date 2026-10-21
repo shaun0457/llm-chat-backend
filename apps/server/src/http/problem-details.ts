@@ -11,6 +11,8 @@ export class ProblemError extends Error {
     readonly code: string,
     readonly detail?: string,
     readonly extensions?: ProblemExtensions,
+    /** Response headers that belong to this problem, e.g. Retry-After on a 503. */
+    readonly headers?: Readonly<Record<string, string>>,
   ) {
     super(detail ?? code);
     this.name = "ProblemError";
@@ -70,9 +72,12 @@ export function registerProblemDetails(app: FastifyInstance): void {
     );
   });
 
-  app.setErrorHandler((error: unknown, request, reply) =>
-    sendProblem(reply, toProblem(error, request.log)),
-  );
+  app.setErrorHandler((error: unknown, request, reply) => {
+    if (error instanceof ProblemError && error.headers !== undefined) {
+      void reply.headers(error.headers);
+    }
+    return sendProblem(reply, toProblem(error, request.log));
+  });
 }
 
 /**
