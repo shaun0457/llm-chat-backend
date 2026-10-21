@@ -49,17 +49,17 @@ formatter: `pnpm --filter server start | pnpm --filter server exec pino-pretty`.
 Environment variables, validated at startup. An invalid value stops the process and names the
 variable, never its value. Blank values count as unset.
 
-| Variable             | Default                      | Meaning                                                        |
-| -------------------- | ---------------------------- | -------------------------------------------------------------- |
-| `DATABASE_URL`       | (required)                   | `postgres://` or `postgresql://` connection URL                |
-| `PORT`               | `3000`                       | Listening port                                                 |
-| `HOST`               | `0.0.0.0`                    | Listening address                                              |
-| `LOG_LEVEL`          | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent` |
-| `NODE_ENV`           | `production`                 | `development`, `test` or `production`                          |
-| `MODEL_CATALOG_PATH` | bundled `config/models.json` | Model catalog file (see below)                                 |
-| `PROVIDERS_ENABLED`  | `demo`                       | Comma-separated provider ids; each must be in the catalog      |
-| `DEFAULT_PROVIDER`   | `demo`                       | Provider for sessions created without one; must be enabled     |
-| `DEFAULT_MODEL`      | the provider's default       | Model for sessions created without one; must be in the catalog |
+| Variable             | Default                      | Meaning                                                                                         |
+| -------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`       | (required)                   | `postgres://` or `postgresql://` connection URL                                                 |
+| `PORT`               | `3000`                       | Listening port                                                                                  |
+| `HOST`               | `0.0.0.0`                    | Listening address                                                                               |
+| `LOG_LEVEL`          | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                  |
+| `NODE_ENV`           | `production`                 | `development`, `test` or `production`                                                           |
+| `MODEL_CATALOG_PATH` | bundled `config/models.json` | Model catalog file (see below)                                                                  |
+| `PROVIDERS_ENABLED`  | `demo`                       | Comma-separated provider ids; each must be in the catalog                                       |
+| `DEFAULT_PROVIDER`   | `demo`                       | Provider for sessions created without one; must be enabled                                      |
+| `DEFAULT_MODEL`      | the provider's default       | Model for sessions created without one, or with only `DEFAULT_PROVIDER`; must be in the catalog |
 
 The model catalog lists, per provider, whether it needs an API key, its default model and its
 models with context window and maximum output tokens. Unknown fields are rejected, so provider

@@ -66,3 +66,28 @@ describe("session provider and model resolution", () => {
     expect(after.json().items).toHaveLength(before.json().items.length);
   });
 });
+
+describe("session defaults with DEFAULT_PROVIDER=other and DEFAULT_MODEL=o-small", () => {
+  let app: FastifyInstance;
+
+  beforeEach(() => {
+    app = makeTestApp({
+      db: testDb.db,
+      ...testProviders({ defaultProvider: "other", defaultModel: "o-small" }),
+    });
+  });
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it.each([
+    ["an empty body", {}, "other", "o-small"],
+    ["only the default provider", { provider: "other" }, "other", "o-small"],
+    ["only another provider: its catalog default", { provider: "demo" }, "demo", "demo"],
+  ])("creates from %s", async (_name, payload, provider, model) => {
+    const response = await app.inject({ method: "POST", url: "/sessions", payload });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({ provider, model });
+  });
+});

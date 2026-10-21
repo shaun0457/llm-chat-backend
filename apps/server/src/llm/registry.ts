@@ -22,8 +22,8 @@ export interface ProviderRegistry {
   list(): readonly ProviderInfo[];
   /**
    * Fills in a requested provider/model against `base` and validates the result:
-   * both → as given; provider only → its default model; model only → `base.provider`;
-   * neither → `base`. Unknown or disabled provider → provider_unavailable; model not in that
+   * both → as given; provider only → `base.model` if it is `base.provider`, else its default
+   * model; model only → `base.provider`; neither → `base`. Unknown or disabled provider → provider_unavailable; model not in that
    * provider's catalog → model_not_supported.
    */
   resolve(requested: { provider?: string; model?: string }, base: ModelPair): PairResolution;
@@ -78,8 +78,9 @@ export function createRegistry(
       if (provider === undefined) {
         return { ok: false, reason: "provider_unavailable" };
       }
+      // Without a model, the base model stays unless the provider actually changes.
       const model =
-        requested.model ?? (requested.provider === undefined ? base.model : provider.defaultModel);
+        requested.model ?? (providerId === base.provider ? base.model : provider.defaultModel);
       if (catalog.find(providerId, model) === undefined) {
         return { ok: false, reason: "model_not_supported" };
       }

@@ -3,9 +3,14 @@ import { type ProviderRegistry, createRegistry } from "../../src/llm/registry.js
 
 /**
  * Three catalogued providers: "demo" (keyless, default), "other" (needs a key, two models) and
- * "off" (catalogued but not enabled).
+ * "off" (catalogued but not enabled). `defaults` replaces DEFAULT_PROVIDER / DEFAULT_MODEL.
  */
-export function testProviders(): { catalog: ModelCatalog; registry: ProviderRegistry } {
+export function testProviders(
+  defaults: { defaultProvider: string; defaultModel: string | undefined } = {
+    defaultProvider: "demo",
+    defaultModel: undefined,
+  },
+): { catalog: ModelCatalog; registry: ProviderRegistry } {
   const catalog = parseCatalog(
     {
       providers: {
@@ -34,8 +39,7 @@ export function testProviders(): { catalog: ModelCatalog; registry: ProviderRegi
   );
   const registry = createRegistry(catalog, {
     providersEnabled: ["demo", "other"],
-    defaultProvider: "demo",
-    defaultModel: undefined,
+    ...defaults,
   });
   return { catalog, registry };
 }
