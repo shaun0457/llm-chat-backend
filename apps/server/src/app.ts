@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod";
 
 import type { AppConfig } from "./config.js";
+import { registerApiDocs } from "./http/plugins.js";
 import { registerProblemDetails } from "./http/problem-details.js";
 import { healthRoutes } from "./modules/health/routes.js";
 
@@ -17,6 +18,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerProblemDetails(app);
+  registerApiDocs(app);
 
   void app.register(healthRoutes);
 
