@@ -10,7 +10,14 @@
       "dependsOn": ["^build"],
       "cache": false,
       "persistent": true,
-      "inputs": ["$TURBO_DEFAULT$", ".env"]
+      "inputs": ["$TURBO_DEFAULT$", ".env"],
+      "passThroughEnv": ["PORT", "HOST", "LOG_LEVEL", "NODE_ENV"]
+    },
+    "start": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": ["PORT", "HOST", "LOG_LEVEL", "NODE_ENV"]
     },
     "format": {},
     "lint": {},
