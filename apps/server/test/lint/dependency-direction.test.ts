@@ -35,7 +35,8 @@ async function restrictedImports(
     .map((message) => message.message);
 }
 
-describe("dependency direction lint rule", () => {
+// The first lint loads every plugin and resolver; on a busy machine that alone can take >5 s.
+describe("dependency direction lint rule", { timeout: 20_000 }, () => {
   it.each(["../../llm/openai-compatible.js", "../../llm/demo.js"])(
     "forbids a module importing the LLM adapter %s",
     async (adapter) => {
