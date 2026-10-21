@@ -26,6 +26,13 @@ const envSchema = z.object({
   PROVIDERS_ENABLED: commaList.default(["demo"]),
   DEFAULT_PROVIDER: z.string().min(1).default("demo"),
   DEFAULT_MODEL: z.string().min(1).optional(),
+  DEFAULT_SYSTEM_PROMPT: z
+    .string()
+    .max(8000)
+    .refine((value) => !value.includes("\u0000"))
+    .optional(),
+  FLUSH_INTERVAL_MS: z.coerce.number().int().min(10).max(60_000).default(1000),
+  DEMO_DELAY_MS: z.coerce.number().int().min(0).max(10_000).default(50),
 });
 
 /** Holds the database password: never log it. */
@@ -40,6 +47,12 @@ export type AppConfig = Readonly<{
   defaultProvider: string;
   /** Unset: the default provider's own default model. */
   defaultModel: string | undefined;
+  /** Frozen into turns of sessions without their own system prompt. Unset: no system message. */
+  defaultSystemPrompt: string | undefined;
+  /** How often a generating answer's partial text is written to the database. */
+  flushIntervalMs: number;
+  /** Pause between the demo provider's chunks. */
+  demoDelayMs: number;
 }>;
 
 /** Names the invalid keys and why; never includes the values, which may be secrets. */
@@ -83,5 +96,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     providersEnabled: Object.freeze([...new Set(parsed.PROVIDERS_ENABLED)]),
     defaultProvider: parsed.DEFAULT_PROVIDER,
     defaultModel: parsed.DEFAULT_MODEL,
+    defaultSystemPrompt: parsed.DEFAULT_SYSTEM_PROMPT,
+    flushIntervalMs: parsed.FLUSH_INTERVAL_MS,
+    demoDelayMs: parsed.DEMO_DELAY_MS,
   });
 }

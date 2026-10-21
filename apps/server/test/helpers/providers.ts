@@ -1,15 +1,14 @@
 import { type ModelCatalog, parseCatalog } from "../../src/llm/catalog.js";
+import type { LlmProvider } from "../../src/llm/port.js";
 import { type ProviderRegistry, createRegistry } from "../../src/llm/registry.js";
 
 /**
  * Three catalogued providers: "demo" (keyless, default), "other" (needs a key, two models) and
- * "off" (catalogued but not enabled). `defaults` replaces DEFAULT_PROVIDER / DEFAULT_MODEL.
+ * "off" (catalogued but not enabled). `defaultProvider` / `defaultModel` replace
+ * DEFAULT_PROVIDER / DEFAULT_MODEL; `llm` (e.g. a FakeLlmProvider) serves both enabled providers.
  */
 export function testProviders(
-  defaults: { defaultProvider: string; defaultModel: string | undefined } = {
-    defaultProvider: "demo",
-    defaultModel: undefined,
-  },
+  options: { defaultProvider?: string; defaultModel?: string; llm?: LlmProvider } = {},
 ): { catalog: ModelCatalog; registry: ProviderRegistry } {
   const catalog = parseCatalog(
     {
@@ -37,9 +36,11 @@ export function testProviders(
     },
     "test catalog",
   );
-  const registry = createRegistry(catalog, {
-    providersEnabled: ["demo", "other"],
-    ...defaults,
-  });
+  const { defaultProvider = "demo", defaultModel, llm } = options;
+  const registry = createRegistry(
+    catalog,
+    { providersEnabled: ["demo", "other"], defaultProvider, defaultModel },
+    llm === undefined ? {} : { demo: llm, other: llm },
+  );
   return { catalog, registry };
 }

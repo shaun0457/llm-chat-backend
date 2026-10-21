@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ConfigError } from "../../src/config.js";
 import { CatalogError, loadCatalog, parseCatalog } from "../../src/llm/catalog.js";
+import { DemoProvider } from "../../src/llm/demo.js";
 import { createRegistry } from "../../src/llm/registry.js";
 import { DEFAULT_MODEL_CATALOG_PATH } from "../../src/paths.js";
 
@@ -180,5 +181,29 @@ describe("provider registry", () => {
     });
 
     expect(registry.defaults).toEqual({ provider: "other", model: "o-large" });
+  });
+
+  it("serves the adapter of an enabled provider only", () => {
+    const demo = new DemoProvider({ delayMs: 0 });
+    const other = new DemoProvider({ delayMs: 0 });
+    const registry = createRegistry(
+      catalog,
+      { providersEnabled: ["demo"], defaultProvider: "demo", defaultModel: undefined },
+      { demo, other },
+    );
+
+    expect(registry.adapter("demo")).toBe(demo);
+    expect(registry.adapter("other")).toBeUndefined();
+    expect(registry.adapter("toString")).toBeUndefined();
+  });
+
+  it("has no adapter for an enabled provider without an implementation", () => {
+    const registry = createRegistry(catalog, {
+      providersEnabled: ["demo", "other"],
+      defaultProvider: "demo",
+      defaultModel: undefined,
+    });
+
+    expect(registry.adapter("other")).toBeUndefined();
   });
 });

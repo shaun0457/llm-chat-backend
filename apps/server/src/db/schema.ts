@@ -84,10 +84,7 @@ export const messages = pgTable(
       .on(table.sessionId)
       .where(sql`${table.status} = 'generating'`),
     check("messages_role_check", sql`${table.role} IN ('user', 'assistant')`),
-    check(
-      "messages_status_check",
-      sql`${table.status} IN ('generating', 'completed', 'failed')`,
-    ),
+    check("messages_status_check", sql`${table.status} IN ('generating', 'completed', 'failed')`),
     check("messages_attempt_check", sql`${table.attempt} >= 1`),
     check(
       "messages_user_row_check",

@@ -4,6 +4,7 @@ import { buildApp } from "./app.js";
 import { type AppConfig, ConfigError, loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { CatalogError, type ModelCatalog, loadCatalog } from "./llm/catalog.js";
+import { DemoProvider } from "./llm/demo.js";
 import { type ProviderRegistry, createRegistry } from "./llm/registry.js";
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -45,7 +46,9 @@ export async function main(env: Record<string, string | undefined> = process.env
   try {
     config = loadConfig(env);
     catalog = loadCatalog(config.modelCatalogPath);
-    registry = createRegistry(catalog, config);
+    registry = createRegistry(catalog, config, {
+      demo: new DemoProvider({ delayMs: config.demoDelayMs }),
+    });
   } catch (error) {
     if (error instanceof ConfigError || error instanceof CatalogError) {
       process.stderr.write(`${error.message}\n`);

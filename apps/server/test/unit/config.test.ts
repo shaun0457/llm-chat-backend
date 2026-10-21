@@ -29,6 +29,9 @@ describe("loadConfig", () => {
       providersEnabled: ["demo"],
       defaultProvider: "demo",
       defaultModel: undefined,
+      defaultSystemPrompt: undefined,
+      flushIntervalMs: 1000,
+      demoDelayMs: 50,
     });
   });
 
@@ -43,6 +46,9 @@ describe("loadConfig", () => {
       PROVIDERS_ENABLED: "demo, nvidia ,ollama",
       DEFAULT_PROVIDER: "nvidia",
       DEFAULT_MODEL: "some/model",
+      DEFAULT_SYSTEM_PROMPT: "You are terse.",
+      FLUSH_INTERVAL_MS: "250",
+      DEMO_DELAY_MS: "0",
     });
 
     expect(config).toEqual({
@@ -55,6 +61,9 @@ describe("loadConfig", () => {
       providersEnabled: ["demo", "nvidia", "ollama"],
       defaultProvider: "nvidia",
       defaultModel: "some/model",
+      defaultSystemPrompt: "You are terse.",
+      flushIntervalMs: 250,
+      demoDelayMs: 0,
     });
   });
 
@@ -80,6 +89,15 @@ describe("loadConfig", () => {
 
     expect(message).toContain("PORT");
     expect(message).not.toContain("abc");
+  });
+
+  it.each([
+    ["FLUSH_INTERVAL_MS", "0"],
+    ["FLUSH_INTERVAL_MS", "1.5"],
+    ["DEMO_DELAY_MS", "-1"],
+    ["DEFAULT_SYSTEM_PROMPT", "x".repeat(8001)],
+  ])("rejects %s=%s", (key, value) => {
+    expect(configError({ DATABASE_URL, [key]: value }).message).toContain(key);
   });
 
   it("lists every invalid key", () => {
