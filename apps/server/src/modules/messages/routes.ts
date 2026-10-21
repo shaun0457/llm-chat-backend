@@ -44,11 +44,12 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
         description:
           "Stores the user message and a generating assistant message, then generates the " +
           "answer with the session's provider and model. The response waits for the answer " +
-          "at most the effective wait (Prefer: wait=N, or 30 s by default, capped by the " +
-          "server's maximum; none with Prefer: respond-async): 200 with both messages when it " +
+          "at most the effective wait (Prefer: wait=N, otherwise the server's default wait, " +
+          "always capped by its maximum; none with Prefer: respond-async): 200 with both " +
+          "messages when it " +
           "completed, 502 problem details with both messages when it failed, 202 with both " +
-          "messages when it is still being generated. Generation continues in every case; " +
-          "the wait only decides the response. 404 session_not_found; 409 session_busy while " +
+          "messages when it is still being generated. Generation continues unless the " +
+          "server shuts down; the wait only decides the response. 404 session_not_found; 409 session_busy while " +
           "an earlier answer in the session is still being generated; 422 " +
           "provider_unavailable or model_not_supported when the session's settings no longer " +
           "resolve; 503 server_busy (Retry-After) while the server is shutting down.",
@@ -65,7 +66,9 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           202: {
             description:
               "Admitted; the answer is still being generated. Poll Location until its status " +
-              "is completed or failed. Also returned when the server shuts down meanwhile.",
+              "is completed or failed. Also returned when the server shuts down during the " +
+              "wait; that generation is stopped and the message stays generating until the " +
+              "server marks it failed.",
             headers: {
               "Location": {
                 type: "string",

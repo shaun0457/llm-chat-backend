@@ -43,7 +43,8 @@ JSON_MAX_WAIT_MS)`, with defaults of 30 s and 195 s. Startup rejects a default a
 - **Outcomes:** completed → 200 `{ userMessage, assistantMessage }`; failed → 502 problem
   details with both messages; still generating → 202 with both messages, `Location:
 /sessions/:id/messages/:assistantId` (a relative reference, as RFC 9110 §10.2.2 allows),
-  `Retry-After: 2` and `Cache-Control: no-store`. Generation continues in every case.
+  `Retry-After: 2` and `Cache-Control: no-store`. Generation continues in every case, except
+  when the server shuts down: then the job is aborted and the waiting request gets the 202.
   `respond-async` means "no additional waiting", not "always 202": a turn already known to be
   terminal is still 200 or 502.
 - **`Preference-Applied`** lists only what changed the behaviour: `respond-async` when it was
@@ -70,7 +71,10 @@ no-store` (also on its 404), so no cache serves an old state of an answer that i
   promise.
 - A turn that is generating in another process (or whose process died) is reported as
   generating until stale reclaim fails it; polling shows that state honestly.
-- When the job could not store its final state, the send still answers 500 `internal_error`
-  as before; once stale reclaim exists that row becomes `interrupted` and a 202 is the honest
-  answer.
+- Until stale reclaim exists, two cases leave a row `generating` that nothing will finish, so
+  polling never reaches `completed` or `failed` and the session answers 409 `session_busy`:
+  a shutdown during generation, and a terminal write that fails. Such a failure within the
+  wait still answers 500 `internal_error` as before; after the wait the client already has
+  its 202. Stale reclaim turns both rows into failed/`interrupted`, and then a 202 is the
+  honest answer for the first case too.
 - Retries and replays reuse the same parser and wait rule.

@@ -27,7 +27,9 @@ export const sendMessageHeaders = z.object({
     .optional()
     .describe(
       "RFC 7240 preferences for the JSON response. wait=N: wait up to N seconds for the " +
-        "answer (default 30, capped by the server's maximum, 195 by default); " +
+        "answer, capped by the server's maximum (JSON_MAX_WAIT_MS, 195 s unless " +
+        "configured); without it the server's default applies (JSON_DEFAULT_WAIT_MS, 30 s " +
+        "unless configured); " +
         "respond-async: answer at once without waiting. respond-async wins when both are " +
         "sent. Unknown or malformed preferences are ignored, never an error.",
     ),

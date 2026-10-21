@@ -216,8 +216,8 @@ for it, and the client chooses how long with the standard `Prefer` header (RFC 7
 
 The answer decides the status: **200** completed, **502** failed (problem details with both
 messages), **202** still being generated. A 202 carries both messages, `Location` (the
-assistant message), `Retry-After: 2` and `Cache-Control: no-store`; generation goes on, and
-polling `Location` returns the message's current state (partial text while generating), never
+assistant message), `Retry-After: 2` and `Cache-Control: no-store`; generation goes on
+(unless the server shuts down), and polling `Location` returns the message's current state (partial text while generating), never
 from a cache, until its status is `completed` or `failed`. `respond-async` means "do not wait",
 not "always 202": an answer already known to be finished is still 200 or 502.
 
