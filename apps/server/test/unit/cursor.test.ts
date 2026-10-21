@@ -32,6 +32,8 @@ describe("session list cursor", () => {
       base64url(JSON.stringify({ ...key, t: "2026-10-21T15:27:10.982364+02:00" })),
     ],
     ["an impossible date", base64url(JSON.stringify({ ...key, t: "2026-02-31T00:00:00.000000Z" }))],
+    // PostgreSQL has no year 0 (1 BC is followed by AD 1); JavaScript's Date accepts it.
+    ["year 0000", base64url(JSON.stringify({ ...key, t: "0000-01-01T00:00:00.000000Z" }))],
     ["extra fields", base64url(JSON.stringify({ ...key, x: 1 }))],
   ])("rejects %s", (_name, cursor) => {
     expect(decodeCursor(cursor)).toBeUndefined();

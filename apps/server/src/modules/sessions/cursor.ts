@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-const ISO_UTC_MICROS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+// Years 0001–9999: PostgreSQL has no year 0, which Date accepts (a 500 instead of a 400).
+const ISO_UTC_MICROS = /^(?!0000)\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
 
 /** A real calendar time: rejects "2026-02-31…", which Date would roll over to March. */
 function isCalendarTime(value: string): boolean {

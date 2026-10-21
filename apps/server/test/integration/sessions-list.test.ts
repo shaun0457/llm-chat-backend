@@ -75,6 +75,15 @@ describe("GET /sessions", () => {
       ["limit=1.5", "querystring.limit"],
       ["cursor=not-a-cursor", "querystring.cursor"],
       [`cursor=${Buffer.from('{"t":"x","id":"y"}').toString("base64url")}`, "querystring.cursor"],
+      [
+        `cursor=${Buffer.from(
+          JSON.stringify({
+            t: "0000-01-01T00:00:00.000000Z",
+            id: "01900000-0000-7000-8000-000000000001",
+          }),
+        ).toString("base64url")}`,
+        "querystring.cursor",
+      ],
     ])("rejects %s with 400 validation_error", async (query, field) => {
       const response = await app.inject({ method: "GET", url: `/sessions?${query}` });
 
