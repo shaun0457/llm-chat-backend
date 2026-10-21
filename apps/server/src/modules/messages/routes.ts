@@ -125,6 +125,11 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
         response: { 200: messageResponse },
       },
     },
-    async (request) => service.get(request.params.id, request.params.mid),
+    async (request, reply) => {
+      // The poll target of a 202: never answer from a cache. Set before the lookup so that a
+      // 404 is not cached either.
+      void reply.header("cache-control", "no-store");
+      return service.get(request.params.id, request.params.mid);
+    },
   );
 };
