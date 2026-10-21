@@ -72,6 +72,42 @@ describe("API documentation", () => {
     expect(message.properties).not.toHaveProperty("systemPrompt");
   });
 
+  it("documents Prefer, the three send outcomes and their headers, and the uncached poll target", async () => {
+    app = makeTestApp();
+
+    const { paths } = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+
+    const send = paths["/sessions/{id}/messages"].post;
+    const prefer = send.parameters.find(
+      (parameter: { in: string; name: string }) =>
+        parameter.in === "header" && parameter.name === "prefer",
+    );
+    expect(prefer).toMatchObject({ required: false, schema: { type: "string" } });
+    expect(prefer.description).toContain("respond-async");
+    expect(prefer.description).toContain("wait=");
+
+    const headersOf = (status: string): string[] =>
+      Object.keys(send.responses[status].headers ?? {}).sort();
+    expect(headersOf("200")).toEqual(["Preference-Applied"]);
+    expect(headersOf("202")).toEqual([
+      "Cache-Control",
+      "Location",
+      "Preference-Applied",
+      "Retry-After",
+    ]);
+    expect(headersOf("502")).toEqual(["Preference-Applied"]);
+    for (const status of ["200", "202"]) {
+      expect(send.responses[status].content["application/json"].schema.required).toEqual(
+        expect.arrayContaining(["userMessage", "assistantMessage"]),
+      );
+    }
+    expect(send.responses["202"].description).toMatch(/still being generated/i);
+    expect(send.responses["202"].headers.Location.description).toMatch(/poll/i);
+
+    const poll = paths["/sessions/{id}/messages/{mid}"].get;
+    expect(Object.keys(poll.responses["200"].headers ?? {})).toEqual(["Cache-Control"]);
+  });
+
   it("serves the interactive docs as HTML", async () => {
     app = makeTestApp();
 

@@ -9,6 +9,7 @@ import {
   messageParams,
   messageResponse,
   sendMessageBody,
+  sendMessageHeaders,
   sessionIdParams,
   turnResponse,
 } from "./schemas.js";
@@ -17,6 +18,19 @@ import type { MessagesService } from "./service.js";
 const GENERIC_FAILURE_DETAIL = "The answer could not be generated.";
 /** Seconds a client should wait before polling an answer that is still being generated. */
 const POLL_AFTER_SECONDS = "2";
+
+/** Response headers, for the OpenAPI document only (see registerApiDocs). */
+const preferenceAppliedHeader = {
+  type: "string",
+  description:
+    "The preferences honoured: respond-async, or wait=<seconds waited at most> (the cap " +
+    "when the request asked for more). Absent when none applied. Not a completion guarantee.",
+};
+const noStoreHeader = {
+  type: "string",
+  enum: ["no-store"],
+  description: "The state may change until the answer is completed or failed; never cache it",
+};
 
 /** Every `Prefer` line of the request; Node joins repeated lines into one string. */
 function preferValues(header: string | string[] | undefined): string[] {
@@ -34,24 +48,46 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
     "/sessions/:id/messages",
     {
       schema: {
-        summary: "Send a message and wait for the answer",
+        summary: "Send a message and wait a bounded time for the answer",
         description:
           "Stores the user message and a generating assistant message, then generates the " +
-          "answer with the session's provider and model. The response waits until the answer " +
-          "is finished: 200 with both messages when it completed, 502 problem details with " +
-          "both messages when it failed, 202 with both messages when the server shut down " +
-          "before the answer finished. 404 session_not_found; 409 session_busy while an " +
-          "earlier answer in the session is still being generated; 422 provider_unavailable " +
-          "or model_not_supported when the session's settings no longer resolve; 503 " +
-          "server_busy (Retry-After) while the server is shutting down.",
+          "answer with the session's provider and model. The response waits for the answer " +
+          "at most the effective wait (Prefer: wait=N, or 30 s by default, capped by the " +
+          "server's maximum; none with Prefer: respond-async): 200 with both messages when it " +
+          "completed, 502 problem details with both messages when it failed, 202 with both " +
+          "messages when it is still being generated. Generation continues in every case; " +
+          "the wait only decides the response. 404 session_not_found; 409 session_busy while " +
+          "an earlier answer in the session is still being generated; 422 " +
+          "provider_unavailable or model_not_supported when the session's settings no longer " +
+          "resolve; 503 server_busy (Retry-After) while the server is shutting down.",
         tags: ["messages"],
         params: sessionIdParams,
+        headers: sendMessageHeaders,
         body: sendMessageBody,
         response: {
-          200: turnResponse,
-          202: turnResponse,
+          200: {
+            description: "The answer completed within the wait",
+            headers: { "Preference-Applied": preferenceAppliedHeader },
+            content: { "application/json": { schema: turnResponse } },
+          },
+          202: {
+            description:
+              "Admitted; the answer is still being generated. Poll Location until its status " +
+              "is completed or failed. Also returned when the server shuts down meanwhile.",
+            headers: {
+              "Location": {
+                type: "string",
+                description: "The assistant message to poll: /sessions/{id}/messages/{mid}",
+              },
+              "Retry-After": { type: "integer", description: "Seconds to wait before polling" },
+              "Cache-Control": noStoreHeader,
+              "Preference-Applied": preferenceAppliedHeader,
+            },
+            content: { "application/json": { schema: turnResponse } },
+          },
           502: {
-            description: "The answer failed",
+            description: "The answer failed within the wait",
+            headers: { "Preference-Applied": preferenceAppliedHeader },
             content: { "application/problem+json": { schema: failedTurnProblem } },
           },
         },
@@ -119,10 +155,17 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
         summary: "Read one message",
         description:
           "The current state of a message, including the partial content of an answer still " +
-          "being generated. 404 message_not_found unless it belongs to this session.",
+          "being generated; the polling target of a 202. Never cached (no-store). 404 " +
+          "message_not_found unless it belongs to this session.",
         tags: ["messages"],
         params: messageParams,
-        response: { 200: messageResponse },
+        response: {
+          200: {
+            description: "The message as it is now",
+            headers: { "Cache-Control": noStoreHeader },
+            content: { "application/json": { schema: messageResponse } },
+          },
+        },
       },
     },
     async (request, reply) => {
