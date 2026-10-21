@@ -4,12 +4,24 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
 import type { AppConfig } from "./config.js";
+import type { Db } from "./db/client.js";
+import { createReadinessCheck } from "./db/readiness.js";
 import { registerApiDocs } from "./http/plugins.js";
 import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-details.js";
+import type { ModelCatalog } from "./llm/catalog.js";
+import type { ProviderRegistry } from "./llm/registry.js";
 import { healthRoutes } from "./modules/health/routes.js";
+import { providersRoutes } from "./modules/providers/routes.js";
+import { sessionsRoutes } from "./modules/sessions/routes.js";
+import { createSessionsService } from "./modules/sessions/service.js";
+import { MIGRATIONS_FOLDER } from "./paths.js";
 
+/** The app never closes `db`: its owner does (server.ts on shutdown, the test harness per file). */
 export type AppDeps = {
   config: AppConfig;
+  db: Db;
+  catalog: ModelCatalog;
+  registry: ProviderRegistry;
   logStream?: NodeJS.WritableStream;
 };
 
@@ -39,7 +51,7 @@ function requestId(request: IncomingMessage): string {
 
 /** Returns a configured app that is not listening; only `server.ts` calls `listen`. */
 export function buildApp(deps: AppDeps): FastifyInstance {
-  const { config, logStream } = deps;
+  const { config, db, registry, logStream } = deps;
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -64,7 +76,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   registerProblemDetails(app);
   registerApiDocs(app);
 
-  void app.register(healthRoutes);
+  void app.register(healthRoutes, {
+    checkReadiness: createReadinessCheck(db, MIGRATIONS_FOLDER),
+  });
+  void app.register(providersRoutes, { registry });
+  void app.register(sessionsRoutes, { service: createSessionsService({ db, registry }) });
 
   return app;
 }

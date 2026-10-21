@@ -1,0 +1,9 @@
+{
+  "providers": {
+    "demo": {
+      "defaultModel": "demo",
+      "requiresKey": false,
+      "models": [{ "id": "demo", "contextWindow": 8192, "maxOutputTokens": 1024 }]
+    }
+  }
+}
