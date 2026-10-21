@@ -35,6 +35,7 @@
     "prepare": "husky install",
     "start": "turbo run start",
     "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
     "typecheck": "turbo run typecheck"
   },
   "syncpack": {
