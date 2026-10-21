@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
-import { makeTestApp } from "../helpers/app.js";
+import { TEST_ENV, makeTestApp } from "../helpers/app.js";
 import { type LogCapture, captureLogs } from "../helpers/log-capture.js";
 
 const SENTINEL = "sk-sentinel-4f1c9a7e";
@@ -15,7 +15,7 @@ describe("logging", () => {
   function makeLoggingApp(): FastifyInstance {
     logs = captureLogs();
     return makeTestApp({
-      config: loadConfig({ NODE_ENV: "test", LOG_LEVEL: "trace" }),
+      config: loadConfig({ ...TEST_ENV, LOG_LEVEL: "trace" }),
       logStream: logs.stream,
     });
   }

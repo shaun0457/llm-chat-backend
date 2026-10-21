@@ -1,10 +1,17 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 
-const healthResponse = z.object({ status: z.literal("ok") });
+import type { ReadinessCheck } from "../../db/readiness.js";
+import { ProblemError } from "../../http/problem-details.js";
 
-/** Liveness only: answers while the process can serve HTTP, checks no dependencies. */
-export const healthRoutes: FastifyPluginAsyncZod = async (app) => {
+const healthResponse = z.object({ status: z.literal("ok") });
+const readyResponse = z.object({ status: z.literal("ready") });
+
+export const healthRoutes: FastifyPluginAsyncZod<{ checkReadiness: ReadinessCheck }> = async (
+  app,
+  { checkReadiness },
+) => {
+  /** Liveness only: answers while the process can serve HTTP, checks no dependencies. */
   app.get(
     "/health",
     {
@@ -15,5 +22,26 @@ export const healthRoutes: FastifyPluginAsyncZod = async (app) => {
       },
     },
     async () => ({ status: "ok" as const }),
+  );
+
+  app.get(
+    "/health/ready",
+    {
+      schema: {
+        summary: "Readiness probe",
+        description:
+          "200 when the database answers and its applied migrations match this build's. " +
+          "Otherwise 503 not_ready, detail database_unreachable or migrations_pending.",
+        tags: ["health"],
+        response: { 200: readyResponse },
+      },
+    },
+    async (request) => {
+      const readiness = await checkReadiness(request.log);
+      if (readiness !== "ready") {
+        throw new ProblemError(503, "not_ready", readiness);
+      }
+      return { status: "ready" as const };
+    },
   );
 };

@@ -1,8 +1,13 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const SERVER_DIR = fileURLToPath(new URL("../..", import.meta.url));
+// Nothing listens there: the server starts without connecting, and /health needs no database.
+const UNUSED_DATABASE_URL = "postgres://app:pw@127.0.0.1:9/app";
 const LISTENING = /Server listening at (http:\/\/127\.0\.0\.1:\d+)/;
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
@@ -14,7 +19,13 @@ function startServer(env: Record<string, string>): {
 } {
   const child = spawn(process.execPath, ["dist/index.js"], {
     cwd: SERVER_DIR,
-    env: { PATH: process.env.PATH ?? "", HOST: "127.0.0.1", PORT: "0", ...env },
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOST: "127.0.0.1",
+      PORT: "0",
+      DATABASE_URL: UNUSED_DATABASE_URL,
+      ...env,
+    },
   });
   let stdout = "";
   let stderr = "";
@@ -86,5 +97,47 @@ describe("server entry (built dist/index.js)", () => {
     const { stdout, stderr } = server.output();
     expect(stderr).toContain("PORT");
     expect(stdout + stderr).not.toContain("abc");
+  });
+
+  describe("with a bad model catalog", () => {
+    let dir: string;
+
+    beforeAll(async () => {
+      dir = await mkdtemp(join(tmpdir(), "catalog-"));
+    });
+    afterAll(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it("exits non-zero naming the catalog file and the invalid entry", async () => {
+      const path = join(dir, "models.json");
+      await writeFile(
+        path,
+        JSON.stringify({
+          providers: {
+            demo: { defaultModel: "demo", requiresKey: false, models: [{ id: "demo" }] },
+          },
+        }),
+      );
+      const server = startServer({ MODEL_CATALOG_PATH: path });
+      running = server.child;
+
+      const exit = await server.exited;
+
+      expect(exit.code).toBe(1);
+      const { stderr } = server.output();
+      expect(stderr).toContain(path);
+      expect(stderr).toContain("providers.demo.models.0.contextWindow");
+    });
+
+    it("exits non-zero naming an enabled provider missing from the catalog", async () => {
+      const server = startServer({ PROVIDERS_ENABLED: "demo,ghost" });
+      running = server.child;
+
+      const exit = await server.exited;
+
+      expect(exit.code).toBe(1);
+      expect(server.output().stderr).toMatch(/PROVIDERS_ENABLED.*ghost/);
+    });
   });
 });

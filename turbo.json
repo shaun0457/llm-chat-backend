@@ -12,13 +12,33 @@
       "cache": false,
       "persistent": true,
       "inputs": ["$TURBO_DEFAULT$", ".env"],
-      "passThroughEnv": ["PORT", "HOST", "LOG_LEVEL", "NODE_ENV"]
+      "passThroughEnv": [
+        "PORT",
+        "HOST",
+        "LOG_LEVEL",
+        "NODE_ENV",
+        "DATABASE_URL",
+        "MODEL_CATALOG_PATH",
+        "PROVIDERS_ENABLED",
+        "DEFAULT_PROVIDER",
+        "DEFAULT_MODEL"
+      ]
     },
     "start": {
       "dependsOn": ["build"],
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["PORT", "HOST", "LOG_LEVEL", "NODE_ENV"]
+      "passThroughEnv": [
+        "PORT",
+        "HOST",
+        "LOG_LEVEL",
+        "NODE_ENV",
+        "DATABASE_URL",
+        "MODEL_CATALOG_PATH",
+        "PROVIDERS_ENABLED",
+        "DEFAULT_PROVIDER",
+        "DEFAULT_MODEL"
+      ]
     },
     "format": {},
     "lint": {},
@@ -29,6 +49,11 @@
       "inputs": ["$TURBO_DEFAULT$"]
     },
     "test": {
+      "inputs": ["$TURBO_DEFAULT$"],
+      "outputs": [],
+      "passThroughEnv": ["DOCKER_*", "TESTCONTAINERS_*"]
+    },
+    "test:unit": {
       "inputs": ["$TURBO_DEFAULT$"],
       "outputs": []
     }
