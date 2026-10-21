@@ -1,12 +1,15 @@
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 
 import { MIGRATION_LOCK_KEY } from "../../src/db/migrate.js";
+import { MIGRATIONS_FOLDER } from "../../src/paths.js";
 import { useTestDatabase } from "../helpers/db.js";
 
 const SERVER_DIR = fileURLToPath(new URL("../..", import.meta.url));
+const BUNDLED_MIGRATIONS = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER }).length;
 
 type Run = { code: number | null; stdout: string; stderr: string };
 
@@ -56,7 +59,7 @@ describe("migrate entry (built dist/migrate.js)", () => {
       expect(first).toMatchObject({ code: 0 });
       expect(await sessionsTable(testDb.url)).toBe("sessions");
       const afterFirst = await appliedMigrations(testDb.url);
-      expect(afterFirst).toHaveLength(1);
+      expect(afterFirst).toHaveLength(BUNDLED_MIGRATIONS);
 
       const second = await runMigrate({ DATABASE_URL: testDb.url }).done;
       expect(second).toMatchObject({ code: 0 });
@@ -75,7 +78,7 @@ describe("migrate entry (built dist/migrate.js)", () => {
 
       expect(a.code).toBe(0);
       expect(b.code).toBe(0);
-      expect(await appliedMigrations(testDb.url)).toHaveLength(1);
+      expect(await appliedMigrations(testDb.url)).toHaveLength(BUNDLED_MIGRATIONS);
     }, 30_000);
   });
 
