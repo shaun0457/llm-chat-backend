@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 
 import { ProblemError } from "../../http/problem-details.js";
+import { type WaitConfig, effectiveWaitMs, parsePrefer, preferenceApplied } from "./prefer.js";
 import {
   failedTurnProblem,
   listMessagesQuery,
@@ -14,11 +15,21 @@ import {
 import type { MessagesService } from "./service.js";
 
 const GENERIC_FAILURE_DETAIL = "The answer could not be generated.";
+/** Seconds a client should wait before polling an answer that is still being generated. */
+const POLL_AFTER_SECONDS = "2";
 
-export const messagesRoutes: FastifyPluginAsyncZod<{ service: MessagesService }> = async (
-  app,
-  { service },
-) => {
+/** Every `Prefer` line of the request; Node joins repeated lines into one string. */
+function preferValues(header: string | string[] | undefined): string[] {
+  if (header === undefined) {
+    return [];
+  }
+  return Array.isArray(header) ? header : [header];
+}
+
+export const messagesRoutes: FastifyPluginAsyncZod<{
+  service: MessagesService;
+  jsonWait: WaitConfig;
+}> = async (app, { service, jsonWait }) => {
   app.post(
     "/sessions/:id/messages",
     {
@@ -47,19 +58,39 @@ export const messagesRoutes: FastifyPluginAsyncZod<{ service: MessagesService }>
       },
     },
     async (request, reply) => {
-      const turn = await service.send(request.params.id, request.body);
-      const { status } = turn.assistantMessage;
-      if (status === "failed") {
-        const { errorCode, errorDetail } = turn.assistantMessage;
-        throw new ProblemError(
-          502,
-          errorCode ?? "llm_upstream_error",
-          errorDetail ?? GENERIC_FAILURE_DETAIL,
-          turn,
-        );
+      const preferences = parsePrefer(preferValues(request.headers.prefer));
+      const outcome = await service.send(request.params.id, request.body, {
+        waitMs: effectiveWaitMs(preferences, jsonWait),
+      });
+      const applied = preferenceApplied(preferences, jsonWait);
+      const headers: Record<string, string> =
+        applied === undefined ? {} : { "preference-applied": applied };
+      const { userMessage, assistantMessage } = outcome;
+      const turn = { userMessage, assistantMessage };
+
+      switch (outcome.kind) {
+        case "completed":
+          return reply.code(200).headers(headers).send(turn);
+        case "failed":
+          throw new ProblemError(
+            502,
+            assistantMessage.errorCode ?? "llm_upstream_error",
+            assistantMessage.errorDetail ?? GENERIC_FAILURE_DETAIL,
+            turn,
+            headers,
+          );
+        case "pending":
+          // Generation goes on; the client polls the assistant message.
+          return reply
+            .code(202)
+            .headers({
+              ...headers,
+              "location": `/sessions/${assistantMessage.sessionId}/messages/${assistantMessage.id}`,
+              "retry-after": POLL_AFTER_SECONDS,
+              "cache-control": "no-store",
+            })
+            .send(turn);
       }
-      // 202: the job ended without a terminal state because the server is shutting down.
-      return reply.code(status === "completed" ? 200 : 202).send(turn);
     },
   );
 
