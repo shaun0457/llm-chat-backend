@@ -1,12 +1,16 @@
 import type { FastifyBaseLogger, FastifyError, FastifyInstance, FastifyReply } from "fastify";
 import { STATUS_CODES } from "node:http";
 
+/** Extra members of one problem type (RFC 9457 §3.2); they never replace the standard ones. */
+export type ProblemExtensions = Readonly<Record<string, unknown>>;
+
 /** The only way a handler signals an expected error; mapped to RFC 9457 problem details. */
 export class ProblemError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     readonly detail?: string,
+    readonly extensions?: ProblemExtensions,
   ) {
     super(detail ?? code);
     this.name = "ProblemError";
@@ -19,10 +23,17 @@ export type Problem = {
   status: number;
   code: string;
   detail?: string;
+  [extension: string]: unknown;
 };
 
-export function problem(status: number, code: string, detail?: string): Problem {
+export function problem(
+  status: number,
+  code: string,
+  detail?: string,
+  extensions: ProblemExtensions = {},
+): Problem {
   return {
+    ...extensions,
     type: "about:blank",
     title: STATUS_CODES[status] ?? "Unknown Status",
     status,
@@ -73,7 +84,7 @@ export function registerProblemDetails(app: FastifyInstance): void {
  */
 export function toProblem(error: unknown, log: FastifyBaseLogger): Problem {
   if (error instanceof ProblemError) {
-    return problem(error.status, error.code, error.detail);
+    return problem(error.status, error.code, error.detail, error.extensions);
   }
   if (!(error instanceof Error)) {
     log.error({ thrown: typeof error }, "unhandled non-Error thrown");

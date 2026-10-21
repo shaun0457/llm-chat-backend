@@ -11,6 +11,10 @@ import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-d
 import type { ModelCatalog } from "./llm/catalog.js";
 import type { ProviderRegistry } from "./llm/registry.js";
 import { healthRoutes } from "./modules/health/routes.js";
+import { createAttach } from "./modules/messages/attach.js";
+import { createJobRegistry } from "./modules/messages/jobs.js";
+import { messagesRoutes } from "./modules/messages/routes.js";
+import { createMessagesService } from "./modules/messages/service.js";
 import { providersRoutes } from "./modules/providers/routes.js";
 import { sessionsRoutes } from "./modules/sessions/routes.js";
 import { createSessionsService } from "./modules/sessions/service.js";
@@ -26,6 +30,8 @@ export type AppDeps = {
 };
 
 const REQUEST_ID_HEADER = "x-request-id";
+/** How long closing the app waits for aborted generations; below server.ts's shutdown timeout. */
+const JOB_SHUTDOWN_WAIT_MS = 5_000;
 const VALID_REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 
 /**
@@ -51,7 +57,7 @@ function requestId(request: IncomingMessage): string {
 
 /** Returns a configured app that is not listening; only `server.ts` calls `listen`. */
 export function buildApp(deps: AppDeps): FastifyInstance {
-  const { config, db, registry, logStream } = deps;
+  const { config, db, catalog, registry, logStream } = deps;
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -81,6 +87,22 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   void app.register(providersRoutes, { registry });
   void app.register(sessionsRoutes, { service: createSessionsService({ db, registry }) });
+
+  const jobs = createJobRegistry({ db, flushIntervalMs: config.flushIntervalMs, log: app.log });
+  const messages = createMessagesService({
+    db,
+    registry,
+    catalog,
+    jobs,
+    attach: createAttach({ db, jobs }),
+    defaultSystemPrompt: config.defaultSystemPrompt,
+  });
+  void app.register(messagesRoutes, { service: messages });
+  // Before the server stops accepting: running generations end, so waiting responses finish
+  // instead of holding the close open. An aborted row stays generating for now.
+  app.addHook("preClose", async () => {
+    await jobs.shutdown(JOB_SHUTDOWN_WAIT_MS);
+  });
 
   return app;
 }
