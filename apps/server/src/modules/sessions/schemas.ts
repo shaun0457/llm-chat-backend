@@ -3,13 +3,21 @@ import { z } from "zod";
 import { decodeCursor } from "./cursor.js";
 
 // Lengths count UTF-16 code units (JavaScript string length). Strings are stored untrimmed.
+// PostgreSQL text cannot hold U+0000, so it is rejected here rather than failing the insert.
+const noNul = (value: string) => !value.includes("\u0000");
 const title = z
   .string()
   .min(1)
   .max(200)
   .refine((value) => value.trim().length > 0, "must not be blank")
-  .describe("1–200 characters, not only whitespace");
-const systemPrompt = z.string().min(1).max(8000).describe("1–8,000 characters");
+  .refine(noNul, "must not contain U+0000")
+  .describe("1–200 characters, not only whitespace, no U+0000");
+const systemPrompt = z
+  .string()
+  .min(1)
+  .max(8000)
+  .refine(noNul, "must not contain U+0000")
+  .describe("1–8,000 characters, no U+0000");
 // No length limit: an id that is not catalogued is a 422, whatever its length.
 const provider = z.string().min(1).describe("An enabled provider id (GET /providers)");
 const model = z.string().min(1).describe("A model in that provider's catalog");
@@ -49,7 +57,11 @@ const updatableFields = ["title", "provider", "model", "systemPrompt"] as const;
 export const updateSessionBody = z
   .object({
     title: title.nullable().optional().describe("null clears it"),
-    provider: provider.optional().describe("Alone: the model becomes this provider's default"),
+    provider: provider
+      .optional()
+      .describe(
+        "Alone: a different provider's default model; the current provider keeps the model",
+      ),
     model: model.optional().describe("Alone: validated against the current provider"),
     systemPrompt: systemPrompt.nullable().optional().describe("null clears it"),
   })

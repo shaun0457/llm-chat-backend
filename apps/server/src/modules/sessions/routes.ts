@@ -22,8 +22,9 @@ export const sessionsRoutes: FastifyPluginAsyncZod<{ service: SessionsService }>
         summary: "Create a session",
         description:
           "Provider and model default to the server's configuration. Provider only → its " +
-          "default model; model only → the default provider. 422 provider_unavailable or " +
-          "model_not_supported when the pair does not resolve.",
+          "default model (the configured default model for the default provider); model " +
+          "only → the default provider. 422 provider_unavailable or model_not_supported " +
+          "when the pair does not resolve.",
         tags: ["sessions"],
         body: createSessionBody,
         response: { 201: sessionResponse },

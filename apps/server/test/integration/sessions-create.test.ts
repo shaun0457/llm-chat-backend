@@ -105,6 +105,9 @@ describe("POST /sessions and GET /sessions/:id", () => {
         "body.systemPrompt",
       ],
       ["a non-string provider", { provider: 42 }, "body.provider"],
+      // PostgreSQL text cannot hold U+0000; the insert would fail with a 500.
+      ["a title with a NUL character", { title: "a\u0000b" }, "body.title"],
+      ["a system prompt with a NUL character", { systemPrompt: "a\u0000b" }, "body.systemPrompt"],
     ])("rejects %s with 400 validation_error", async (_name, payload, field) => {
       const response = await app.inject({ method: "POST", url: "/sessions", payload });
 
