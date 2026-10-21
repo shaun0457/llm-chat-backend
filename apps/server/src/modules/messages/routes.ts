@@ -28,13 +28,21 @@ export const messagesRoutes: FastifyPluginAsyncZod<{ service: MessagesService }>
           "Stores the user message and a generating assistant message, then generates the " +
           "answer with the session's provider and model. The response waits until the answer " +
           "is finished: 200 with both messages when it completed, 502 problem details with " +
-          "both messages when it failed. 404 session_not_found; 409 session_busy while an " +
+          "both messages when it failed, 202 with both messages when the server shut down " +
+          "before the answer finished. 404 session_not_found; 409 session_busy while an " +
           "earlier answer in the session is still being generated; 422 provider_unavailable " +
           "or model_not_supported when the session's settings no longer resolve.",
         tags: ["messages"],
         params: sessionIdParams,
         body: sendMessageBody,
-        response: { 200: turnResponse, 202: turnResponse, 502: failedTurnProblem },
+        response: {
+          200: turnResponse,
+          202: turnResponse,
+          502: {
+            description: "The answer failed",
+            content: { "application/problem+json": { schema: failedTurnProblem } },
+          },
+        },
       },
     },
     async (request, reply) => {
