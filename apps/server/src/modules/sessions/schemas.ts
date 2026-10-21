@@ -10,8 +10,9 @@ const title = z
   .refine((value) => value.trim().length > 0, "must not be blank")
   .describe("1–200 characters, not only whitespace");
 const systemPrompt = z.string().min(1).max(8000).describe("1–8,000 characters");
-const provider = z.string().min(1).max(100).describe("An enabled provider id (GET /providers)");
-const model = z.string().min(1).max(200).describe("A model in that provider's catalog");
+// No length limit: an id that is not catalogued is a 422, whatever its length.
+const provider = z.string().min(1).describe("An enabled provider id (GET /providers)");
+const model = z.string().min(1).describe("A model in that provider's catalog");
 
 const timestamp = z
   .string()

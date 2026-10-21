@@ -36,6 +36,7 @@ describe("session provider and model resolution", () => {
   it.each([
     ["an unknown provider", { provider: "nope" }],
     ["a catalogued provider that is not enabled", { provider: "off", model: "off-1" }],
+    ["a very long unknown provider id", { provider: "p".repeat(500) }],
   ])("rejects %s with 422 provider_unavailable", async (_name, payload) => {
     const response = await create(payload);
 
@@ -48,6 +49,7 @@ describe("session provider and model resolution", () => {
     ["a model of another provider", { provider: "other", model: "demo" }],
     ["a model only, not in the default provider's catalog", { model: "o-small" }],
     ["an unknown model", { provider: "demo", model: "nope" }],
+    ["a very long unknown model id", { provider: "demo", model: "m".repeat(500) }],
   ])("rejects %s with 422 model_not_supported", async (_name, payload) => {
     const response = await create(payload);
 
