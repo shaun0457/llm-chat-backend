@@ -12,7 +12,7 @@ import type { ModelCatalog } from "./llm/catalog.js";
 import type { ProviderRegistry } from "./llm/registry.js";
 import { healthRoutes } from "./modules/health/routes.js";
 import { createAttach } from "./modules/messages/attach.js";
-import { createJobRegistry } from "./modules/messages/jobs.js";
+import { type JobRegistry, createJobRegistry } from "./modules/messages/jobs.js";
 import { messagesRoutes } from "./modules/messages/routes.js";
 import { createMessagesService } from "./modules/messages/service.js";
 import { providersRoutes } from "./modules/providers/routes.js";
@@ -27,6 +27,8 @@ export type AppDeps = {
   catalog: ModelCatalog;
   registry: ProviderRegistry;
   logStream?: NodeJS.WritableStream;
+  /** Replaces the app's own job registry, so a test can subscribe to a running generation. */
+  jobs?: JobRegistry;
 };
 
 const REQUEST_ID_HEADER = "x-request-id";
@@ -88,7 +90,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   void app.register(providersRoutes, { registry });
   void app.register(sessionsRoutes, { service: createSessionsService({ db, registry }) });
 
-  const jobs = createJobRegistry({ db, flushIntervalMs: config.flushIntervalMs, log: app.log });
+  const jobs =
+    deps.jobs ?? createJobRegistry({ db, flushIntervalMs: config.flushIntervalMs, log: app.log });
   const messages = createMessagesService({
     db,
     registry,

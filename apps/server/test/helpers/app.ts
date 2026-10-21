@@ -44,5 +44,6 @@ export function makeTestApp(overrides: Partial<AppDeps> = {}): FastifyInstance {
       createRegistry(catalog, config, { demo: new DemoProvider({ delayMs: config.demoDelayMs }) }),
     db: overrides.db ?? detachedDb(),
     ...(overrides.logStream === undefined ? {} : { logStream: overrides.logStream }),
+    ...(overrides.jobs === undefined ? {} : { jobs: overrides.jobs }),
   });
 }
