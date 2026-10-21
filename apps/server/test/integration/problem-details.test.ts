@@ -109,4 +109,40 @@ describe("problem details", () => {
     expect(response.body).not.toContain("hunter2");
     expect(response.body).not.toContain("at ");
   });
+
+  it("does not pass through the status or message of a non-framework error", async () => {
+    app = makeTestApp();
+    app.get("/test/upstream", async () => {
+      throw Object.assign(new Error("upstream said: key sk-123 is rate limited"), {
+        statusCode: 429,
+      });
+    });
+
+    const response = await app.inject({ method: "GET", url: "/test/upstream" });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({ code: "internal_error" });
+    expect(response.body).not.toContain("sk-123");
+  });
+
+  it("carries the request id on error responses", async () => {
+    app = makeTestApp();
+    app.get("/test/boom", async () => {
+      throw new Error("boom");
+    });
+
+    const notFound = await app.inject({
+      method: "GET",
+      url: "/nope",
+      headers: { "x-request-id": "req-404" },
+    });
+    const failed = await app.inject({
+      method: "GET",
+      url: "/test/boom",
+      headers: { "x-request-id": "req-500" },
+    });
+
+    expect(notFound.headers["x-request-id"]).toBe("req-404");
+    expect(failed.headers["x-request-id"]).toBe("req-500");
+  });
 });

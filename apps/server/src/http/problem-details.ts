@@ -66,9 +66,12 @@ export function registerProblemDetails(app: FastifyInstance): void {
     if (error.validation !== undefined) {
       return sendProblem(reply, problem(400, "validation_error", validationDetail(error)));
     }
-    // Framework client errors (malformed JSON, oversized or unsupported body) keep their status.
+    // Fastify's own client errors (malformed JSON, oversized or unsupported body) keep their
+    // status. Any other error carrying a statusCode (e.g. an unwrapped upstream SDK error) is
+    // unexpected and must not leak its status or message.
     const status = error.statusCode;
-    if (status !== undefined && status >= 400 && status < 500) {
+    const isFrameworkError = typeof error.code === "string" && error.code.startsWith("FST_ERR_");
+    if (isFrameworkError && status !== undefined && status >= 400 && status < 500) {
       const code = status === 400 ? "validation_error" : "request_error";
       return sendProblem(reply, problem(status, code, error.message));
     }
