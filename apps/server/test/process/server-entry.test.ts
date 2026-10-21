@@ -26,16 +26,22 @@ function startServer(env: Record<string, string>): {
   return { child, output: () => ({ stdout, stderr }), exited };
 }
 
-async function waitForUrl(output: () => { stdout: string }, timeoutMs = 10_000): Promise<string> {
+async function waitForUrl(
+  server: { output: () => { stdout: string; stderr: string }; exited: Promise<Exit> },
+  timeoutMs = 10_000,
+): Promise<string> {
+  let exit: Exit | undefined;
+  void server.exited.then((value) => (exit = value));
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const match = LISTENING.exec(output().stdout);
+  while (Date.now() < deadline && exit === undefined) {
+    const match = LISTENING.exec(server.output().stdout);
     if (match?.[1] !== undefined) {
       return match[1];
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`server did not start: ${output().stdout}`);
+  const { stdout, stderr } = server.output();
+  throw new Error(`server did not start (exit: ${JSON.stringify(exit)}): ${stdout}${stderr}`);
 }
 
 describe("server entry (built dist/index.js)", () => {
@@ -54,7 +60,7 @@ describe("server entry (built dist/index.js)", () => {
     async () => {
       const server = startServer({ NODE_ENV: "production" });
       running = server.child;
-      const url = await waitForUrl(server.output);
+      const url = await waitForUrl(server);
 
       const response = await fetch(`${url}/health`);
       expect(response.status).toBe(200);

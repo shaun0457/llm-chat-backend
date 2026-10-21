@@ -27,7 +27,8 @@ describe("logging", () => {
   describe("credential redaction", () => {
     const secretHeaders = { "x-llm-api-key": SENTINEL, "authorization": `Bearer ${SENTINEL}` };
 
-    it("never writes the API key or bearer token from request headers", async () => {
+    // Regression guard: Fastify's default request serializer logs no headers today.
+    it("default request logging never writes the API key or bearer token", async () => {
       app = makeLoggingApp();
 
       await app.inject({ method: "GET", url: "/health", headers: secretHeaders });
@@ -50,7 +51,7 @@ describe("logging", () => {
       expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
     });
 
-    it("never writes the secrets when the request fails", async () => {
+    it("default error logging never writes the secrets", async () => {
       app = makeLoggingApp();
       app.get("/test/boom", async () => {
         throw new Error("boom");
