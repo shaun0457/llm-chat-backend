@@ -131,6 +131,13 @@ jobs:
             -H 'content-type: application/json' -d '{"title":"CI smoke"}' | jq -er .id)
           curl -sf http://127.0.0.1:3000/sessions \
             | jq -e --arg id "$id" '[.items[].id] | index($id) != null'
+      - name: Send a message and get the demo provider's answer
+        run: |
+          id=$(curl -sf -X POST http://127.0.0.1:3000/sessions \
+            -H 'content-type: application/json' -d '{}' | jq -er .id)
+          curl -sf -X POST "http://127.0.0.1:3000/sessions/$id/messages" \
+            -H 'content-type: application/json' -d '{"content":"Hello"}' \
+            | jq -e '.assistantMessage.status == "completed" and (.assistantMessage.content | length > 0)'
       - name: A second migrate run is a no-op
         run: docker compose run --rm migrate
       - name: Compose logs
