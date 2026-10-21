@@ -13,6 +13,16 @@
       "inputs": ["$TURBO_DEFAULT$", ".env"]
     },
     "format": {},
-    "lint": {}
+    "lint": {},
+    "lint:ci": {
+      "inputs": ["$TURBO_DEFAULT$"]
+    },
+    "typecheck": {
+      "inputs": ["$TURBO_DEFAULT$"]
+    },
+    "test": {
+      "inputs": ["$TURBO_DEFAULT$"],
+      "outputs": []
+    }
   }
 }
