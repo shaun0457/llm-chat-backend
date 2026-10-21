@@ -106,7 +106,7 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           pattern='^(feat|fix|refactor|docs|test|chore|perf|ci|style|build|revert)(\([a-z0-9-]+\))?!?: .+'
-          bad=$(git log --format=%s "$BASE..$HEAD" | grep -vE "$pattern" || true)
+          bad=$(git log --no-merges --format=%s "$BASE..$HEAD" | grep -vE "$pattern" || true)
           if [ -n "$bad" ]; then
             echo "Commit subjects not in conventional-commit form:"
             echo "$bad"
