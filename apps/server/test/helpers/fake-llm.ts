@@ -23,6 +23,8 @@ export type FakeScript = {
   gateAfter?: number;
   /** After the chunks, wait until the signal aborts; never finishes on its own. */
   hang?: boolean;
+  /** False: end the stream without a finish event, as a broken upstream might. */
+  finish?: boolean;
   finishReason?: LlmFinishReason;
   /** Default { promptTokens: 7, completionTokens: 2 }; null for a provider without usage. */
   usage?: LlmUsage | null;
@@ -107,6 +109,9 @@ export class FakeLlmProvider implements LlmProvider {
       await untilAborted(signal);
     }
     signal.throwIfAborted();
+    if (script.finish === false) {
+      return;
+    }
     yield {
       type: "finish",
       reason: script.finishReason ?? "stop",

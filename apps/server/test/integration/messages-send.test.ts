@@ -204,6 +204,20 @@ describe("POST /sessions/:id/messages", () => {
       expect(response.json().assistantMessage.content).toBe("");
     });
 
+    it("treats a stream that ends without finishing as an upstream error", async () => {
+      start();
+      fake.script({ deltas: ["Half"], finish: false });
+      const session = await createSession(app);
+
+      const response = await send(app, session.id, { content: "Hi" });
+
+      expect(response.statusCode).toBe(502);
+      expect(response.json()).toMatchObject({
+        code: "llm_upstream_error",
+        assistantMessage: { status: "failed", content: "Half" },
+      });
+    });
+
     it("leaves the session usable: the next send is admitted", async () => {
       start();
       fake.script({ throwAfter: 0 }, { deltas: ["Fine"] });
@@ -281,5 +295,89 @@ describe("POST /sessions/:id/messages", () => {
       gate.release();
       expect((await waiting).statusCode).toBe(200);
     });
+  });
+
+  describe("send.validation", () => {
+    it.each([
+      ["an unknown field", { content: "Hi", colour: "blue" }],
+      ["no content", {}],
+      ["empty content", { content: "" }],
+      ["whitespace-only content", { content: " \n\t " }],
+      ["content over 16,000 characters", { content: "a".repeat(16_001) }],
+      ["content that is not a string", { content: 42 }],
+      ["content with U+0000", { content: "a\u0000b" }],
+    ])("rejects %s with 400 validation_error and writes nothing", async (_name, payload) => {
+      start();
+      const session = await createSession(app);
+
+      const response = await send(app, session.id, payload);
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ status: 400, code: "validation_error" });
+      expect(await allMessages(app, session.id)).toEqual([]);
+      expect(fake.requests).toEqual([]);
+      const after = await getSession(app, session.id);
+      expect(after).toMatchObject({ title: null, lastActivityAt: session.lastActivityAt });
+    });
+
+    it("rejects a request without a body with 400 validation_error", async () => {
+      start();
+      const session = await createSession(app);
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/sessions/${session.id}/messages`,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "validation_error" });
+    });
+
+    it("accepts content of exactly 16,000 characters", async () => {
+      start();
+      const session = await createSession(app);
+
+      const response = await send(app, session.id, { content: "a".repeat(16_000) });
+
+      expect(response.statusCode).toBe(200);
+    });
+
+    it("answers a malformed session id with 400 validation_error", async () => {
+      start();
+
+      const response = await send(app, "not-a-uuid", { content: "Hi" });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "validation_error" });
+    });
+  });
+});
+
+describe("demo", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it("answers deterministically with the built-in demo provider and no key anywhere", async () => {
+    // The shipped catalog and the real demo provider; no API key header, no key in config.
+    app = makeTestApp({ db: testDb.db });
+    const session = await createSession(app);
+    expect(session).toMatchObject({ provider: "demo", model: "demo" });
+
+    const first = await send(app, session.id, { content: "Hello" });
+    const second = await send(app, session.id, { content: "Hello" });
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json().assistantMessage).toMatchObject({
+      status: "completed",
+      content: "This is the demo provider. Your message was 5 characters long.",
+      provider: "demo",
+      model: "demo",
+      finishReason: "stop",
+      usage: null,
+    });
+    expect(second.json().assistantMessage.content).toBe(first.json().assistantMessage.content);
   });
 });
