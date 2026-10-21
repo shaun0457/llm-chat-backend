@@ -27,8 +27,17 @@ export class ConfigError extends Error {
   }
 }
 
+/** `PORT=` (empty or blank) means unset; otherwise zod would coerce "" to port 0. */
+function withoutBlankValues(env: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined && entry[1].trim().length > 0,
+    ),
+  );
+}
+
 export function loadConfig(env: Record<string, string | undefined>): AppConfig {
-  const result = envSchema.safeParse(env);
+  const result = envSchema.safeParse(withoutBlankValues(env));
   if (!result.success) {
     throw new ConfigError(
       result.error.issues.map((issue) => ({

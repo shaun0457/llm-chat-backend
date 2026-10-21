@@ -43,6 +43,14 @@ describe("loadConfig", () => {
     );
   });
 
+  it("treats empty or blank values as unset instead of coercing them", () => {
+    expect(loadConfig({ PORT: "", HOST: " ", LOG_LEVEL: "" })).toMatchObject({
+      port: 3000,
+      host: "0.0.0.0",
+      logLevel: "info",
+    });
+  });
+
   it("returns a frozen object", () => {
     expect(Object.isFrozen(loadConfig({}))).toBe(true);
   });
