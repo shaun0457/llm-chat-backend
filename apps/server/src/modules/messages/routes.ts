@@ -56,7 +56,7 @@ export const messagesRoutes: FastifyPluginAsyncZod<{ service: MessagesService }>
           turn,
         );
       }
-      // 202: the generation ended without a terminal state (the server is shutting down).
+      // 202: the job ended without a terminal state because the server is shutting down.
       return reply.code(status === "completed" ? 200 : 202).send(turn);
     },
   );

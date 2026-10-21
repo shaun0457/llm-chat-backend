@@ -29,6 +29,7 @@ export function reserveCapacity(): Reservation {
 }
 
 const UPSTREAM_ERROR_DETAIL = "The model provider returned an error.";
+const SHUTTING_DOWN = new Error("the server is shutting down");
 
 /** Everything a job needs, frozen at admission. */
 export type JobSpec = {
@@ -47,12 +48,19 @@ export type JobSpec = {
   reservation: Reservation;
 };
 
+/**
+ * How a job ended. `terminal`: it wrote completed or failed. `aborted`: it wrote no terminal
+ * state on purpose (shutdown, or its row was deleted or superseded). `write_failed`: storing
+ * the terminal state failed, so the row is left generating.
+ */
+export type JobEnd = "terminal" | "aborted" | "write_failed";
+
 export type Job = Readonly<{
   assistantId: string;
   attempt: number;
   bus: MessageBus;
   /** Settles once the job has left the registry and closed its bus; never rejects. */
-  finished: Promise<void>;
+  finished: Promise<JobEnd>;
 }>;
 
 export interface JobRegistry {
@@ -73,6 +81,8 @@ export function createJobRegistry(deps: {
 }): JobRegistry {
   const { db, flushIntervalMs, log } = deps;
   const jobs = new Map<string, RunningJob>();
+  /** Set by shutdown(): jobs started afterwards are aborted immediately. */
+  let closing = false;
 
   /** Resolves with the terminal message it wrote, or undefined when it wrote none. */
   async function run(spec: JobSpec, job: RunningJob): Promise<Message | undefined> {
@@ -80,7 +90,6 @@ export function createJobRegistry(deps: {
     const jobLog = log.child({ assistantId: spec.assistantId, attempt: spec.attempt });
     const { controller, bus } = job;
     let fenceLost = false;
-    let terminal: Message | undefined;
     let flushed = "";
     let flushing: Promise<void> | undefined;
 
@@ -112,6 +121,11 @@ export function createJobRegistry(deps: {
     };
     const timer = setInterval(flush, flushIntervalMs);
 
+    // Generation: any error here is the provider's (or reading the history); never a terminal
+    // write, which happens below so that its failure is not mistaken for an upstream error.
+    let finish: { reason: LlmFinishReason; usage: LlmUsage | null } | undefined;
+    let generationFailed = false;
+    let generationError: unknown;
     try {
       const history = await historyBefore(db.drizzle, spec.sessionId, spec.userMessage.seq);
       const request = {
@@ -123,8 +137,6 @@ export function createJobRegistry(deps: {
           userMessage: spec.userMessage,
         }),
       };
-
-      let finish: { reason: LlmFinishReason; usage: LlmUsage | null } | undefined;
       for await (const event of spec.provider.stream(request, {
         signal: controller.signal,
         apiKey: spec.apiKey,
@@ -133,48 +145,46 @@ export function createJobRegistry(deps: {
           break;
         }
         if (event.type === "delta") {
-          bus.append(event.text);
+          // PostgreSQL text cannot hold U+0000; one such character would make every write fail.
+          bus.append(event.text.replaceAll("\u0000", ""));
         } else {
           finish = { reason: event.reason, usage: event.usage };
         }
       }
-      clearInterval(timer);
-      await flushing;
-      if (controller.signal.aborted) {
-        return undefined;
-      }
-
-      terminal =
-        finish === undefined
-          ? await failAssistant(db.drizzle, fence, {
-              content: bus.snapshot(),
-              errorCode: "llm_upstream_error",
-              errorDetail: UPSTREAM_ERROR_DETAIL,
-            })
-          : await completeAssistant(db.drizzle, fence, {
-              content: bus.snapshot(),
-              usage: finish.usage,
-              finishReason: finish.reason,
-              latencyMs: Math.max(0, Math.round(performance.now() - spec.startedAtMonotonic)),
-            });
-      if (terminal === undefined) {
-        jobLog.info("terminal write matched no row; the turn was deleted or superseded");
-      }
     } catch (error) {
+      generationFailed = true;
+      generationError = error;
+    } finally {
       clearInterval(timer);
       await flushing;
-      if (controller.signal.aborted) {
-        // Fencing lost (nothing more may be written) or shutdown (the row stays generating
-        // until stale reclaim exists).
-        jobLog.info({ fenceLost }, "generation aborted");
-        return undefined;
-      }
-      jobLog.warn({ err: error }, "generation failed");
-      terminal = await failAssistant(db.drizzle, fence, {
-        content: bus.snapshot(),
-        errorCode: "llm_upstream_error",
-        errorDetail: UPSTREAM_ERROR_DETAIL,
-      });
+    }
+
+    if (controller.signal.aborted) {
+      // Fencing lost (nothing more may be written) or shutdown (the row stays generating until
+      // stale reclaim exists).
+      jobLog.info({ fenceLost }, "generation aborted");
+      return undefined;
+    }
+    if (generationFailed) {
+      jobLog.warn({ err: generationError }, "generation failed");
+    }
+
+    // A thrown terminal write propagates: the caller reports it and the row stays generating.
+    const terminal =
+      finish === undefined || generationFailed
+        ? await failAssistant(db.drizzle, fence, {
+            content: bus.snapshot(),
+            errorCode: "llm_upstream_error",
+            errorDetail: UPSTREAM_ERROR_DETAIL,
+          })
+        : await completeAssistant(db.drizzle, fence, {
+            content: bus.snapshot(),
+            usage: finish.usage,
+            finishReason: finish.reason,
+            latencyMs: Math.max(0, Math.round(performance.now() - spec.startedAtMonotonic)),
+          });
+    if (terminal === undefined) {
+      jobLog.info("terminal write matched no row; the turn was deleted or superseded");
     }
     return terminal;
   }
@@ -185,8 +195,8 @@ export function createJobRegistry(deps: {
       const bus = createBus((error) =>
         log.warn({ err: error, assistantId: spec.assistantId }, "a stream subscriber threw"),
       );
-      let settle!: () => void;
-      const finished = new Promise<void>((resolve) => {
+      let settle!: (end: JobEnd) => void;
+      const finished = new Promise<JobEnd>((resolve) => {
         settle = resolve;
       });
       const job: RunningJob = {
@@ -197,16 +207,23 @@ export function createJobRegistry(deps: {
         controller,
       };
       jobs.set(spec.assistantId, job);
+      if (closing) {
+        // Admitted while the server shuts down: end at once instead of holding the close open.
+        controller.abort(SHUTTING_DOWN);
+      }
 
       let terminal: Message | undefined;
+      let end: JobEnd = "aborted";
       void run(spec, job)
         .then(
           (message) => {
             terminal = message;
+            end = message === undefined ? "aborted" : "terminal";
           },
           (error: unknown) => {
             // A terminal write failed: the row stays generating until stale reclaim exists.
             log.error({ err: error, assistantId: spec.assistantId }, "terminal write failed");
+            end = "write_failed";
           },
         )
         .finally(() => {
@@ -215,7 +232,7 @@ export function createJobRegistry(deps: {
             jobs.delete(spec.assistantId);
           }
           bus.close(terminal);
-          settle();
+          settle(end);
         });
       return job;
     },
@@ -223,9 +240,10 @@ export function createJobRegistry(deps: {
     get: (assistantId) => jobs.get(assistantId),
 
     async shutdown(waitMs) {
+      closing = true;
       const running = [...jobs.values()];
       for (const job of running) {
-        job.controller.abort(new Error("the server is shutting down"));
+        job.controller.abort(SHUTTING_DOWN);
       }
       const waiting = new AbortController();
       await Promise.race([
