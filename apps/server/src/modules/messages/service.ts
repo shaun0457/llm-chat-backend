@@ -11,6 +11,7 @@ import { type LockedSession, lockSession } from "../sessions/repository.js";
 import { resolvedPair, sessionNotFound } from "../sessions/service.js";
 import type { Attach, JsonOutcome } from "./attach.js";
 import type { JobRegistry, Reservation } from "./jobs.js";
+import { reclaimStale } from "./reclaim.js";
 import {
   findMessage,
   findSeq,
@@ -96,11 +97,14 @@ export function createMessagesService(deps: {
   attach: Attach;
   defaultSystemPrompt: string | undefined;
   clock: Clock;
+  /** A generating row older than this has no live job; see reclaimStale. */
+  staleThresholdMs: number;
 }): MessagesService {
-  const { db, registry, catalog, jobs, attach, defaultSystemPrompt, clock } = deps;
+  const { db, registry, catalog, jobs, attach, defaultSystemPrompt, clock, staleThresholdMs } =
+    deps;
 
-  // Admission steps, in the order the spec fixes. Later steps (stale reclaim, replay, budget,
-  // credential, expected history, capacity limits) slot in between these.
+  // Admission steps, in the order the spec fixes. Later steps (replay, budget, credential,
+  // expected history, capacity limits) slot in between these.
 
   async function lockStep(tx: Tx, sessionId: string): Promise<LockedSession> {
     const session = await lockSession(tx, sessionId);
@@ -108,6 +112,11 @@ export function createMessagesService(deps: {
       throw sessionNotFound();
     }
     return session;
+  }
+
+  /** A turn left generating by a crash or a failed final write no longer blocks the session. */
+  async function reclaimStep(tx: Tx, sessionId: string): Promise<void> {
+    await reclaimStale(tx, sessionId, staleThresholdMs);
   }
 
   function resolveStep(session: LockedSession): {
@@ -190,6 +199,7 @@ export function createMessagesService(deps: {
     try {
       return await db.tx(async (tx) => {
         const session = await lockStep(tx, sessionId);
+        await reclaimStep(tx, sessionId);
         const resolved = resolveStep(session);
         await busyStep(tx, sessionId);
         const reservation = jobs.reserve();
@@ -241,6 +251,7 @@ export function createMessagesService(deps: {
     },
 
     async list(sessionId, { limit, before }) {
+      await reclaimStale(db.drizzle, sessionId, staleThresholdMs);
       if (!(await sessionExists(db.drizzle, sessionId))) {
         throw sessionNotFound();
       }
@@ -261,6 +272,7 @@ export function createMessagesService(deps: {
     },
 
     async get(sessionId, messageId) {
+      await reclaimStale(db.drizzle, sessionId, staleThresholdMs);
       const message = await findMessage(db.drizzle, sessionId, messageId);
       if (message === undefined) {
         throw messageNotFound();

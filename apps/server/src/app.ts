@@ -92,7 +92,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     checkReadiness: createReadinessCheck(db, MIGRATIONS_FOLDER),
   });
   void app.register(providersRoutes, { registry });
-  void app.register(sessionsRoutes, { service: createSessionsService({ db, registry }) });
+  const { staleThresholdMs } = config;
+  void app.register(sessionsRoutes, {
+    service: createSessionsService({ db, registry, staleThresholdMs }),
+  });
 
   const clock = deps.clock ?? systemClock;
   const jobs = deps.jobs ?? createJobRegistry({ db, timing: config, clock, log: app.log });
@@ -104,6 +107,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     attach: createAttach({ jobs, readTurn: (assistantId) => findTurn(db.drizzle, assistantId) }),
     defaultSystemPrompt: config.defaultSystemPrompt,
     clock,
+    staleThresholdMs,
   });
   void app.register(messagesRoutes, {
     service: messages,

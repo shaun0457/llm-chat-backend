@@ -3,6 +3,7 @@ import { v7 as uuidv7 } from "uuid";
 import type { Db } from "../../db/client.js";
 import { ProblemError } from "../../http/problem-details.js";
 import type { ModelPair, PairResolution, ProviderRegistry } from "../../llm/registry.js";
+import { reclaimStale } from "../messages/reclaim.js";
 import { type SessionCursor, encodeCursor } from "./cursor.js";
 import {
   type SessionChanges,
@@ -46,8 +47,10 @@ export function resolvedPair(resolution: PairResolution): ModelPair {
 export function createSessionsService(deps: {
   db: Db;
   registry: ProviderRegistry;
+  /** Session-scoped reads and writes reclaim stale turns first; see reclaimStale. */
+  staleThresholdMs: number;
 }): SessionsService {
-  const { db, registry } = deps;
+  const { db, registry, staleThresholdMs } = deps;
 
   return {
     async createSession(input) {
@@ -62,6 +65,7 @@ export function createSessionsService(deps: {
     },
 
     async getSession(id) {
+      await reclaimStale(db.drizzle, id, staleThresholdMs);
       const session = await findSession(db.drizzle, id);
       if (session === undefined) {
         throw sessionNotFound();
@@ -75,6 +79,7 @@ export function createSessionsService(deps: {
         if (current === undefined) {
           throw sessionNotFound();
         }
+        await reclaimStale(tx, id, staleThresholdMs);
         const changes: SessionChanges = {};
         if (input.title !== undefined) {
           changes.title = input.title;
