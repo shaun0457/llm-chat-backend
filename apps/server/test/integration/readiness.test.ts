@@ -68,6 +68,33 @@ describe("GET /health/ready", () => {
     });
   });
 
+  describe("when the database stops answering", () => {
+    const testDb = useTestDatabase("all");
+
+    it("answers 503 database_unreachable within a few seconds instead of hanging", async () => {
+      // An open transaction holding an exclusive lock makes the migrations query wait forever.
+      const blocker = await testDb.db.pool.connect();
+      try {
+        await blocker.query("BEGIN");
+        await blocker.query('LOCK TABLE drizzle."__drizzle_migrations" IN ACCESS EXCLUSIVE MODE');
+        app = makeTestApp({ db: testDb.db });
+
+        const started = Date.now();
+        const response = await ready(app);
+
+        expect(Date.now() - started).toBeLessThan(5_000);
+        expect(response.statusCode).toBe(503);
+        expect(response.json()).toMatchObject({
+          code: "not_ready",
+          detail: "database_unreachable",
+        });
+      } finally {
+        await blocker.query("ROLLBACK");
+        blocker.release();
+      }
+    }, 15_000);
+  });
+
   describe("on an empty database", () => {
     const testDb = useTestDatabase("none");
 

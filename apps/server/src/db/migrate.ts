@@ -11,13 +11,19 @@ export const MIGRATIONS_TABLE = "__drizzle_migrations";
 
 /**
  * Applies pending migrations while holding a session-level advisory lock. The lock and the
- * migrator share one dedicated connection, so a second runner waits, then finds nothing to do.
- * Closing the connection also releases the lock if the explicit unlock never runs.
+ * migrator share one dedicated connection, so a second runner waits (without a deadline), then
+ * finds nothing to do. Closing the connection releases the lock, so cleanup failures are
+ * ignored and never hide the error that made the run fail.
  */
-export async function runMigrations(connectionString: string, migrationsFolder: string) {
+export async function runMigrations(
+  connectionString: string,
+  migrationsFolder: string,
+): Promise<void> {
   const client = new pg.Client({ connectionString, connectionTimeoutMillis: 10_000 });
-  await client.connect();
+  // A connection error between statements surfaces through the next query instead.
+  client.on("error", () => {});
   try {
+    await client.connect();
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
     try {
       await migrate(drizzle({ client }), {
@@ -26,9 +32,9 @@ export async function runMigrations(connectionString: string, migrationsFolder: 
         migrationsTable: MIGRATIONS_TABLE,
       });
     } finally {
-      await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
+      await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]).catch(() => {});
     }
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
   }
 }

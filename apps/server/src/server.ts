@@ -59,7 +59,14 @@ export async function main(env: Record<string, string | undefined> = process.env
     connectionString: config.databaseUrl,
     onPoolError: (error) => app.log.error({ err: error }, "idle database connection failed"),
   });
-  const app = buildApp({ config, db, catalog, registry });
+  let app: FastifyInstance;
+  try {
+    app = buildApp({ config, db, catalog, registry });
+  } catch (error) {
+    // e.g. the bundled migrations folder is missing from the build.
+    await db.close();
+    throw error;
+  }
   app.addHook("onClose", () => db.close());
   handleShutdownSignals(app);
   await app.listen({ port: config.port, host: config.host });

@@ -36,8 +36,8 @@ export const healthRoutes: FastifyPluginAsyncZod<{ checkReadiness: ReadinessChec
         response: { 200: readyResponse },
       },
     },
-    async () => {
-      const readiness = await checkReadiness();
+    async (request) => {
+      const readiness = await checkReadiness(request.log);
       if (readiness !== "ready") {
         throw new ProblemError(503, "not_ready", readiness);
       }

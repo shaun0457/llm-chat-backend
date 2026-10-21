@@ -24,16 +24,21 @@ export default async function setup(project: TestProject): Promise<() => Promise
     .start();
   const adminUrl = container.getConnectionUri();
 
-  const admin = new pg.Client({ connectionString: adminUrl });
-  await admin.connect();
   try {
-    await admin.query(`CREATE DATABASE ${TEMPLATE_DATABASE}`);
-  } finally {
-    await admin.end();
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      await admin.query(`CREATE DATABASE ${TEMPLATE_DATABASE}`);
+    } finally {
+      await admin.end();
+    }
+    const templateUrl = new URL(adminUrl);
+    templateUrl.pathname = `/${TEMPLATE_DATABASE}`;
+    await runMigrations(templateUrl.toString(), MIGRATIONS_FOLDER);
+  } catch (error) {
+    await container.stop();
+    throw error;
   }
-  const templateUrl = new URL(adminUrl);
-  templateUrl.pathname = `/${TEMPLATE_DATABASE}`;
-  await runMigrations(templateUrl.toString(), MIGRATIONS_FOLDER);
 
   project.provide("postgres", { adminUrl, templateDatabase: TEMPLATE_DATABASE });
   return async () => {
