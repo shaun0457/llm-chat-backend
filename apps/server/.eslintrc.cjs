@@ -36,6 +36,37 @@ module.exports = {
       },
     ],
     "prettier/prettier": "error",
+    // Dependency direction: routes → service → port ← adapter.
+    "import/no-restricted-paths": [
+      "error",
+      {
+        basePath: __dirname,
+        zones: [
+          {
+            target: "./src/modules",
+            // Deny-list: add every new LLM adapter file here.
+            from: ["./src/llm/openai-compatible.ts", "./src/llm/demo.ts"],
+            message: "Modules use the LLM port and registry, never an adapter directly.",
+          },
+          {
+            target: ["./src/llm", "./src/credentials"],
+            from: "./src/modules",
+            message: "LLM and credential code must not depend on feature modules.",
+          },
+          {
+            target: "./src/db",
+            from: ["./src/modules", "./src/http"],
+            message: "Database code must not depend on feature modules or HTTP.",
+          },
+        ],
+      },
+    ],
+  },
+  settings: {
+    // Resolves "./x.js" to "./x.ts"; without it import/* rules silently skip every relative import.
+    "import/resolver": {
+      typescript: { project: `${__dirname}/tsconfig.json` },
+    },
   },
   parserOptions: {
     ecmaVersion: "latest",
