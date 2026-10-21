@@ -1,6 +1,6 @@
-import { performance } from "node:perf_hooks";
 import { v7 as uuidv7 } from "uuid";
 
+import type { Clock } from "../../clock.js";
 import type { Db, Tx } from "../../db/client.js";
 import { pgConstraint, pgErrorCode } from "../../db/errors.js";
 import { ProblemError } from "../../http/problem-details.js";
@@ -95,8 +95,9 @@ export function createMessagesService(deps: {
   jobs: JobRegistry;
   attach: Attach;
   defaultSystemPrompt: string | undefined;
+  clock: Clock;
 }): MessagesService {
-  const { db, registry, catalog, jobs, attach, defaultSystemPrompt } = deps;
+  const { db, registry, catalog, jobs, attach, defaultSystemPrompt, clock } = deps;
 
   // Admission steps, in the order the spec fixes. Later steps (stale reclaim, replay, budget,
   // credential, expected history, capacity limits) slot in between these.
@@ -154,7 +155,9 @@ export function createMessagesService(deps: {
       (defaultSystemPrompt !== undefined && defaultSystemPrompt.length > 0
         ? defaultSystemPrompt
         : null);
-    const startedAtMonotonic = performance.now();
+    // Immediately before the insert that sets started_at: the deadline then never ends later
+    // than started_at + deadline, without comparing this clock with the database's.
+    const startedAtMonotonic = clock.monotonicNow();
     const turn = await insertTurn(tx, {
       sessionId,
       userId: uuidv7(),

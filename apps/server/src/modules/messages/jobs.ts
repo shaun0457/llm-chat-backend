@@ -1,11 +1,13 @@
 import type { FastifyBaseLogger } from "fastify";
-import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 
+import type { Clock } from "../../clock.js";
+import type { AppConfig } from "../../config.js";
 import type { Db } from "../../db/client.js";
 import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
+import { remainingMs } from "./deadline.js";
 import { completeAssistant, failAssistant, flushContent, historyBefore } from "./repository.js";
 import type { Message } from "./schemas.js";
 
@@ -17,7 +19,27 @@ import type { Message } from "./schemas.js";
 export type Reservation = { release(): void };
 
 const UPSTREAM_ERROR_DETAIL = "The model provider returned an error.";
-const shuttingDown = () => new Error("the server is shutting down");
+const TIMEOUT_DETAIL = "The answer was not finished within the time limit.";
+
+/**
+ * Why a job was stopped from outside its generation. `deleted` / `fenced`: its row is gone or
+ * belongs to a newer attempt, so nothing more is written. `shutdown`: the server is closing.
+ */
+export type AbortReason = "deleted" | "fenced" | "shutdown";
+/** Every way a job is stopped early: an abort, or its deadline passing. */
+type StopReason = AbortReason | "deadline";
+
+/** The reason a job's controller is aborted with; its signal's `reason`. */
+class JobStopped extends Error {
+  constructor(readonly stop: StopReason) {
+    super(`the generation was stopped (${stop})`);
+    this.name = "JobStopped";
+  }
+}
+
+function stopReasonOf(signal: AbortSignal): StopReason | undefined {
+  return signal.aborted && signal.reason instanceof JobStopped ? signal.reason.stop : undefined;
+}
 
 /** Everything a job needs, frozen at admission. */
 export type JobSpec = {
@@ -31,7 +53,7 @@ export type JobSpec = {
   systemPrompt: string | null;
   /** Stays null until per-request credentials exist; never stored or logged. */
   apiKey: string | null;
-  /** performance.now() taken just before the admitting insert. */
+  /** The clock's reading taken just before the admitting insert: the deadline's origin. */
   startedAtMonotonic: number;
   reservation: Reservation;
 };
@@ -64,12 +86,22 @@ export interface JobRegistry {
 
 type RunningJob = Job & { controller: AbortController };
 
+/** The settings a job registry runs with; an AppConfig has them all. */
+export type JobTiming = Pick<
+  AppConfig,
+  | "flushIntervalMs"
+  | "generationDeadlineMs"
+  | "terminalStatementTimeoutMs"
+  | "terminalWriteBudgetMs"
+>;
+
 export function createJobRegistry(deps: {
   db: Db;
-  flushIntervalMs: number;
+  timing: JobTiming;
+  clock: Clock;
   log: FastifyBaseLogger;
 }): JobRegistry {
-  const { db, flushIntervalMs, log } = deps;
+  const { db, timing, clock, log } = deps;
   const jobs = new Map<string, RunningJob>();
   /** Set by shutdown(): jobs started afterwards are aborted immediately. */
   let closing = false;
@@ -85,7 +117,7 @@ export function createJobRegistry(deps: {
 
     const loseFence = (): void => {
       fenceLost = true;
-      controller.abort(new Error("the generating row was deleted or superseded"));
+      controller.abort(new JobStopped("fenced"));
     };
 
     const flush = (): void => {
@@ -109,7 +141,24 @@ export function createJobRegistry(deps: {
           flushing = undefined;
         });
     };
-    const timer = setInterval(flush, flushIntervalMs);
+    // Counted from before the admitting insert, so the job always stops before stale reclaim
+    // could consider its row dead (both measure from earlier than started_at).
+    const leftMs = remainingMs(
+      timing.generationDeadlineMs,
+      spec.startedAtMonotonic,
+      clock.monotonicNow(),
+    );
+    if (leftMs === 0) {
+      jobLog.warn("no time left before the deadline; the provider is not called");
+      return failAssistant(db.drizzle, fence, {
+        content: "",
+        errorCode: "llm_timeout",
+        errorDetail: TIMEOUT_DETAIL,
+      });
+    }
+    // One timer per job, cleared below; AbortSignal.timeout() could not be cleared (V1).
+    const deadline = setTimeout(() => controller.abort(new JobStopped("deadline")), leftMs);
+    const timer = setInterval(flush, timing.flushIntervalMs);
 
     // Generation: any error here is the provider's (or reading the history); never a terminal
     // write, which happens below so that its failure is not mistaken for an upstream error.
@@ -145,11 +194,20 @@ export function createJobRegistry(deps: {
       generationFailed = true;
       generationError = error;
     } finally {
+      clearTimeout(deadline);
       clearInterval(timer);
       await flushing;
     }
 
     const answered = finish !== undefined && !generationFailed;
+    if (!answered && !fenceLost && stopReasonOf(controller.signal) === "deadline") {
+      jobLog.warn("the generation deadline passed");
+      return failAssistant(db.drizzle, fence, {
+        content: bus.snapshot(),
+        errorCode: "llm_timeout",
+        errorDetail: TIMEOUT_DETAIL,
+      });
+    }
     if (fenceLost || (controller.signal.aborted && !answered)) {
       // Fencing lost (nothing more may be written) or shutdown before the answer was complete
       // (the row stays generating until stale reclaim exists). A complete answer is still
@@ -175,7 +233,7 @@ export function createJobRegistry(deps: {
             content: bus.snapshot(),
             usage: finish.usage,
             finishReason: finish.reason,
-            latencyMs: Math.max(0, Math.round(performance.now() - spec.startedAtMonotonic)),
+            latencyMs: Math.max(0, Math.round(clock.monotonicNow() - spec.startedAtMonotonic)),
           });
     if (terminal === undefined) {
       jobLog.info("terminal write matched no row; the turn was deleted or superseded");
@@ -211,7 +269,7 @@ export function createJobRegistry(deps: {
       jobs.set(spec.assistantId, job);
       if (closing) {
         // Admitted while the server shuts down: end at once instead of holding the close open.
-        controller.abort(shuttingDown());
+        controller.abort(new JobStopped("shutdown"));
       }
 
       let terminal: Message | undefined;
@@ -251,7 +309,7 @@ export function createJobRegistry(deps: {
       closing = true;
       const running = [...jobs.values()];
       for (const job of running) {
-        job.controller.abort(shuttingDown());
+        job.controller.abort(new JobStopped("shutdown"));
       }
       const waiting = new AbortController();
       await Promise.race([

@@ -1,9 +1,8 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import type { LlmProvider } from "../../src/llm/port.js";
-import { createJobRegistry } from "../../src/modules/messages/jobs.js";
-import { makeTestApp } from "../helpers/app.js";
+import { makeTestApp, testJobs } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider } from "../helpers/fake-llm.js";
 import { allMessages, createSession, getSession, send } from "../helpers/messages.js";
@@ -65,7 +64,7 @@ describe("generation robustness", () => {
 
   it("refuses a send once shutdown began with 503 server_busy, before writing anything", async () => {
     fake = new FakeLlmProvider().script({ hang: true });
-    const jobs = createJobRegistry({ db: testDb.db, flushIntervalMs: 50, log: Fastify().log });
+    const jobs = testJobs(testDb.db);
     app = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
     const session = await createSession(app);
     await jobs.shutdown(1_000);
@@ -81,7 +80,7 @@ describe("generation robustness", () => {
   });
 
   it("stores an answer that finished just before shutdown aborted its job", async () => {
-    const jobs = createJobRegistry({ db: testDb.db, flushIntervalMs: 50, log: Fastify().log });
+    const jobs = testJobs(testDb.db);
     const finishesThenShutsDown: LlmProvider = {
       id: "late",
       async *stream() {

@@ -1,11 +1,13 @@
-import type { FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 
 import { type AppDeps, buildApp } from "../../src/app.js";
-import { loadConfig } from "../../src/config.js";
+import { type Clock, systemClock } from "../../src/clock.js";
+import { type AppConfig, loadConfig } from "../../src/config.js";
 import { type Db, createDb } from "../../src/db/client.js";
 import { loadCatalog } from "../../src/llm/catalog.js";
 import { DemoProvider } from "../../src/llm/demo.js";
 import { createRegistry } from "../../src/llm/registry.js";
+import { type JobRegistry, createJobRegistry } from "../../src/modules/messages/jobs.js";
 
 /** The environment test apps are configured from; spread it to change one value. */
 export const TEST_ENV = {
@@ -45,5 +47,22 @@ export function makeTestApp(overrides: Partial<AppDeps> = {}): FastifyInstance {
     db: overrides.db ?? detachedDb(),
     ...(overrides.logStream === undefined ? {} : { logStream: overrides.logStream }),
     ...(overrides.jobs === undefined ? {} : { jobs: overrides.jobs }),
+    ...(overrides.clock === undefined ? {} : { clock: overrides.clock }),
+  });
+}
+
+/**
+ * A job registry a test holds on to (pass it as `jobs` to makeTestApp), to reach a running
+ * generation or shut the registry down itself. Timing comes from `config` (TEST_ENV by default).
+ */
+export function testJobs(
+  db: Db,
+  options: { config?: AppConfig; clock?: Clock; log?: FastifyInstance["log"] } = {},
+): JobRegistry {
+  return createJobRegistry({
+    db,
+    timing: options.config ?? loadConfig(TEST_ENV),
+    clock: options.clock ?? systemClock,
+    log: options.log ?? Fastify({ logger: false }).log,
   });
 }

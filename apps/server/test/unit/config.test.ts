@@ -34,6 +34,11 @@ describe("loadConfig", () => {
       demoDelayMs: 50,
       jsonDefaultWaitMs: 30_000,
       jsonMaxWaitMs: 195_000,
+      generationDeadlineMs: 180_000,
+      terminalStatementTimeoutMs: 3_000,
+      terminalWriteBudgetMs: 10_000,
+      reclaimGraceMs: 50_000,
+      staleThresholdMs: 240_000,
     });
   });
 
@@ -53,6 +58,10 @@ describe("loadConfig", () => {
       DEMO_DELAY_MS: "0",
       JSON_DEFAULT_WAIT_MS: "0",
       JSON_MAX_WAIT_MS: "20000",
+      GENERATION_DEADLINE_MS: "60000",
+      TERMINAL_STATEMENT_TIMEOUT_MS: "500",
+      TERMINAL_WRITE_BUDGET_MS: "2000",
+      RECLAIM_GRACE_MS: "1000",
     });
 
     expect(config).toEqual({
@@ -70,6 +79,11 @@ describe("loadConfig", () => {
       demoDelayMs: 0,
       jsonDefaultWaitMs: 0,
       jsonMaxWaitMs: 20_000,
+      generationDeadlineMs: 60_000,
+      terminalStatementTimeoutMs: 500,
+      terminalWriteBudgetMs: 2_000,
+      reclaimGraceMs: 1_000,
+      staleThresholdMs: 63_000,
     });
   });
 
@@ -106,6 +120,16 @@ describe("loadConfig", () => {
     ["JSON_DEFAULT_WAIT_MS", "0.5"],
     ["JSON_MAX_WAIT_MS", "-1"],
     ["JSON_MAX_WAIT_MS", "600001"],
+    ["GENERATION_DEADLINE_MS", "0"],
+    ["GENERATION_DEADLINE_MS", "-1"],
+    ["GENERATION_DEADLINE_MS", "1.5"],
+    ["GENERATION_DEADLINE_MS", "3600001"],
+    ["TERMINAL_STATEMENT_TIMEOUT_MS", "0"],
+    ["TERMINAL_STATEMENT_TIMEOUT_MS", "-3000"],
+    ["TERMINAL_WRITE_BUDGET_MS", "0"],
+    ["TERMINAL_WRITE_BUDGET_MS", "-1"],
+    ["RECLAIM_GRACE_MS", "0"],
+    ["RECLAIM_GRACE_MS", "-50000"],
   ])("rejects %s=%s", (key, value) => {
     expect(configError({ DATABASE_URL, [key]: value }).message).toContain(key);
   });

@@ -3,6 +3,7 @@ import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
+import { type Clock, systemClock } from "./clock.js";
 import type { AppConfig } from "./config.js";
 import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
@@ -30,6 +31,8 @@ export type AppDeps = {
   logStream?: NodeJS.WritableStream;
   /** Replaces the app's own job registry, so a test can subscribe to a running generation. */
   jobs?: JobRegistry;
+  /** Monotonic time for deadlines and budgets; tests inject a controllable one. */
+  clock?: Clock;
 };
 
 const REQUEST_ID_HEADER = "x-request-id";
@@ -91,8 +94,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   void app.register(providersRoutes, { registry });
   void app.register(sessionsRoutes, { service: createSessionsService({ db, registry }) });
 
-  const jobs =
-    deps.jobs ?? createJobRegistry({ db, flushIntervalMs: config.flushIntervalMs, log: app.log });
+  const clock = deps.clock ?? systemClock;
+  const jobs = deps.jobs ?? createJobRegistry({ db, timing: config, clock, log: app.log });
   const messages = createMessagesService({
     db,
     registry,
@@ -100,6 +103,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     jobs,
     attach: createAttach({ jobs, readTurn: (assistantId) => findTurn(db.drizzle, assistantId) }),
     defaultSystemPrompt: config.defaultSystemPrompt,
+    clock,
   });
   void app.register(messagesRoutes, {
     service: messages,

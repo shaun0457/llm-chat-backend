@@ -18,6 +18,12 @@ const commaList = z
 
 const MAX_JSON_WAIT_MS = 600_000;
 const DEFAULT_JSON_WAIT_MS = 30_000;
+/** Upper bound of the generation and reclaim timings: one hour, far below setTimeout's limit. */
+const MAX_TIMING_MS = 3_600_000;
+
+/** A positive whole number of milliseconds; zero or less would disable the safety net. */
+const timingMs = (fallback: number) =>
+  z.coerce.number().int().min(1).max(MAX_TIMING_MS).default(fallback);
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
@@ -44,6 +50,10 @@ const envSchema = z.object({
     .max(MAX_JSON_WAIT_MS)
     .default(DEFAULT_JSON_WAIT_MS),
   JSON_MAX_WAIT_MS: z.coerce.number().int().min(0).max(MAX_JSON_WAIT_MS).default(195_000),
+  GENERATION_DEADLINE_MS: timingMs(180_000),
+  TERMINAL_STATEMENT_TIMEOUT_MS: timingMs(3_000),
+  TERMINAL_WRITE_BUDGET_MS: timingMs(10_000),
+  RECLAIM_GRACE_MS: timingMs(50_000),
 });
 
 /** Holds the database password: never log it. */
@@ -68,6 +78,19 @@ export type AppConfig = Readonly<{
   jsonDefaultWaitMs: number;
   /** The longest a JSON send ever waits; keep it below the proxy's response timeout. */
   jsonMaxWaitMs: number;
+  /** Hard limit of one generation attempt, counted from just before its admitting insert. */
+  generationDeadlineMs: number;
+  /** Limit of each statement of a terminal write (completed, failed). */
+  terminalStatementTimeoutMs: number;
+  /** Limit of a whole terminal write, retries and backoff included. */
+  terminalWriteBudgetMs: number;
+  /** Margin on top of deadline and terminal budget before a generating row counts as dead. */
+  reclaimGraceMs: number;
+  /**
+   * deadline + terminal budget + grace: a row still generating this long after `started_at`
+   * (database clock) has no live job and is failed as `interrupted` by stale reclaim.
+   */
+  staleThresholdMs: number;
 }>;
 
 /** Names the invalid keys and why; never includes the values, which may be secrets. */
@@ -124,5 +147,11 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     demoDelayMs: parsed.DEMO_DELAY_MS,
     jsonDefaultWaitMs: parsed.JSON_DEFAULT_WAIT_MS,
     jsonMaxWaitMs: parsed.JSON_MAX_WAIT_MS,
+    generationDeadlineMs: parsed.GENERATION_DEADLINE_MS,
+    terminalStatementTimeoutMs: parsed.TERMINAL_STATEMENT_TIMEOUT_MS,
+    terminalWriteBudgetMs: parsed.TERMINAL_WRITE_BUDGET_MS,
+    reclaimGraceMs: parsed.RECLAIM_GRACE_MS,
+    staleThresholdMs:
+      parsed.GENERATION_DEADLINE_MS + parsed.TERMINAL_WRITE_BUDGET_MS + parsed.RECLAIM_GRACE_MS,
   });
 }

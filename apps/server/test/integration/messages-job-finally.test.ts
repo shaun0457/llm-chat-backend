@@ -1,8 +1,7 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createJobRegistry } from "../../src/modules/messages/jobs.js";
-import { makeTestApp } from "../helpers/app.js";
+import { makeTestApp, testJobs } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import { allMessages, createSession, eventually, send } from "../helpers/messages.js";
@@ -40,7 +39,7 @@ describe("job.finally", () => {
     const fake = new FakeLlmProvider();
     const gate = createGate();
     fake.script({ deltas: ["Hel", "lo"], gate: gate.promise, gateAfter: 1 });
-    const jobs = createJobRegistry({ db: testDb.db, flushIntervalMs: 50, log: Fastify().log });
+    const jobs = testJobs(testDb.db);
     const fakeApp = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
     app = fakeApp;
     const session = await createSession(fakeApp);
