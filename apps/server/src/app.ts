@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod";
-import type { IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 
 import type { AppConfig } from "./config.js";
 import { registerApiDocs } from "./http/plugins.js";

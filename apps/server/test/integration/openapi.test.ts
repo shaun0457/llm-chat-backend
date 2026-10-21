@@ -18,7 +18,9 @@ describe("API documentation", () => {
     expect(response.statusCode).toBe(200);
     const document = response.json();
     expect(document.openapi).toMatch(/^3\./);
-    expect(document.paths["/health"].get.responses["200"].content["application/json"].schema).toEqual(
+    expect(
+      document.paths["/health"].get.responses["200"].content["application/json"].schema,
+    ).toEqual(
       expect.objectContaining({
         type: "object",
         required: ["status"],

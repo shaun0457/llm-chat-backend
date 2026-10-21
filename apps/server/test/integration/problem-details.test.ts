@@ -33,11 +33,13 @@ describe("problem details", () => {
 
   it("answers an invalid body with 400 validation_error naming the field path", async () => {
     app = makeTestApp();
-    app.withTypeProvider<ZodTypeProvider>().post(
-      "/test/echo",
-      { schema: { body: z.object({ content: z.string() }) } },
-      async (request) => request.body,
-    );
+    app
+      .withTypeProvider<ZodTypeProvider>()
+      .post(
+        "/test/echo",
+        { schema: { body: z.object({ content: z.string() }) } },
+        async (request) => request.body,
+      );
 
     const response = await app.inject({ method: "POST", url: "/test/echo", payload: {} });
 

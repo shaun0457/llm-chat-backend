@@ -13,7 +13,12 @@ export function captureLogs(): LogCapture {
   const lines: string[] = [];
   const stream = new Writable({
     write(chunk: Buffer | string, _encoding, callback) {
-      lines.push(...chunk.toString().split("\n").filter((line) => line.length > 0));
+      lines.push(
+        ...chunk
+          .toString()
+          .split("\n")
+          .filter((line) => line.length > 0),
+      );
       callback();
     },
   });
