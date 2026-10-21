@@ -21,7 +21,8 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
-    # Not published to the host. To connect a local client, add: ports: ["127.0.0.1:5432:5432"]
+    # Not published to the host. To connect a local client, add (keep the loopback address;
+    # the default password is for local use only): ports: ["127.0.0.1:5432:5432"]
 
   migrate:
     <<: *app
@@ -39,8 +40,9 @@ services:
       PROVIDERS_ENABLED: ${PROVIDERS_ENABLED:-demo}
       DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-demo}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-}
+    # Loopback only: this file is a local stack with default credentials, not a deployment.
     ports:
-      - "${API_PORT:-3000}:3000"
+      - "127.0.0.1:${API_PORT:-3000}:3000"
     depends_on:
       migrate:
         condition: service_completed_successfully
