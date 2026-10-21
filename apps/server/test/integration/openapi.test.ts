@@ -10,6 +10,19 @@ describe("API documentation", () => {
     await app.close();
   });
 
+  it("still serves the document when a route has no schema at all", async () => {
+    app = makeTestApp();
+    // In a plugin, so that it is registered after swagger's onRoute hook, like the app's routes.
+    void app.register(async (child) => {
+      child.get("/test/no-schema", async () => ({ ok: true }));
+    });
+
+    const response = await app.inject({ method: "GET", url: "/openapi.json" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().paths["/test/no-schema"]).toBeDefined();
+  });
+
   it("serves an OpenAPI 3 document generated from the route schemas", async () => {
     app = makeTestApp();
 

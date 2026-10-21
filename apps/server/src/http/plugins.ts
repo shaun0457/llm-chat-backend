@@ -16,8 +16,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 const transformKeepingResponseHeaders: Transform = (document) => {
   const result = jsonSchemaTransform(document);
-  const declared: unknown = document.schema.response;
-  const transformed: unknown = result.schema.response;
+  // A route without a schema has none at run time, whatever the type says.
+  const schema: unknown = document.schema;
+  const declared: unknown = isRecord(schema) ? schema.response : undefined;
+  const transformed: unknown = isRecord(result.schema) ? result.schema.response : undefined;
   if (isRecord(declared) && isRecord(transformed)) {
     for (const [status, response] of Object.entries(declared)) {
       const target = transformed[status];
