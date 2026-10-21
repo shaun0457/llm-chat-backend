@@ -34,6 +34,7 @@ const selectMessages = (db: Executor) => db.select(messageFields).from(messages)
 type MessageRow = Awaited<ReturnType<typeof selectMessages>>[number];
 
 const FINISH_REASONS: ReadonlySet<string> = new Set<LlmFinishReason>(["stop", "length", "other"]);
+const isFinishReason = (value: string): value is LlmFinishReason => FINISH_REASONS.has(value);
 
 /** The API representation. `attempt` exists only for assistant rows (stored as 1 on users). */
 export function toMessage(row: MessageRow): Message {
@@ -45,10 +46,7 @@ export function toMessage(row: MessageRow): Message {
       promptTokens === null || completionTokens === null
         ? null
         : { promptTokens, completionTokens },
-    finishReason:
-      finishReason !== null && FINISH_REASONS.has(finishReason)
-        ? (finishReason as LlmFinishReason)
-        : null,
+    finishReason: finishReason !== null && isFinishReason(finishReason) ? finishReason : null,
   };
 }
 

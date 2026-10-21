@@ -74,6 +74,7 @@ describe("job.finally", () => {
     const fake = new FakeLlmProvider();
     fake.script({ deltas: ["Hel"], hang: true });
     const fakeApp = makeTestApp({ db: testDb.db, ...testProviders({ llm: fake }) });
+    app = fakeApp;
     const session = await createSession(fakeApp);
     const pending = send(fakeApp, session.id, { content: "Hi" });
     await eventually(
@@ -82,6 +83,7 @@ describe("job.finally", () => {
     );
 
     await fakeApp.close();
+    app = undefined;
 
     expect(fake.signals[0]?.aborted).toBe(true);
     const response = await pending;

@@ -174,21 +174,20 @@ export function createMessagesService(deps: {
     sessionId: string,
     content: string,
   ): Promise<{ admitted: Admitted; reservation: Reservation }> {
-    let reservation: Reservation | undefined;
+    // Kept outside the callback only so a rollback (or a failed commit) can release it.
+    let held: Reservation | undefined;
     try {
-      const admitted = await db.tx(async (tx) => {
+      return await db.tx(async (tx) => {
         const session = await lockStep(tx, sessionId);
         const resolved = resolveStep(session);
         await busyStep(tx, sessionId);
-        reservation = reserveCapacity();
-        return insertStep(tx, sessionId, session, content, resolved);
+        const reservation = reserveCapacity();
+        held = reservation;
+        const admitted = await insertStep(tx, sessionId, session, content, resolved);
+        return { admitted, reservation };
       });
-      if (reservation === undefined) {
-        throw new Error("a turn was admitted without a capacity reservation");
-      }
-      return { admitted, reservation };
     } catch (error) {
-      reservation?.release();
+      held?.release();
       // The lock makes this a backstop: only a second process could get here.
       if (pgErrorCode(error) === UNIQUE_VIOLATION && pgConstraint(error) === ONE_GENERATING_INDEX) {
         throw sessionBusy();
@@ -201,7 +200,10 @@ export function createMessagesService(deps: {
     async send(sessionId, input) {
       const { admitted, reservation } = await admit(sessionId, input.content);
       const { userMessage, assistantMessage } = admitted.turn;
-      const attempt = assistantMessage.attempt ?? 1;
+      const { attempt } = assistantMessage;
+      if (attempt === null) {
+        throw new Error("an admitted assistant message has no attempt");
+      }
       jobs.start({
         assistantId: assistantMessage.id,
         attempt,

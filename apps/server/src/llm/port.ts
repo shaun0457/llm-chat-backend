@@ -27,6 +27,9 @@ export type LlmStreamOptions = Readonly<{
 
 export interface LlmProvider {
   readonly id: string;
-  /** Yields deltas, then exactly one `finish`; throws on upstream failure or abort. */
+  /**
+   * Yields deltas, then exactly one `finish`; throws on upstream failure or abort. Must stop
+   * promptly once `signal` aborts: it is how fencing, shutdown and deadlines end a generation.
+   */
   stream(request: LlmRequest, options: LlmStreamOptions): AsyncIterable<LlmEvent>;
 }

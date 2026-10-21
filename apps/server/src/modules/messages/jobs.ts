@@ -29,7 +29,7 @@ export function reserveCapacity(): Reservation {
 }
 
 const UPSTREAM_ERROR_DETAIL = "The model provider returned an error.";
-const SHUTTING_DOWN = new Error("the server is shutting down");
+const shuttingDown = () => new Error("the server is shutting down");
 
 /** Everything a job needs, frozen at admission. */
 export type JobSpec = {
@@ -167,6 +167,8 @@ export function createJobRegistry(deps: {
     }
     if (generationFailed) {
       jobLog.warn({ err: generationError }, "generation failed");
+    } else if (finish === undefined) {
+      jobLog.warn("the provider ended the stream without a finish event");
     }
 
     // A thrown terminal write propagates: the caller reports it and the row stays generating.
@@ -209,7 +211,7 @@ export function createJobRegistry(deps: {
       jobs.set(spec.assistantId, job);
       if (closing) {
         // Admitted while the server shuts down: end at once instead of holding the close open.
-        controller.abort(SHUTTING_DOWN);
+        controller.abort(shuttingDown());
       }
 
       let terminal: Message | undefined;
@@ -227,12 +229,18 @@ export function createJobRegistry(deps: {
           },
         )
         .finally(() => {
-          spec.reservation.release();
-          if (jobs.get(spec.assistantId) === job) {
-            jobs.delete(spec.assistantId);
+          // "finished" must settle whatever happens here, or waiters and shutdown would hang.
+          try {
+            spec.reservation.release();
+            if (jobs.get(spec.assistantId) === job) {
+              jobs.delete(spec.assistantId);
+            }
+            bus.close(terminal);
+          } catch (error) {
+            log.error({ err: error, assistantId: spec.assistantId }, "job cleanup failed");
+          } finally {
+            settle(end);
           }
-          bus.close(terminal);
-          settle(end);
         });
       return job;
     },
@@ -243,7 +251,7 @@ export function createJobRegistry(deps: {
       closing = true;
       const running = [...jobs.values()];
       for (const job of running) {
-        job.controller.abort(SHUTTING_DOWN);
+        job.controller.abort(shuttingDown());
       }
       const waiting = new AbortController();
       await Promise.race([
