@@ -50,6 +50,28 @@ describe("API documentation", () => {
     );
   });
 
+  it("documents the message routes, the 502 failure shape and the null attempt of users", async () => {
+    app = makeTestApp();
+
+    const { paths } = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+
+    expect(Object.keys(paths["/sessions/{id}/messages"]).sort()).toEqual(["get", "post"]);
+    expect(Object.keys(paths["/sessions/{id}/messages/{mid}"])).toEqual(["get"]);
+    const send = paths["/sessions/{id}/messages"].post;
+    expect(Object.keys(send.responses).sort()).toEqual(["200", "202", "502"]);
+    const failed = send.responses["502"].content["application/problem+json"].schema;
+    expect(failed.required).toEqual(
+      expect.arrayContaining(["code", "detail", "userMessage", "assistantMessage"]),
+    );
+    const message =
+      paths["/sessions/{id}/messages/{mid}"].get.responses["200"].content["application/json"]
+        .schema;
+    expect(message.properties.attempt.anyOf).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "null" })]),
+    );
+    expect(message.properties).not.toHaveProperty("systemPrompt");
+  });
+
   it("serves the interactive docs as HTML", async () => {
     app = makeTestApp();
 

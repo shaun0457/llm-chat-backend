@@ -1,5 +1,6 @@
 import { ConfigError } from "../config.js";
 import type { ModelCatalog, ModelEntry } from "./catalog.js";
+import type { LlmProvider } from "./port.js";
 
 export type ModelPair = Readonly<{ provider: string; model: string }>;
 
@@ -27,6 +28,8 @@ export interface ProviderRegistry {
    * provider's catalog → model_not_supported.
    */
   resolve(requested: { provider?: string; model?: string }, base: ModelPair): PairResolution;
+  /** The implementation serving an enabled provider; undefined when disabled or not built. */
+  adapter(providerId: string): LlmProvider | undefined;
 }
 
 export type RegistrySettings = {
@@ -35,10 +38,14 @@ export type RegistrySettings = {
   defaultModel: string | undefined;
 };
 
-/** Throws ConfigError at startup unless every enabled provider and the default pair resolve. */
+/**
+ * Throws ConfigError at startup unless every enabled provider and the default pair resolve.
+ * `adapters` maps provider ids to their implementations; ids that are not enabled are ignored.
+ */
 export function createRegistry(
   catalog: ModelCatalog,
   settings: RegistrySettings,
+  adapters: Readonly<Record<string, LlmProvider>> = {},
 ): ProviderRegistry {
   const enabled = new Map<string, ProviderInfo>();
   const missing: string[] = [];
@@ -86,5 +93,9 @@ export function createRegistry(
       }
       return { ok: true, pair: { provider: providerId, model } };
     },
+    adapter: (providerId) =>
+      enabled.has(providerId) && Object.hasOwn(adapters, providerId)
+        ? adapters[providerId]
+        : undefined,
   };
 }

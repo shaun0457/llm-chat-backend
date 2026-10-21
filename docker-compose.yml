@@ -40,6 +40,9 @@ services:
       PROVIDERS_ENABLED: ${PROVIDERS_ENABLED:-demo}
       DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-demo}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-}
+      DEFAULT_SYSTEM_PROMPT: ${DEFAULT_SYSTEM_PROMPT:-}
+      FLUSH_INTERVAL_MS: ${FLUSH_INTERVAL_MS:-1000}
+      DEMO_DELAY_MS: ${DEMO_DELAY_MS:-50}
     # Loopback only: this file is a local stack with default credentials, not a deployment.
     ports:
       - "127.0.0.1:${API_PORT:-3000}:3000"

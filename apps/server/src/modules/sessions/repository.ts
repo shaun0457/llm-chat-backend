@@ -1,17 +1,12 @@
-import { type SQL, desc, eq, sql } from "drizzle-orm";
-import type { PgColumn } from "drizzle-orm/pg-core";
+import { desc, eq, sql } from "drizzle-orm";
 
 import type { Database, Tx } from "../../db/client.js";
 import { sessions } from "../../db/schema.js";
-import type { ModelPair } from "../../llm/registry.js";
+import { isoUtc } from "../../db/timestamps.js";
 import type { SessionCursor } from "./cursor.js";
 import type { Session } from "./schemas.js";
 
 type Executor = Database | Tx;
-
-/** ISO 8601 UTC at the database's microsecond precision; a JS Date would keep milliseconds. */
-const isoUtc = (column: PgColumn): SQL<string> =>
-  sql<string>`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 const sessionFields = {
   id: sessions.id,
@@ -54,10 +49,25 @@ export async function findSession(db: Executor, id: string): Promise<Session | u
   return row;
 }
 
+/** What a locked session offers to the code holding its lock. */
+export type LockedSession = {
+  title: string | null;
+  provider: string;
+  model: string;
+  systemPrompt: string | null;
+  nextSeq: number;
+};
+
 /** Locks the row until the transaction ends; undefined when it does not exist. */
-export async function lockSession(tx: Tx, id: string): Promise<ModelPair | undefined> {
+export async function lockSession(tx: Tx, id: string): Promise<LockedSession | undefined> {
   const [row] = await tx
-    .select({ provider: sessions.provider, model: sessions.model })
+    .select({
+      title: sessions.title,
+      provider: sessions.provider,
+      model: sessions.model,
+      systemPrompt: sessions.systemPrompt,
+      nextSeq: sessions.nextSeq,
+    })
     .from(sessions)
     .where(eq(sessions.id, id))
     .for("update");
