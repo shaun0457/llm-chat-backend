@@ -1,57 +1,148 @@
 # LLM Chat Backend
 
-A multi-session chat API in front of large language models, built with Fastify and TypeScript.
+A multi-session chat API in front of large language models, built with Fastify, TypeScript and
+PostgreSQL.
 
 ## Prerequisites
 
-- Node.js 22 (the image uses 22.23.3)
-- pnpm 9 (the pinned version is enabled with `corepack enable`)
-- Docker, for the container image
+- Docker (Compose v2), for the one-command stack and the integration tests
+- Node.js 22 (the image uses 22.23.3) and pnpm 9 (`corepack enable`), to develop and test
+
+## Run with Docker
+
+```sh
+docker compose up --build    # http://localhost:3000
+```
+
+This starts PostgreSQL 17, waits until it is healthy, runs the migrations once (`migrate`
+exits 0), and only then starts the API. The defaults need no `.env`; copy `.env.example` to
+`.env` to change the database credentials, the host port (`API_PORT`) or the server settings.
+PostgreSQL is not published to the host. `docker compose down -v` removes the data volume.
+
+Check it:
+
+```sh
+curl localhost:3000/health/ready
+curl -X POST localhost:3000/sessions -H 'content-type: application/json' -d '{"title":"Hello"}'
+curl localhost:3000/sessions
+```
 
 ## Run locally
 
+Point `DATABASE_URL` at a PostgreSQL 17 database, for example a throwaway container:
+
 ```sh
+docker run -d --name chat-db -e POSTGRES_PASSWORD=chat -p 127.0.0.1:5432:5432 postgres:17.11-alpine
+export DATABASE_URL=postgres://postgres:chat@localhost:5432/postgres
+
 pnpm install
 pnpm build
-pnpm start          # http://localhost:3000
+pnpm --filter server migrate   # applies drizzle/*.sql; the API itself never migrates
+pnpm start                     # http://localhost:3000
 ```
 
-`pnpm dev` rebuilds on change. Configuration comes from environment variables, validated at
-startup; an invalid value stops the process and names the variable (never its value).
+`pnpm dev` rebuilds on change. Logs are JSON; for readable output pipe them through the bundled
+formatter: `pnpm --filter server start | pnpm --filter server exec pino-pretty`.
 
-| Variable    | Default      | Meaning                                                        |
-| ----------- | ------------ | -------------------------------------------------------------- |
-| `PORT`      | `3000`       | Listening port                                                 |
-| `HOST`      | `0.0.0.0`    | Listening address                                              |
-| `LOG_LEVEL` | `info`       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent` |
-| `NODE_ENV`  | `production` | `development`, `test` or `production`                          |
+## Configuration
 
-Logs are JSON. For readable output, pipe them through the bundled formatter:
+Environment variables, validated at startup. An invalid value stops the process and names the
+variable, never its value. Blank values count as unset.
 
-```sh
-pnpm --filter server start | pnpm --filter server exec pino-pretty
+| Variable             | Default                      | Meaning                                                        |
+| -------------------- | ---------------------------- | -------------------------------------------------------------- |
+| `DATABASE_URL`       | (required)                   | `postgres://` or `postgresql://` connection URL                |
+| `PORT`               | `3000`                       | Listening port                                                 |
+| `HOST`               | `0.0.0.0`                    | Listening address                                              |
+| `LOG_LEVEL`          | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent` |
+| `NODE_ENV`           | `production`                 | `development`, `test` or `production`                          |
+| `MODEL_CATALOG_PATH` | bundled `config/models.json` | Model catalog file (see below)                                 |
+| `PROVIDERS_ENABLED`  | `demo`                       | Comma-separated provider ids; each must be in the catalog      |
+| `DEFAULT_PROVIDER`   | `demo`                       | Provider for sessions created without one; must be enabled     |
+| `DEFAULT_MODEL`      | the provider's default       | Model for sessions created without one; must be in the catalog |
+
+The model catalog lists, per provider, whether it needs an API key, its default model and its
+models with context window and maximum output tokens. Unknown fields are rejected, so provider
+base URLs can only come from server configuration. A malformed catalog stops startup and names
+the file and the offending entry (for example `providers.demo.models.0.contextWindow`).
+
+```json
+{
+  "providers": {
+    "demo": {
+      "defaultModel": "demo",
+      "requiresKey": false,
+      "models": [
+        { "id": "demo", "contextWindow": 8192, "maxOutputTokens": 1024 }
+      ]
+    }
+  }
+}
 ```
 
-With Docker:
+## Database schema
 
-```sh
-docker build -t llm-chat-backend .
-docker run --rm -p 3000:3000 llm-chat-backend
-```
+Migrations are generated from `apps/server/src/db/schema.ts` into `apps/server/drizzle/` by
+`pnpm --filter server db:generate`, committed, and applied by the `migrate` entry under a
+PostgreSQL advisory lock, so two runners never apply a migration twice.
+
+`sessions`
+
+| Column             | Type          | Notes                                                  |
+| ------------------ | ------------- | ------------------------------------------------------ |
+| `id`               | `uuid` PK     | UUIDv7, generated by the app                           |
+| `title`            | `text` null   | 1–200 characters                                       |
+| `provider`         | `text`        | Enabled provider id                                    |
+| `model`            | `text`        | Model in that provider's catalog                       |
+| `system_prompt`    | `text` null   | 1–8,000 characters                                     |
+| `next_seq`         | `integer`     | Next message sequence number; internal, never returned |
+| `last_activity_at` | `timestamptz` | Set at creation, moved only by new turns               |
+| `created_at`       | `timestamptz` | Same value as `last_activity_at` at creation           |
+| `updated_at`       | `timestamptz` | Moves on every settings change                         |
+
+Index `(last_activity_at DESC, id DESC)` serves the session list.
+
+## Query support
+
+| Endpoint               | Behaviour                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `POST /sessions`       | 201 + `Location`. Provider/model default to the configuration                      |
+| `GET /sessions`        | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`            |
+| `GET /sessions/:id`    | 404 `session_not_found` if missing, 400 for a malformed id                         |
+| `PATCH /sessions/:id`  | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt |
+| `DELETE /sessions/:id` | 204, then 404                                                                      |
+| `GET /providers`       | Enabled providers, whether they need a key, their catalogued models                |
+| `GET /health`          | Liveness, no dependencies                                                          |
+| `GET /health/ready`    | 200 when the database answers and its migrations match this build                  |
+
+Provider and model resolve the same way on create and update: both given → as given; provider
+only → that provider's default model; model only → the current (or default) provider. An
+unknown or disabled provider is 422 `provider_unavailable`; a model outside that provider's
+catalog is 422 `model_not_supported`.
+
+The session list is ordered by most recent activity, then id, and pages with an opaque keyset
+cursor. It is a **live list, not a snapshot**: a session that gets new activity while you page
+moves to the first page, so clients refresh from the first page. Pages have no gaps or
+duplicates while the ordering keys do not change. Timestamps are ISO-8601 UTC with microsecond
+precision, the database's own precision.
 
 ## Test
 
 ```sh
 pnpm lint:ci     # ESLint without --fix, zero warnings allowed
 pnpm typecheck   # tsc --noEmit
-pnpm test        # Vitest; builds the server once for the process tests
+pnpm test:unit   # unit and lint tests only; no Docker needed
+pnpm test        # everything; Docker must be running (testcontainers)
 ```
 
-Tests drive the app in-process through `buildApp()` and `inject()`, start the built server as a
-child process for startup and shutdown, and lint in-memory source to prove the
-dependency-direction rule. CI runs the same commands plus a container build-and-start check,
-a production dependency audit, a gitleaks secret scan and a commit-message check. CodeQL runs
-once the repository is public; code scanning on private repositories needs a paid license.
+Integration tests start one PostgreSQL 17 container per run, migrate a template database once,
+and give every test file its own copy, so files run in parallel without seeing each other's
+rows. They drive the app in-process through `buildApp()` and `inject()` against that real
+database; process tests run the built server and migration entry as child processes. CI runs
+the same commands plus a container build-and-start check, a migration drift check, a
+`docker compose` smoke test, a production dependency audit, a gitleaks secret scan and a
+commit-message check. CodeQL runs once the repository is public; code scanning on private
+repositories needs a paid license.
 
 ## API documentation
 

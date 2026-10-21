@@ -45,6 +45,7 @@
     "format": "prettier --write .",
     "lint": "eslint --fix .",
     "lint:ci": "eslint . --max-warnings 0",
+    "migrate": "node dist/migrate.js",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:integration": "vitest run --project integration",
