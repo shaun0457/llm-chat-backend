@@ -1,4 +1,16 @@
-import { index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import {
+  type AnyPgColumn,
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
 
@@ -26,6 +38,64 @@ export const sessions = pgTable(
     index("sessions_last_activity_at_id_idx").on(
       table.lastActivityAt.desc().nullsFirst(),
       table.id.desc().nullsFirst(),
+    ),
+  ],
+);
+
+/**
+ * One message of a session. A turn is a user row plus the assistant row whose `reply_to_id`
+ * points at it; `seq` is the only ordering key. Assistant rows carry the generation state:
+ * `attempt` fences every write, and provider, model and system prompt are frozen when the turn
+ * is admitted. User rows are always `completed` with every assistant-only column null, except
+ * `attempt`, which is stored as 1 to stay non-null and is never exposed.
+ */
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").primaryKey(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    role: text("role", { enum: ["user", "assistant"] }).notNull(),
+    replyToId: uuid("reply_to_id")
+      .unique("messages_reply_to_id_unique")
+      .references((): AnyPgColumn => messages.id),
+    content: text("content").notNull().default(""),
+    status: text("status", { enum: ["generating", "completed", "failed"] }).notNull(),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    attempt: integer("attempt").notNull().default(1),
+    startedAt: timestamptz("started_at"),
+    provider: text("provider"),
+    model: text("model"),
+    systemPrompt: text("system_prompt"),
+    promptTokens: integer("prompt_tokens"),
+    completionTokens: integer("completion_tokens"),
+    finishReason: text("finish_reason"),
+    latencyMs: integer("latency_ms"),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+    updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("messages_session_id_seq_unique").on(table.sessionId, table.seq),
+    // The one-active-turn rule: at most one generating assistant per session.
+    uniqueIndex("messages_one_generating_per_session")
+      .on(table.sessionId)
+      .where(sql`${table.status} = 'generating'`),
+    check("messages_role_check", sql`${table.role} IN ('user', 'assistant')`),
+    check(
+      "messages_status_check",
+      sql`${table.status} IN ('generating', 'completed', 'failed')`,
+    ),
+    check("messages_attempt_check", sql`${table.attempt} >= 1`),
+    check(
+      "messages_user_row_check",
+      sql`${table.role} <> 'user' OR (${table.status} = 'completed' AND ${table.replyToId} IS NULL AND ${table.errorCode} IS NULL AND ${table.errorDetail} IS NULL AND ${table.startedAt} IS NULL AND ${table.provider} IS NULL AND ${table.model} IS NULL AND ${table.systemPrompt} IS NULL AND ${table.promptTokens} IS NULL AND ${table.completionTokens} IS NULL AND ${table.finishReason} IS NULL AND ${table.latencyMs} IS NULL)`,
+    ),
+    check(
+      "messages_assistant_row_check",
+      sql`${table.role} <> 'assistant' OR (${table.replyToId} IS NOT NULL AND ${table.startedAt} IS NOT NULL AND ${table.provider} IS NOT NULL AND ${table.model} IS NOT NULL)`,
     ),
   ],
 );
