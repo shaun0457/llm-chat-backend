@@ -58,13 +58,15 @@ jobs:
         run: |
           curl -sf -o /dev/null http://127.0.0.1:3000/openapi.json
           html=$(curl -sfL http://127.0.0.1:3000/docs)
-          for ref in $(echo "$html" | grep -oE '(src|href)="/[^"]+"' | sed -E 's/^(src|href)="//; s/"$//'); do
+          refs=$(echo "$html" | grep -oE '(src|href)="/[^"]+"' | sed -E 's/^(src|href)="//; s/"$//')
+          test -n "$refs" || { echo "/docs references no local assets"; exit 1; }
+          for ref in $refs; do
             curl -sf -o /dev/null "http://127.0.0.1:3000$ref" || { echo "missing asset $ref"; exit 1; }
           done
       - name: Runs as non-root without dev dependencies
         run: |
           test "$(docker run --rm llm-chat-backend:ci id -u)" != "0"
-          docker run --rm llm-chat-backend:ci sh -c '! ls node_modules/.pnpm | grep -qE "^(vitest|typescript|eslint|tsup)@"'
+          docker run --rm llm-chat-backend:ci sh -c 'test -d node_modules/.pnpm && ! ls node_modules/.pnpm | grep -qE "^(vitest|typescript|eslint|tsup)@"'
       - name: Stops cleanly on SIGTERM
         run: |
           docker stop -t 15 api
@@ -76,6 +78,10 @@ jobs:
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # The action lists the pull request's commits through the API.
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
