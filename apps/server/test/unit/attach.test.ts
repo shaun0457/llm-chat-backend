@@ -1,5 +1,4 @@
-import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createAttach } from "../../src/modules/messages/attach.js";
 import { createBus } from "../../src/modules/messages/bus.js";
@@ -73,6 +72,10 @@ function attachWith(job: Job | undefined, read: () => Turn) {
 }
 
 describe("attach.json", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it.each(["completed", "failed"] as const)(
     "reports a turn already %s without waiting, even with no wait at all",
     async (status) => {
@@ -100,39 +103,49 @@ describe("attach.json", () => {
     expect(outcome?.userMessage.id).toBe(USER);
   });
 
-  it("answers as soon as the job ends within the wait", async () => {
+  it("answers as soon as the job ends within the wait and leaves no timer behind", async () => {
+    vi.useFakeTimers();
     const { job, end } = controlledJob();
     let status: Message["status"] = "generating";
-    setTimeout(() => {
-      status = "completed";
-      end("terminal");
-    }, 20);
+    const pending = attachWith(job, () => turn(status)).json(ASSISTANT, 1, 5_000);
 
-    const started = performance.now();
-    const outcome = await attachWith(job, () => turn(status)).json(ASSISTANT, 1, 5_000);
+    await vi.advanceTimersByTimeAsync(20);
+    status = "completed";
+    end("terminal");
+    const outcome = await pending;
 
     expect(outcome?.kind).toBe("completed");
-    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("gives up after the wait and reports pending", async () => {
+  it("gives up once the wait has passed and reports pending", async () => {
+    vi.useFakeTimers();
     const { job } = controlledJob();
+    let settled = false;
+    const pending = attachWith(job, () => turn("generating"))
+      .json(ASSISTANT, 1, 50)
+      .finally(() => {
+        settled = true;
+      });
 
-    const started = performance.now();
-    const outcome = await attachWith(job, () => turn("generating")).json(ASSISTANT, 1, 50);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const outcome = await pending;
 
     expect(outcome?.kind).toBe("pending");
-    expect(performance.now() - started).toBeGreaterThanOrEqual(45);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("does not wait for a job of another attempt", async () => {
+    vi.useFakeTimers();
     const { job } = controlledJob(2);
 
-    const started = performance.now();
+    // No timer is advanced: a wait would never end.
     const outcome = await attachWith(job, () => turn("generating")).json(ASSISTANT, 1, 5_000);
 
     expect(outcome?.kind).toBe("pending");
-    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("fails when the job could not store the final state", async () => {

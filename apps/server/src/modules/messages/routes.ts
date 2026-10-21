@@ -32,14 +32,6 @@ const noStoreHeader = {
   description: "The state may change until the answer is completed or failed; never cache it",
 };
 
-/** Every `Prefer` line of the request; Node joins repeated lines into one string. */
-function preferValues(header: string | string[] | undefined): string[] {
-  if (header === undefined) {
-    return [];
-  }
-  return Array.isArray(header) ? header : [header];
-}
-
 export const messagesRoutes: FastifyPluginAsyncZod<{
   service: MessagesService;
   jsonWait: WaitConfig;
@@ -94,7 +86,9 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
       },
     },
     async (request, reply) => {
-      const preferences = parsePrefer(preferValues(request.headers.prefer));
+      // Node joins repeated Prefer lines into one comma-separated value.
+      const { prefer } = request.headers;
+      const preferences = parsePrefer(prefer === undefined ? [] : [prefer]);
       const outcome = await service.send(request.params.id, request.body, {
         waitMs: effectiveWaitMs(preferences, jsonWait),
       });

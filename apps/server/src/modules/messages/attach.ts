@@ -57,6 +57,8 @@ export function createAttach(deps: {
     async json(assistantId, attempt, waitMs) {
       const job = jobs.get(assistantId);
       if (job !== undefined && job.attempt === attempt) {
+        // A terminal write that fails after the wait is only logged by the job: the response
+        // already said 202, and the row stays generating until stale reclaim fails it.
         if ((await endWithin(job.finished, waitMs)) === "write_failed") {
           throw new Error("the answer's final state could not be stored");
         }

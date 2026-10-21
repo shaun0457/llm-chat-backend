@@ -14,6 +14,11 @@ const testDb = useTestDatabase();
 
 /** Short waits keep these tests fast; each test states the values it relies on. */
 const WAIT_ENV = { ...TEST_ENV, JSON_DEFAULT_WAIT_MS: "200", JSON_MAX_WAIT_MS: "5000" };
+/**
+ * Any wait (default or requested, up to 60 s) outlasts the 5 s test timeout, so a test that
+ * gets its response at all shows that the server did not wait, without a wall-clock bound.
+ */
+const LONG_WAIT_ENV = { ...TEST_ENV, JSON_DEFAULT_WAIT_MS: "60000", JSON_MAX_WAIT_MS: "60000" };
 
 type TurnBody = { userMessage: Message; assistantMessage: Message };
 
@@ -129,17 +134,14 @@ describe("JSON sends: Prefer, 202 and polling", () => {
     });
 
     it("waits less than the default when asked", async () => {
-      start({ ...WAIT_ENV, JSON_DEFAULT_WAIT_MS: "3000" });
+      start(LONG_WAIT_ENV);
       holdGeneration();
       const session = await createSession(app);
 
-      const { value: response, elapsedMs } = await timed(() =>
-        send(app, session.id, { content: "Hi" }, { prefer: "wait=0" }),
-      );
+      const response = await send(app, session.id, { content: "Hi" }, { prefer: "wait=0" });
 
       expect(response.statusCode).toBe(202);
       expect(response.headers["preference-applied"]).toBe("wait=0");
-      expect(elapsedMs).toBeLessThan(2_000);
     });
   });
 
@@ -155,8 +157,8 @@ describe("JSON sends: Prefer, 202 and polling", () => {
 
       expect(response.statusCode).toBe(202);
       expect(response.headers["preference-applied"]).toBe("wait=1");
+      // Uncapped, wait=60 would outlast the test timeout.
       expect(elapsedMs).toBeGreaterThanOrEqual(990);
-      expect(elapsedMs).toBeLessThan(10_000);
     });
   });
 
@@ -164,16 +166,13 @@ describe("JSON sends: Prefer, 202 and polling", () => {
     it.each(["respond-async", "respond-async, wait=5", "wait=5, Respond-Async"])(
       "answers 202 without waiting for %s and applies only respond-async",
       async (prefer) => {
-        start({ ...WAIT_ENV, JSON_DEFAULT_WAIT_MS: "3000" });
+        start(LONG_WAIT_ENV);
         holdGeneration();
         const session = await createSession(app);
 
-        const { value: response, elapsedMs } = await timed(() =>
-          send(app, session.id, { content: "Hi" }, { prefer }),
-        );
+        const response = await send(app, session.id, { content: "Hi" }, { prefer });
 
         expect(response.statusCode).toBe(202);
-        expect(elapsedMs).toBeLessThan(2_000);
         expect(response.headers["preference-applied"]).toBe("respond-async");
         expect(response.headers["cache-control"]).toBe("no-store");
         const { assistantMessage }: TurnBody = response.json();
