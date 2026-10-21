@@ -54,12 +54,19 @@ export async function main(env: Record<string, string | undefined> = process.env
     throw error;
   }
 
+  // Declared before the pool, so its error handler never meets an uninitialised binding.
+  let app: FastifyInstance | undefined;
   // The pool connects lazily: the API starts even while the database is down (not ready).
   const db = createDb({
     connectionString: config.databaseUrl,
-    onPoolError: (error) => app.log.error({ err: error }, "idle database connection failed"),
+    onPoolError: (error) => {
+      if (app === undefined) {
+        process.stderr.write(`idle database connection failed: ${error.message}\n`);
+      } else {
+        app.log.error({ err: error }, "idle database connection failed");
+      }
+    },
   });
-  let app: FastifyInstance;
   try {
     app = buildApp({ config, db, catalog, registry });
   } catch (error) {
