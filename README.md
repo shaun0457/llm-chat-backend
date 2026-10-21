@@ -49,7 +49,8 @@ formatter: `pnpm --filter server start | pnpm --filter server exec pino-pretty`.
 ## Configuration
 
 Environment variables, validated at startup. An invalid value stops the process and names the
-variable, never its value. Blank values count as unset.
+variable, never its value. Blank values count as unset. `JSON_DEFAULT_WAIT_MS` must not
+exceed `JSON_MAX_WAIT_MS`.
 
 | Variable                | Default                      | Meaning                                                                                         |
 | ----------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -65,6 +66,8 @@ variable, never its value. Blank values count as unset.
 | `DEFAULT_SYSTEM_PROMPT` | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                  |
 | `FLUSH_INTERVAL_MS`     | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)             |
 | `DEMO_DELAY_MS`         | `50`                         | Pause between the demo provider's chunks (0–10,000)                                             |
+| `JSON_DEFAULT_WAIT_MS`  | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                    |
+| `JSON_MAX_WAIT_MS`      | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout              |
 
 The model catalog lists, per provider, whether it needs an API key, its default model and its
 models with context window and maximum output tokens. Unknown fields are rejected, so provider
@@ -135,19 +138,19 @@ Index `(last_activity_at DESC, id DESC)` serves the session list.
 
 ## Query support
 
-| Endpoint                          | Behaviour                                                                                                                                                                                                                                                                                                                |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /sessions`                  | 201 + `Location`. Provider/model default to the configuration                                                                                                                                                                                                                                                            |
-| `GET /sessions`                   | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`                                                                                                                                                                                                                                                  |
-| `GET /sessions/:id`               | 404 `session_not_found` if missing, 400 for a malformed id                                                                                                                                                                                                                                                               |
-| `PATCH /sessions/:id`             | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt                                                                                                                                                                                                                                       |
-| `DELETE /sessions/:id`            | 204, then 404                                                                                                                                                                                                                                                                                                            |
-| `POST /sessions/:id/messages`     | `{ "content" }` (1–16,000 characters, not blank; unknown fields are a 400). Waits for the answer: 200 `{ userMessage, assistantMessage }`, or 502 problem details with both messages when it failed. 409 `session_busy` while the session's previous answer is generating; 503 `server_busy` while the server shuts down |
-| `GET /sessions/:id/messages`      | `?limit=` 1–200 (default 50), `?before=` a message id of this session; newest page first, ascending `seq` within a page                                                                                                                                                                                                  |
-| `GET /sessions/:id/messages/:mid` | One message, including the partial text of an answer being generated; 404 `message_not_found` outside this session                                                                                                                                                                                                       |
-| `GET /providers`                  | Enabled providers, whether they need a key, their catalogued models                                                                                                                                                                                                                                                      |
-| `GET /health`                     | Liveness, no dependencies                                                                                                                                                                                                                                                                                                |
-| `GET /health/ready`               | 200 when the database answers and its migrations match this build                                                                                                                                                                                                                                                        |
+| Endpoint                          | Behaviour                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /sessions`                  | 201 + `Location`. Provider/model default to the configuration                                                                                                                                                                                                                                                                                                                          |
+| `GET /sessions`                   | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`                                                                                                                                                                                                                                                                                                                |
+| `GET /sessions/:id`               | 404 `session_not_found` if missing, 400 for a malformed id                                                                                                                                                                                                                                                                                                                             |
+| `PATCH /sessions/:id`             | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt                                                                                                                                                                                                                                                                                                     |
+| `DELETE /sessions/:id`            | 204, then 404                                                                                                                                                                                                                                                                                                                                                                          |
+| `POST /sessions/:id/messages`     | `{ "content" }` (1–16,000 characters, not blank; unknown fields are a 400). Waits a bounded time (see below): 200 `{ userMessage, assistantMessage }`, 502 problem details with both messages when it failed, 202 with both messages while it is still generating. 409 `session_busy` while the session's previous answer is generating; 503 `server_busy` while the server shuts down |
+| `GET /sessions/:id/messages`      | `?limit=` 1–200 (default 50), `?before=` a message id of this session; newest page first, ascending `seq` within a page                                                                                                                                                                                                                                                                |
+| `GET /sessions/:id/messages/:mid` | One message, including the partial text of an answer being generated; `Cache-Control: no-store`; 404 `message_not_found` outside this session                                                                                                                                                                                                                                          |
+| `GET /providers`                  | Enabled providers, whether they need a key, their catalogued models                                                                                                                                                                                                                                                                                                                    |
+| `GET /health`                     | Liveness, no dependencies                                                                                                                                                                                                                                                                                                                                                              |
+| `GET /health/ready`               | 200 when the database answers and its migrations match this build                                                                                                                                                                                                                                                                                                                      |
 
 A message list page holds the newest `limit` messages below `before` (or the newest overall),
 in ascending `seq`. `nextBefore` is the id of the page's first item when older messages exist,
@@ -183,20 +186,55 @@ job (in process) ── context: system prompt + earlier completed turns + the n
   │                every FLUSH_INTERVAL_MS: fenced UPDATE of the partial text
   │                finish → fenced UPDATE to completed; error → failed (llm_upstream_error)
   ▼ finally: release capacity, leave the job map, close the bus
-JSON response ── waits for the job, then reads both rows: 200, or 502 problem details
+JSON response ── waits for the job's end or the effective wait, whichever is first,
+                 then reads both rows: 200, 502 problem details, or 202 + Location
 ```
 
 Every rule that must survive a restart or a second process lives in PostgreSQL: the row lock,
 the partial unique index on generating turns, and the `attempt` fence on every generation
 write. Memory only holds the stream buffer, the abort controller and capacity counters. See
-[ADR 0003](docs/adr/0003-single-process-db-truth.md). The response waits for the answer with no
-time limit yet, which is fine for the demo provider; a bounded wait follows.
+[ADR 0003](docs/adr/0003-single-process-db-truth.md).
 
 A turn's context is the frozen system prompt, then every completed turn with a lower `seq`
 (user and assistant text), then the new message. Turns whose answer failed or is still being
 generated are left out whole. An untitled session takes its title from the first non-blank
 line of the message (whitespace collapsed, at most 60 characters including a closing `…`); a
 title that is set is never overwritten.
+
+## Long-running answers (JSON clients)
+
+An answer can take from a second to minutes. A JSON send therefore waits only a bounded time
+for it, and the client chooses how long with the standard `Prefer` header (RFC 7240):
+
+| Request header                   | Waits                                     | `Preference-Applied` |
+| -------------------------------- | ----------------------------------------- | -------------------- |
+| (none)                           | `JSON_DEFAULT_WAIT_MS` (30 s)             | (absent)             |
+| `Prefer: wait=10`                | 10 s, at most `JSON_MAX_WAIT_MS` (195 s)  | `wait=10`            |
+| `Prefer: wait=600`               | the maximum                               | `wait=195`           |
+| `Prefer: respond-async`          | not at all (also when `wait` is sent too) | `respond-async`      |
+| malformed or unknown preferences | ignored: the default wait, never a 400    | (absent)             |
+
+The answer decides the status: **200** completed, **502** failed (problem details with both
+messages), **202** still being generated. A 202 carries both messages, `Location` (the
+assistant message), `Retry-After: 2` and `Cache-Control: no-store`; generation goes on, and
+polling `Location` returns the message's current state (partial text while generating), never
+from a cache, until its status is `completed` or `failed`. `respond-async` means "do not wait",
+not "always 202": an answer already known to be finished is still 200 or 502.
+
+```sh
+curl -i -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
+  -H 'Prefer: respond-async' -d '{"content":"Hello"}'
+# HTTP/1.1 202 Accepted
+# location: /sessions/<id>/messages/<assistant id>
+# retry-after: 2
+# preference-applied: respond-async
+curl -i localhost:3000/sessions/<id>/messages/<assistant id>   # poll until completed or failed
+```
+
+Always handle 202, even with a long `wait`: the server may shut down meanwhile, and a proxy in
+front of it may time out before the configured maximum (lower `JSON_MAX_WAIT_MS` below it).
+`Preference-Applied` reports which preferences were honoured; it promises neither completion
+nor an exact wait. See [ADR 0004](docs/adr/0004-async-request-reply.md).
 
 ## Test
 
