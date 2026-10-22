@@ -80,6 +80,10 @@ export function createRetention(deps: {
   }
 
   const runOnce = (): Promise<RetentionRun> => {
+    // After stop(), e.g. during shutdown, when the pool may already be closed.
+    if (stopping) {
+      return Promise.resolve({ deleted: 0, skipped: 0, failed: 0 });
+    }
     running ??= run().finally(() => {
       running = undefined;
     });

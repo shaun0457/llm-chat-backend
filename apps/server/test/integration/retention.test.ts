@@ -243,6 +243,24 @@ describe("retention.run", () => {
     }
   });
 
+  it("does nothing when it is run after stop(): no query, no delete, no log", async () => {
+    start({});
+    const { calls, sessions } = recordingSessions(() => undefined);
+    const retention = createRetention({
+      db: testDb.db,
+      sessions,
+      days: 7,
+      intervalMs: 3_600_000,
+      log: app.log,
+    });
+
+    await retention.stop();
+
+    expect(await retention.runOnce()).toEqual({ deleted: 0, skipped: 0, failed: 0 });
+    expect(calls).toEqual([]);
+    expect(retentionLogs(logs)).toEqual([]);
+  });
+
   it("is off without RETENTION_DAYS: nothing is deleted, however often the interval would run", async () => {
     start({ RETENTION_INTERVAL_MS: "20" });
     await listen(app);
