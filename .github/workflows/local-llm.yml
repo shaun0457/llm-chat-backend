@@ -52,9 +52,12 @@ jobs:
             if [ "$LABEL" = local-llm ] && [ "$SAME_REPO" = true ]; then run=true; fi
           elif [ "$HAS_LABEL" = true ] && [ "$SAME_REPO" = true ]; then
             run=true
-          elif git diff --name-only "$BASE...$HEAD" | grep -qE \
-            '^(docker-compose\.yml|apps/server/config/|apps/server/src/llm/|apps/server/scripts/smoke-local-llm\.ts|\.github/workflows/local-llm\.yml)'; then
-            run=true
+          else
+            # Into a variable first: grep -q may exit before git diff has written everything.
+            changed=$(git diff --name-only "$BASE...$HEAD")
+            if grep -qE '^(docker-compose\.yml|Dockerfile|pnpm-lock\.yaml|apps/server/package\.json|apps/server/config/|apps/server/src/llm/|apps/server/src/(config|server)\.ts|apps/server/scripts/smoke-local-llm\.ts|\.github/workflows/local-llm\.yml)' <<< "$changed"; then
+              run=true
+            fi
           fi
           echo "run=$run" | tee -a "$GITHUB_OUTPUT"
 
@@ -70,6 +73,7 @@ jobs:
     timeout-minutes: 30
     env:
       COMPOSE_PROJECT_NAME: local-llm
+      COMPOSE_PROFILES: local-llm
       PROVIDERS_ENABLED: demo,ollama
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,6 +96,10 @@ jobs:
         shell: bash
         run: |
           name=$(jq -er '.providers.ollama.defaultModel' apps/server/config/models.json)
+          if ! [[ $name =~ ^[A-Za-z0-9._:/-]+$ ]]; then
+            echo "::error::unexpected model name in the catalog"
+            exit 1
+          fi
           echo "name=$name" | tee -a "$GITHUB_OUTPUT"
           # The CI-only override: the models directory is a host folder, so it can be cached.
           MODELS_DIR="$RUNNER_TEMP/ollama-models"
@@ -115,10 +123,17 @@ jobs:
       - name: Start ollama → ollama-pull → postgres → migrate → api
         id: up
         shell: bash
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit == 'true' }}
         run: |
           start=$(date +%s)
-          docker compose --profile local-llm up -d --no-build
-          echo "up returned after $(( $(date +%s) - start )) s (cache hit: ${{ steps.cache.outputs.cache-hit == 'true' }})"
+          # One more try when the model download fails (a registry hiccup, not our code).
+          if ! docker compose up -d --no-build; then
+            echo "::warning::the first start failed; trying once more"
+            docker compose logs --no-color ollama-pull | tail -n 20 || true
+            docker compose up -d --no-build
+          fi
+          echo "up returned after $(( $(date +%s) - start )) s (cache hit: $CACHE_HIT)"
       - name: Wait for /health/ready (90 s)
         shell: bash
         run: |
@@ -128,12 +143,12 @@ jobs:
           done
           echo "::error::/health/ready did not answer 200 within 90 s"
           exit 1
-      - name: The pull ran once and finished before the API started (AC2)
+      - name: The one-shot pull exited 0 before the API started (AC2)
         shell: bash
         run: |
-          pull=$(docker compose ps -aq ollama-pull)
+          pull=$(docker compose ps -aq ollama-pull | tail -n 1)
           api=$(docker compose ps -aq api)
-          test "$(echo "$pull" | wc -l)" = 1
+          test -n "$pull" && test -n "$api"
           test "$(docker inspect -f '{{.State.ExitCode}}' "$pull")" = 0
           pull_started=$(docker inspect -f '{{.State.StartedAt}}' "$pull")
           pull_finished=$(docker inspect -f '{{.State.FinishedAt}}' "$pull")
@@ -159,7 +174,9 @@ jobs:
           key: ollama-models-${{ steps.model.outputs.name }}-v1
       - name: Model details (V2, V3)
         shell: bash
-        run: docker compose exec -T ollama ollama show "${{ steps.model.outputs.name }}"
+        env:
+          MODEL: ${{ steps.model.outputs.name }}
+        run: docker compose exec -T ollama ollama show "$MODEL"
       - name: Smoke test through the API (AC3, AC4, V3, V4, V5)
         shell: bash
         timeout-minutes: 15
@@ -190,8 +207,9 @@ jobs:
             echo "### Local LLM check"
             echo
             echo '```text'
+            # Model text must not close the code block or add markup.
             grep -E '^(provider |SSE send|JSON send|extra send|limit check|SMOKE_RESULT|SMOKE FAILED)' \
-              "$RUNNER_TEMP/smoke.log" 2> /dev/null || echo "no smoke output"
+              "$RUNNER_TEMP/smoke.log" 2> /dev/null | tr '`<>' "'()" || echo "no smoke output"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Collect logs
