@@ -47,6 +47,8 @@ export type AppDeps = {
 };
 
 const REQUEST_ID_HEADER = "x-request-id";
+/** Request bodies above this answer 413 before they are parsed (Fastify's default: 1 MiB). */
+export const BODY_LIMIT_BYTES = 131_072;
 /** Time for providers to honour the abort before the job's terminal write starts. */
 const JOB_STOP_GRACE_MS = 1_000;
 
@@ -102,6 +104,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // request.ip: the socket's address, or, from a listed proxy, the nearest X-Forwarded-For
     // address that is not itself a listed proxy (read right to left).
     trustProxy: config.trustProxy === undefined ? false : [...config.trustProxy],
+    // Bounds receiving a request (a slow body ends with 408), never a response: SSE streams
+    // and long JSON waits are unaffected (V3 of #2). The socket inactivity timeout stays 0.
+    requestTimeout: config.requestTimeoutMs,
+    // A send's 16,000 characters fit with room to spare, even if all escaped as \uXXXX.
+    bodyLimit: BODY_LIMIT_BYTES,
     // Errors raised before routing (e.g. an undecodable URL) bypass hooks and the error handler.
     frameworkErrors: (error, request, reply) => {
       void reply.header(REQUEST_ID_HEADER, request.id);
