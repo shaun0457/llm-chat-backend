@@ -12,6 +12,7 @@
     "drizzle-orm": "0.45.4",
     "fastify": "5.12.7",
     "fastify-type-provider-zod": "7.0.0",
+    "openai": "7.28.0",
     "pg": "8.23.1",
     "uuid": "14.0.3",
     "zod": "4.6.7"
@@ -30,6 +31,7 @@
     "eslint-plugin-import": "2.31.0",
     "eslint-plugin-import-esm": "^1.2.1",
     "eslint-plugin-prettier": "^5.2.1",
+    "msw": "2.15.0",
     "pino-pretty": "13.2.0",
     "prettier": "^3.3.3",
     "testcontainers": "12.2.1",
