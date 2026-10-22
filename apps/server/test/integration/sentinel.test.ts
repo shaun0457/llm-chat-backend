@@ -1,7 +1,6 @@
 import type { FastifyInstance, InjectOptions } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { Db } from "../../src/db/client.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { makeHostedTestApp } from "../helpers/hosted.js";
 import { type LogCapture, captureLogs } from "../helpers/log-capture.js";
@@ -13,6 +12,7 @@ import {
   streamOf,
   useUpstream,
 } from "../helpers/msw-openai.js";
+import { everyRow } from "../helpers/rows.js";
 import { closeListeningApp, eventsOf, listen, parseSse } from "../helpers/sse-client.js";
 
 /** Obviously fake, and in no format the scrubber recognises: only its literal removal helps. */
@@ -20,27 +20,6 @@ const SENTINEL = "sentinel-byok-7d1e2f90";
 
 const testDb = useTestDatabase();
 const upstream = useUpstream();
-
-/**
- * Every row of every table outside the system schemas, as its complete text representation
- * (all columns, whatever their type). Fails when discovery finds nothing to scan.
- */
-async function everyRow(db: Db): Promise<{ tables: string[]; rows: string[] }> {
-  const { rows: tables } = await db.pool.query<{ schema: string; name: string }>(
-    `SELECT table_schema AS schema, table_name AS name
-       FROM information_schema.tables
-      WHERE table_type = 'BASE TABLE'
-        AND table_schema NOT IN ('pg_catalog', 'information_schema')
-        AND table_schema NOT LIKE 'pg\\_%'`,
-  );
-  const rows: string[] = [];
-  for (const { schema, name } of tables) {
-    const quoted = `"${schema.replaceAll('"', '""')}"."${name.replaceAll('"', '""')}"`;
-    const result = await db.pool.query<{ row: string }>(`SELECT t::text AS row FROM ${quoted} t`);
-    rows.push(...result.rows.map(({ row }) => row));
-  }
-  return { tables: tables.map(({ schema, name }) => `${schema}.${name}`), rows };
-}
 
 describe("the sentinel key appears nowhere", () => {
   let app: FastifyInstance;
