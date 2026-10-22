@@ -17,6 +17,9 @@ const commaList = z
   .pipe(z.array(z.string()).min(1));
 
 const MAX_JSON_WAIT_MS = 600_000;
+const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+/** The same rule as the X-LLM-Api-Key header: 1–512 visible ASCII characters. */
+export const API_KEY_PATTERN = /^[\x21-\x7e]{1,512}$/;
 const DEFAULT_JSON_WAIT_MS = 30_000;
 
 const envSchema = z.object({
@@ -44,9 +47,11 @@ const envSchema = z.object({
     .max(MAX_JSON_WAIT_MS)
     .default(DEFAULT_JSON_WAIT_MS),
   JSON_MAX_WAIT_MS: z.coerce.number().int().min(0).max(MAX_JSON_WAIT_MS).default(195_000),
+  // Server configuration only: clients can never choose where a provider call goes.
+  NVIDIA_BASE_URL: z.url({ protocol: /^https?$/ }).default(DEFAULT_NVIDIA_BASE_URL),
 });
 
-/** Holds the database password: never log it. */
+/** Holds the database password and operator API keys: never log it. */
 export type AppConfig = Readonly<{
   port: number;
   host: string;
@@ -68,6 +73,10 @@ export type AppConfig = Readonly<{
   jsonDefaultWaitMs: number;
   /** The longest a JSON send ever waits; keep it below the proxy's response timeout. */
   jsonMaxWaitMs: number;
+  /** Where the nvidia provider's OpenAI-compatible API lives. */
+  nvidiaBaseUrl: string;
+  /** `<PROVIDER>_API_KEY` of each enabled provider that has one, by provider id. Secrets. */
+  operatorKeys: Readonly<Record<string, string>>;
 }>;
 
 /** Names the invalid keys and why; never includes the values, which may be secrets. */
@@ -89,8 +98,39 @@ function withoutBlankValues(env: Record<string, string | undefined>): Record<str
   );
 }
 
+/** "local-llm" → "LOCAL_LLM_API_KEY". */
+export function operatorKeyName(providerId: string): string {
+  return `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`;
+}
+
+/** Throws (naming the key, never its value) when an operator key is malformed. */
+function readOperatorKeys(
+  providers: readonly string[],
+  env: Record<string, string>,
+): Readonly<Record<string, string>> {
+  const keys: Record<string, string> = {};
+  const problems: Array<{ key: string; reason: string }> = [];
+  for (const provider of providers) {
+    const name = operatorKeyName(provider);
+    const value = Object.hasOwn(env, name) ? env[name] : undefined;
+    if (value === undefined) {
+      continue;
+    }
+    if (API_KEY_PATTERN.test(value)) {
+      keys[provider] = value;
+    } else {
+      problems.push({ key: name, reason: "must be 1-512 visible ASCII characters" });
+    }
+  }
+  if (problems.length > 0) {
+    throw new ConfigError(problems);
+  }
+  return Object.freeze(keys);
+}
+
 export function loadConfig(env: Record<string, string | undefined>): AppConfig {
-  const result = envSchema.safeParse(withoutBlankValues(env));
+  const present = withoutBlankValues(env);
+  const result = envSchema.safeParse(present);
   if (!result.success) {
     throw new ConfigError(
       result.error.issues.map((issue) => ({
@@ -109,6 +149,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       },
     ]);
   }
+  const providersEnabled = Object.freeze([...new Set(parsed.PROVIDERS_ENABLED)]);
   return Object.freeze({
     port: parsed.PORT,
     host: parsed.HOST,
@@ -116,7 +157,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     nodeEnv: parsed.NODE_ENV,
     databaseUrl: parsed.DATABASE_URL,
     modelCatalogPath: parsed.MODEL_CATALOG_PATH,
-    providersEnabled: Object.freeze([...new Set(parsed.PROVIDERS_ENABLED)]),
+    providersEnabled,
     defaultProvider: parsed.DEFAULT_PROVIDER,
     defaultModel: parsed.DEFAULT_MODEL,
     defaultSystemPrompt: parsed.DEFAULT_SYSTEM_PROMPT,
@@ -124,5 +165,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     demoDelayMs: parsed.DEMO_DELAY_MS,
     jsonDefaultWaitMs: parsed.JSON_DEFAULT_WAIT_MS,
     jsonMaxWaitMs: parsed.JSON_MAX_WAIT_MS,
+    nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,
+    operatorKeys: readOperatorKeys(providersEnabled, present),
   });
 }

@@ -34,6 +34,8 @@ describe("loadConfig", () => {
       demoDelayMs: 50,
       jsonDefaultWaitMs: 30_000,
       jsonMaxWaitMs: 195_000,
+      nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
+      operatorKeys: {},
     });
   });
 
@@ -53,6 +55,8 @@ describe("loadConfig", () => {
       DEMO_DELAY_MS: "0",
       JSON_DEFAULT_WAIT_MS: "0",
       JSON_MAX_WAIT_MS: "20000",
+      NVIDIA_BASE_URL: "http://nim.internal:8000/v1",
+      NVIDIA_API_KEY: "operator-key-1",
     });
 
     expect(config).toEqual({
@@ -70,8 +74,40 @@ describe("loadConfig", () => {
       demoDelayMs: 0,
       jsonDefaultWaitMs: 0,
       jsonMaxWaitMs: 20_000,
+      nvidiaBaseUrl: "http://nim.internal:8000/v1",
+      operatorKeys: { nvidia: "operator-key-1" },
     });
   });
+
+  it("takes <PROVIDER>_API_KEY for enabled providers only", () => {
+    const config = loadConfig({
+      DATABASE_URL,
+      PROVIDERS_ENABLED: "demo,local-llm",
+      LOCAL_LLM_API_KEY: "local-key",
+      NVIDIA_API_KEY: "not-enabled",
+    });
+
+    expect(config.operatorKeys).toEqual({ "local-llm": "local-key" });
+  });
+
+  it.each(["has space", "x".repeat(513), "café"])(
+    "rejects an operator key that is not 1-512 visible ASCII characters, without echoing it",
+    (key) => {
+      const error = configError({ DATABASE_URL, PROVIDERS_ENABLED: "nvidia", NVIDIA_API_KEY: key });
+
+      expect(error.message).toContain("NVIDIA_API_KEY");
+      expect(error.message).not.toContain(key);
+    },
+  );
+
+  it.each(["ftp://nim.internal/v1", "not a url"])(
+    "rejects a NVIDIA_BASE_URL that is not an http(s) URL: %s",
+    (url) => {
+      expect(configError({ DATABASE_URL, NVIDIA_BASE_URL: url }).message).toContain(
+        "NVIDIA_BASE_URL",
+      );
+    },
+  );
 
   it("requires DATABASE_URL", () => {
     expect(configError({}).message).toContain("DATABASE_URL");
