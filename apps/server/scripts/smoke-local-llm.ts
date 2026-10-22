@@ -26,6 +26,8 @@ export const LONG_QUESTION =
 
 const REASONING_MARKERS = /<\/?(think|thinking|reasoning)>/i;
 const POLL_INTERVAL_MS = 2_000;
+/** How long the limit check waits for a long answer's end after an unexpected free slot. */
+const END_GRACE_MS = 5_000;
 const STATUSES = new Set(["generating", "completed", "failed"]);
 
 type Usage = { promptTokens: number; completionTokens: number } | null;
@@ -396,6 +398,8 @@ async function limitCheck(
   // Set synchronously when a long answer ends, so the checks below see it at once.
   let ended = 0;
   let failure: unknown;
+  let markEnded!: () => void;
+  const anyEnded = new Promise<void>((resolve) => (markEnded = resolve));
   const admitted: Array<Promise<void>> = [];
   const outcomes = sessions.map((sessionId, index) => {
     const what = `long answer ${index + 1}`;
@@ -404,6 +408,7 @@ async function limitCheck(
     return streamSend(ctx, sessionId, LONG_QUESTION, what, () => created()).then(
       (outcome) => {
         ended += 1;
+        markEnded();
         try {
           checkAnswer(what, outcome.message);
           const tokens = outcome.message.usage?.completionTokens;
@@ -420,6 +425,7 @@ async function limitCheck(
       },
       (error: unknown) => {
         ended += 1;
+        markEnded();
         failure ??= error;
         throw error;
       },
@@ -449,6 +455,20 @@ async function limitCheck(
   };
   ctx.log(`extra send while ${concurrency} answers run: ${JSON.stringify(rejected)}`);
   if (rejected.httpStatus !== 503 || rejected.code !== "provider_busy") {
+    // An admitted extra send must not leave a generation running: deleting its session ends it.
+    await call(ctx, "DELETE", `/sessions/${extraSession}`).catch(() => undefined);
+    // A free slot means an answer has just ended (its slot is released before its stream's
+    // last event arrives) or the limit is not enforced. Wait, bounded, for the first answer to
+    // end, so that a failed answer reports its own cause.
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      anyEnded,
+      new Promise((resolve) => (timer = setTimeout(resolve, END_GRACE_MS))),
+    ]);
+    clearTimeout(timer);
+    if (failure !== undefined) {
+      throw failure;
+    }
     throw new SmokeError(
       `the extra send got HTTP ${rejected.httpStatus} ${rejected.code ?? ""}, not 503 provider_busy` +
         (ended === 0 ? "" : " (a long answer had ended before it was answered)"),
