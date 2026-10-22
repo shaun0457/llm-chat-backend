@@ -63,8 +63,14 @@ export function openSseStream(reply: FastifyReply, options: SseOptions): SseStre
   Object.assign(headers, SSE_HEADERS);
   void reply.hijack();
   const response = reply.raw;
-  response.writeHead(200, headers);
-  response.flushHeaders();
+  try {
+    response.writeHead(200, headers);
+    response.flushHeaders();
+  } catch (error) {
+    // Hijacked: nobody else would answer, so close the connection; the stream is closed below.
+    reply.log.error({ err: error }, "the event stream's head could not be written");
+    response.destroy();
+  }
 
   let ending = false;
   let closed = false;
@@ -108,6 +114,11 @@ export function openSseStream(reply: FastifyReply, options: SseOptions): SseStre
   response.on("close", onClosed);
   // A write error is followed by close; it must not become an unhandled error event.
   response.on("error", () => response.destroy());
+  if (response.destroyed) {
+    // The client left before the stream opened (e.g. during admission): its close event has
+    // already been emitted.
+    onClosed();
+  }
 
   return {
     send: (event, data) => write(encodeEvent(event, data)),
