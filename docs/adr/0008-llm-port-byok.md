@@ -84,9 +84,10 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
 - **Error bodies** are read up to 8 KiB, and the SDK gets that bounded copy, so a huge or
   endless body can neither fill memory nor hang a call. The body is scrubbed whole before any
   part of it is cut.
-- **Catalog.** Only models expected to stream their answer without inline reasoning are listed:
-  `google/gemma-3-12b-it` (default) and `nvidia/llama-3.1-nemotron-70b-instruct`, both with a
-  conservative 32,768-token context window and 2,048 output tokens.
+- **Catalog.** Only models that streamed a clean answer in the live check are listed:
+  `meta/llama-3.2-11b-vision-instruct` (default), with a conservative 32,768-token context
+  window and 2,048 output tokens (not measured). A unit test pins the shipped NVIDIA list, so
+  adding a model means running the live check first.
 
 ## Verification findings
 
@@ -100,16 +101,24 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
   `GET /models` lists the models). Probed without a valid key: a malformed key gets 401 and an
   unrecognised one 403, both as problem details (`{"status","title","detail"}`) that did not
   echo the key; an unknown model gets 404 and a retired one 410 with a problem-details
-  `detail`. Whether `stream_options.include_usage` is accepted and how context overflow is
-  reported could not be checked without a key: **live check pending**. Since nothing showed the
-  option being rejected, no per-provider option to omit it was built; an accepted request
-  without usage yields `usage: null` (contract-tested). The context mapping covers the OpenAI,
-  vLLM and problem-details formats by status and message.
-- **V3 reasoning in content:** the two catalogued models are instruction models without a
-  reasoning mode. A live stream per model is **pending** (needs a key); the optional test
-  `test/adapters/nvidia-live.test.ts` checks for `<think>` in the text, exactly one finish
-  and the presence of usage, and runs only with `LLM_LIVE_TESTS=1` and `NVIDIA_API_KEY` set
-  (in CI, only in the `live-llm` workflow).
+  `detail`. With a real key (the `live-llm` workflow, 2026-10-22,
+  [run 39718461460](https://github.com/shaun0457/llm-chat-backend/actions/runs/39718461460)): `stream_options.include_usage` is accepted, and every
+  model that answered reported usage (e.g. 60 prompt and 8 completion tokens). A model the
+  key's account cannot use answers 404 `Function '<id>': Not found for account '<account id>'`,
+  also for models that the public `GET /models` lists. Context overflow was not probed live: it
+  would cost about 32k tokens per check. The mapping covers the OpenAI, vLLM and
+  problem-details formats by status and message; an unrecognised format falls back to
+  `llm_upstream_error`.
+- **V3 reasoning in content:** checked live with `test/adapters/nvidia-live.test.ts`: one
+  short streaming call per model, asserting non-empty content, exactly one finish and no
+  `<think>`-style tags. It runs only with `LLM_LIVE_TESTS=1` and `NVIDIA_API_KEY` set (in CI,
+  only in the `live-llm` workflow). The two models first chosen from the docs,
+  `google/gemma-3-12b-it` and `nvidia/llama-3.1-nemotron-70b-instruct`, answer 404 for the
+  account, as did 12 other probed models. `meta/llama-3.2-11b-vision-instruct` passed and is
+  the catalog. `openai/gpt-oss-20b` also passed (its reasoning arrives in a side field), but it
+  is a reasoning model, which this ticket excludes. `nvidia/nemotron-3.5-lightning-30b-a3b`
+  spent the whole output budget reasoning and returned no content. Three models did not
+  answer within 90 s.
 - **V4 SDK retries and timeout** (openai 7.28.0 source, `client.js`): `shouldRetry` retries
   408, 409, 429 and every status ≥ 500, plus connection errors and timeouts; 401/403 are not
   retried, unless the server sends `x-should-retry: true`, which the SDK obeys. Retries honour

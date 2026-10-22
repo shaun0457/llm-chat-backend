@@ -252,16 +252,29 @@ nor an exact wait. See [ADR 0004](docs/adr/0004-async-request-reply.md).
 
 ## Providers and API keys
 
-| Provider | Needs a key | Models (`config/models.json`)                                               | Enable with                     |
-| -------- | ----------- | --------------------------------------------------------------------------- | ------------------------------- |
-| `demo`   | no          | `demo`: a fixed sentence, for trying the API                                | (on by default)                 |
-| `nvidia` | yes         | `google/gemma-3-12b-it` (default), `nvidia/llama-3.1-nemotron-70b-instruct` | `PROVIDERS_ENABLED=demo,nvidia` |
+| Provider | Needs a key | Models (`config/models.json`)                  | Enable with                     |
+| -------- | ----------- | ---------------------------------------------- | ------------------------------- |
+| `demo`   | no          | `demo`: a fixed sentence, for trying the API   | (on by default)                 |
+| `nvidia` | yes         | `meta/llama-3.2-11b-vision-instruct` (default) | `PROVIDERS_ENABLED=demo,nvidia` |
 
 `nvidia` talks to NVIDIA's hosted OpenAI-compatible API through the official `openai` SDK; any
 other OpenAI-compatible server can be added the same way. Only non-reasoning models are
 catalogued, and only the answer content becomes text: reasoning side fields are ignored.
 `GET /providers` lists the enabled providers, their models and `requiresKey`; it never says
 whether the server has a key of its own.
+
+**Live-verified.** Every catalogued NVIDIA model is checked against the real API by the
+`live-llm` workflow before it is listed. Its result line on 2026-10-22
+([run 39718461460](https://github.com/shaun0457/llm-chat-backend/actions/runs/39718461460)),
+for "What is the capital of France?" with "Answer in one short sentence.":
+
+```text
+LIVE_RESULT {"model":"meta/llama-3.2-11b-vision-instruct","finishReason":"stop","usage":{"promptTokens":60,"completionTokens":8},"answer":"The capital of France is Paris."}
+```
+
+NVIDIA's hosted API queues requests to busy models; that call took about 60 s. Models that
+answered 404 for the key's account, timed out, or reason before answering were left out
+(ADR 0008, V3).
 
 **Bring your own key.** Send your key in the `X-LLM-Api-Key` header of
 `POST /sessions/:id/messages`. For each new turn the server uses, in this order: the header;
