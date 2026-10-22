@@ -6,7 +6,8 @@ name: Local LLM check
 # send gets 503) and that long answers stop at the catalog's output limit. It is slow (model
 # download, CPU inference), so it runs on pushes to main, on pull requests that touch provider,
 # catalog or compose files, on pull requests labelled `local-llm` (this repository's own
-# branches only), and by hand. It uses no secrets.
+# branches only), and by hand. It uses no secrets. It starts the stack with the README's command,
+# `docker compose --env-file local-llm.env up`.
 on:
   workflow_dispatch:
   push:
@@ -55,7 +56,7 @@ jobs:
           else
             # Into a variable first: grep -q may exit before git diff has written everything.
             changed=$(git diff --name-only "$BASE...$HEAD")
-            if grep -qE '^(docker-compose\.yml|Dockerfile|pnpm-lock\.yaml|apps/server/package\.json|apps/server/config/|apps/server/src/llm/|apps/server/src/(config|server)\.ts|apps/server/scripts/smoke-local-llm\.ts|\.github/workflows/local-llm\.yml)' <<< "$changed"; then
+            if grep -qE '^(docker-compose\.yml|Dockerfile|pnpm-lock\.yaml|apps/server/package\.json|apps/server/config/|apps/server/src/llm/|apps/server/src/modules/messages/|apps/server/src/http/|apps/server/src/(app|config|server)\.ts|apps/server/scripts/smoke-local-llm\.ts|\.github/workflows/local-llm\.yml)' <<< "$changed"; then
               run=true
             fi
           fi
@@ -73,8 +74,10 @@ jobs:
     timeout-minutes: 30
     env:
       COMPOSE_PROJECT_NAME: local-llm
-      COMPOSE_PROFILES: local-llm
-      PROVIDERS_ENABLED: demo,ollama
+      # The README's command: this file turns on the profile and enables ollama.
+      LOCAL_LLM_ENV: local-llm.env
+      # `ollama list` ID of the catalogued model as verified (V2, V3); a retagged model fails.
+      OLLAMA_MODEL_ID: a8b0c5157701
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -117,9 +120,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.MODELS_DIR }}
-          key: ollama-models-${{ steps.model.outputs.name }}-v1
+          key: ollama-models-${{ steps.model.outputs.name }}-${{ env.OLLAMA_MODEL_ID }}
       - name: Build the image
-        run: docker compose build
+        run: docker compose --env-file "$LOCAL_LLM_ENV" build
       - name: Start ollama → ollama-pull → postgres → migrate → api
         id: up
         shell: bash
@@ -127,11 +130,15 @@ jobs:
           CACHE_HIT: ${{ steps.cache.outputs.cache-hit == 'true' }}
         run: |
           start=$(date +%s)
-          # One more try when the model download fails (a registry hiccup, not our code).
-          if ! docker compose up -d --no-build; then
+          # The README's command (detached, image already built). One more try when the model
+          # download fails: a registry hiccup, not our code.
+          if ! docker compose --env-file "$LOCAL_LLM_ENV" up -d --no-build; then
             echo "::warning::the first start failed; trying once more"
-            docker compose logs --no-color ollama-pull | tail -n 20 || true
-            docker compose up -d --no-build
+            stop_token="pull-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+            echo "::stop-commands::$stop_token"
+            docker compose --env-file "$LOCAL_LLM_ENV" logs --no-color ollama-pull | tail -n 20 || true
+            echo "::$stop_token::"
+            docker compose --env-file "$LOCAL_LLM_ENV" up -d --no-build
           fi
           echo "up returned after $(( $(date +%s) - start )) s (cache hit: $CACHE_HIT)"
       - name: Wait for /health/ready (90 s)
@@ -145,9 +152,12 @@ jobs:
           exit 1
       - name: The one-shot pull exited 0 before the API started (AC2)
         shell: bash
+        env:
+          MODEL: ${{ steps.model.outputs.name }}
         run: |
-          pull=$(docker compose ps -aq ollama-pull | tail -n 1)
-          api=$(docker compose ps -aq api)
+          compose() { docker compose --env-file "$LOCAL_LLM_ENV" "$@"; }
+          pull=$(compose ps -aq ollama-pull | tail -n 1)
+          api=$(compose ps -aq api)
           test -n "$pull" && test -n "$api"
           test "$(docker inspect -f '{{.State.ExitCode}}' "$pull")" = 0
           pull_started=$(docker inspect -f '{{.State.StartedAt}}' "$pull")
@@ -159,7 +169,13 @@ jobs:
             echo "::error::the api started before the pull finished"
             exit 1
           fi
-          docker compose exec -T ollama ollama list
+          list=$(compose exec -T ollama ollama list)
+          echo "$list"
+          id=$(awk -v m="$MODEL" '$1 == m { print $2 }' <<< "$list")
+          if [ "$id" != "$OLLAMA_MODEL_ID" ]; then
+            echo "::error::$MODEL has ID ${id:-none}, not the verified $OLLAMA_MODEL_ID: verify the new model (V2, V3) before changing OLLAMA_MODEL_ID"
+            exit 1
+          fi
       - name: Save the model to the cache
         if: steps.cache.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -171,12 +187,19 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.MODELS_DIR }}
-          key: ollama-models-${{ steps.model.outputs.name }}-v1
+          key: ollama-models-${{ steps.model.outputs.name }}-${{ env.OLLAMA_MODEL_ID }}
       - name: Model details (V2, V3)
         shell: bash
         env:
           MODEL: ${{ steps.model.outputs.name }}
-        run: docker compose exec -T ollama ollama show "$MODEL"
+        run: |
+          # The model's metadata (license, system prompt) must not be read as workflow commands.
+          stop_token="show-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$stop_token"
+          status=0
+          docker compose --env-file "$LOCAL_LLM_ENV" exec -T ollama ollama show "$MODEL" || status=$?
+          echo "::$stop_token::"
+          exit "$status"
       - name: Smoke test through the API (AC3, AC4, V3, V4, V5)
         shell: bash
         timeout-minutes: 15
@@ -195,8 +218,8 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          docker compose exec -T ollama ollama ps || true
-          docker compose logs --no-color ollama 2>&1 \
+          docker compose --env-file "$LOCAL_LLM_ENV" exec -T ollama ollama ps || true
+          docker compose --env-file "$LOCAL_LLM_ENV" logs --no-color ollama 2>&1 \
             | grep -E 'OLLAMA_NUM_PARALLEL|OLLAMA_CONTEXT_LENGTH|n_ctx|n_seq_max|parallel|context' \
             | sed -E 's/::/: :/g' | tail -n 40 || true
       - name: Summary
@@ -217,8 +240,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/local-llm-logs"
-          docker compose --profile local-llm ps -a > "$RUNNER_TEMP/local-llm-logs/ps.txt" 2>&1 || true
-          docker compose --profile local-llm logs --no-color --timestamps \
+          docker compose --env-file "$LOCAL_LLM_ENV" ps -a > "$RUNNER_TEMP/local-llm-logs/ps.txt" 2>&1 || true
+          docker compose --env-file "$LOCAL_LLM_ENV" logs --no-color --timestamps \
             > "$RUNNER_TEMP/local-llm-logs/compose.log" 2>&1 || true
           cp "$RUNNER_TEMP/smoke.log" "$RUNNER_TEMP/local-llm-logs/" 2> /dev/null || true
       - name: Upload logs
@@ -230,4 +253,4 @@ jobs:
           retention-days: 7
       - name: Tear down
         if: always()
-        run: docker compose --profile local-llm down -v || true
+        run: docker compose --env-file "$LOCAL_LLM_ENV" down -v || true
