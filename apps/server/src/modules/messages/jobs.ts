@@ -286,6 +286,8 @@ export function createJobRegistry(deps: {
     let finish: { reason: LlmFinishReason; usage: LlmUsage | null } | undefined;
     let generationFailed = false;
     let generationError: unknown;
+    // Until the history is read, an error is the database's, not the provider's.
+    let readingHistory = true;
     try {
       // A read stuck behind a lock must not hold the job: it stops waiting at the abort, and
       // the database cancels the read itself after one statement timeout at most (or at the
@@ -301,6 +303,7 @@ export function createJobRegistry(deps: {
         }),
         controller.signal,
       );
+      readingHistory = false;
       const request = {
         model: spec.model,
         maxOutputTokens: spec.maxOutputTokens,
@@ -366,7 +369,10 @@ export function createJobRegistry(deps: {
         }),
       );
     }
-    if (generationFailed) {
+    if (generationFailed && readingHistory) {
+      // By SQLSTATE only: drizzle's error quotes the query and its parameters.
+      jobLog.warn(describeFailure(generationError), "reading the history failed");
+    } else if (generationFailed) {
       jobLog.warn({ err: generationError }, "generation failed");
     } else if (finish === undefined) {
       jobLog.warn("the provider ended the stream without a finish event");

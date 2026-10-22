@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { performance } from "node:perf_hooks";
 import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,7 +10,8 @@ import { TEST_ENV, makeTestApp, testJobs } from "../helpers/app.js";
 import { clockJumpingAfterFirstReading } from "../helpers/clock.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider } from "../helpers/fake-llm.js";
-import { createSession, getMessage, send } from "../helpers/messages.js";
+import { captureLogs } from "../helpers/log-capture.js";
+import { createSession, eventually, getMessage, send } from "../helpers/messages.js";
 import { testProviders } from "../helpers/providers.js";
 
 const testDb = useTestDatabase();
@@ -160,7 +161,11 @@ describe("deadline", () => {
     });
     const locker = new pg.Client({ connectionString: testDb.url });
     await locker.connect();
-    const inner = testJobs(testDb.db, { config });
+    const logs = captureLogs();
+    const inner = testJobs(testDb.db, {
+      config,
+      log: Fastify({ logger: { level: "info", stream: logs.stream } }).log,
+    });
     let locked: Promise<unknown> | undefined;
     let ended: Promise<{ end: JobEnd; afterMs: number }> | undefined;
     const jobs: JobRegistry = {
@@ -198,6 +203,15 @@ describe("deadline", () => {
       // connection until the lock goes away.
       expect(await historyReadsWaitingAfter(LOCK_HELD_MS / 3)).toBe(0);
       expect((await pending).statusCode).toBe(202);
+      // The cancelled read is logged by its SQLSTATE only: drizzle's error quotes the query and
+      // its parameters (here the session id).
+      const readFailure = logs
+        .entries()
+        .find((entry) => entry.msg === "reading the history failed");
+      expect(readFailure).toMatchObject({ code: "57014" });
+      const logged = logs.lines().join("\n");
+      expect(logged).not.toContain("Failed query");
+      expect(logged).not.toContain(session.id);
     } finally {
       clearTimeout(releaseAt);
       await locker.query("COMMIT").catch(() => {});
@@ -209,9 +223,10 @@ describe("deadline", () => {
 it("shutdown also gets a history read stuck behind a lock cancelled in the database", async () => {
   const config = loadConfig({
     ...TEST_ENV,
-    // Far beyond the test: only the statement timeout can end the read in time.
+    // Far beyond the test: only the statement timeout can end the read in time. It is long
+    // enough for the test to see the read waiting before the shutdown begins.
     GENERATION_DEADLINE_MS: "60000",
-    TERMINAL_STATEMENT_TIMEOUT_MS: "200",
+    TERMINAL_STATEMENT_TIMEOUT_MS: "1500",
     TERMINAL_WRITE_BUDGET_MS: "300",
   });
   const locker = new pg.Client({ connectionString: testDb.url });
@@ -243,12 +258,30 @@ it("shutdown also gets a history read stuck behind a lock cancelled in the datab
     const pending = send(current, session.id, { content: "Hi" }, { prefer: "respond-async" });
     await eventuallyDefined(() => locked);
     await eventuallyDefined(() => (started ? Promise.resolve(started) : undefined));
+    // The history read is really waiting for the lock before the shutdown begins.
+    const reader = await eventually(waitingHistoryRead, (pid) => pid !== undefined);
 
     const closed = inner.shutdown(2_000);
 
     // Shutdown stops waiting for the read at once; the database must not keep running it until
-    // the deadline either, or closing the pool would wait for its connection.
-    expect(await historyReadsWaitingAfter(1_000)).toBe(0);
+    // the deadline either, or closing the pool would wait for its connection. While the lock
+    // is still held, the read is cancelled and its connection is back in the pool: idle, or
+    // already running something else (the cancelled write's tries reuse pooled connections).
+    await eventually(
+      async () =>
+        (
+          await testDb.db.pool.query<{ state: string | null; query: string | null }>(
+            "SELECT state, query FROM pg_stat_activity WHERE pid = $1",
+            [reader],
+          )
+        ).rows[0],
+      (row) =>
+        row !== undefined &&
+        (row.state === "idle" || !(row.query ?? "").startsWith('select "id", "seq", "role"')),
+      3_000,
+    );
+    expect(await waitingHistoryRead()).toBeUndefined();
+    expect(testDb.db.pool.waitingCount).toBe(0);
     await locker.query("COMMIT");
     await closed;
     await pending;
@@ -258,6 +291,16 @@ it("shutdown also gets a history read stuck behind a lock cancelled in the datab
     await current.close();
   }
 }, 15_000);
+
+/** The backend of a history read (the job's select of id, seq, role …) waiting for a lock. */
+async function waitingHistoryRead(): Promise<number | undefined> {
+  const { rows } = await testDb.db.pool.query<{ pid: number }>(
+    "SELECT pid FROM pg_stat_activity" +
+      " WHERE wait_event_type = 'Lock' AND datname = current_database()" +
+      ` AND query LIKE 'select "id", "seq", "role"%'`,
+  );
+  return rows[0]?.pid;
+}
 
 /**
  * History reads (the job's select of id, seq, role …) waiting for a lock, polled until none are
