@@ -452,6 +452,12 @@ the server's own `<PROVIDER>_API_KEY` for the turn's provider; no key for a prov
 needs none; otherwise **422 `llm_credential_missing`**, before anything is stored. A malformed
 header (not 1–512 visible ASCII characters) is a 400 that does not echo it.
 
+**A server key is spent by anyone.** There is no authentication, so every enabled provider
+that has a `<PROVIDER>_API_KEY` is usable by any client, for any of its catalogued models: a
+session's settings and a message's `provider` / `model` override both pick from them. Enable a
+provider with a server key only where that is acceptable, and keep its catalog to models whose
+`maxOutputTokens` and cost you accept. The public demo runs without server keys.
+
 ```sh
 curl -X POST localhost:3000/sessions -H 'content-type: application/json' \
   -d '{"provider":"nvidia"}'
