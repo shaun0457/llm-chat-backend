@@ -47,24 +47,31 @@ function reasoningOnly(reasoningField: ReasoningField): ChunkSpec[] {
 }
 
 describe.each(REASONING_FIELDS)("reasoning in %s is filtered out (#36)", (reasoningField) => {
-  let app: FastifyInstance;
+  let app: FastifyInstance | undefined;
   let logs: LogCapture;
   /** Status, headers and body of every response the test saw. */
   const responses: string[] = [];
 
-  async function start(): Promise<string> {
+  /** Starts the hosted app on a real socket; returns it and its base URL. */
+  async function start(): Promise<{ started: FastifyInstance; base: string }> {
     logs = captureLogs();
-    app = makeHostedTestApp({ db: testDb.db, env: { LOG_LEVEL: "trace" }, logStream: logs.stream });
-    return listen(app);
+    const started = makeHostedTestApp({
+      db: testDb.db,
+      env: { LOG_LEVEL: "trace" },
+      logStream: logs.stream,
+    });
+    app = started;
+    return { started, base: await listen(started) };
   }
 
+  /** Reads the whole body once (so no connection stays open) and keeps it for the scan. */
   async function request(url: string, init: RequestInit = {}): Promise<Response> {
     const response = await fetch(url, init);
-    const body = await response.clone().text();
+    const body = await response.text();
     responses.push(
       `${response.status} ${JSON.stringify(Object.fromEntries(response.headers))} ${body}`,
     );
-    return response;
+    return new Response(body, { status: response.status, headers: response.headers });
   }
 
   function sendJson(base: string, sessionId: string, content: string): Promise<Response> {
@@ -113,16 +120,19 @@ describe.each(REASONING_FIELDS)("reasoning in %s is filtered out (#36)", (reason
 
   afterEach(async () => {
     responses.length = 0;
-    await closeListeningApp(app);
+    if (app !== undefined) {
+      await closeListeningApp(app);
+      app = undefined;
+    }
   });
 
   it("a JSON send stores and returns only the answer, with usage and finish reason; the next turn's history holds only the answer", async () => {
-    const base = await start();
+    const { started, base } = await start();
     upstream.reply(
       streamOf(reasoningThenAnswer(reasoningField)),
       streamOf([{ content: "Its name is Paris." }, { finishReason: "stop" }]),
     );
-    const session = await createSession(app, { provider: "nvidia" });
+    const session = await createSession(started, { provider: "nvidia" });
 
     const response = await sendJson(base, session.id, "What is the capital of France?");
 
@@ -150,9 +160,9 @@ describe.each(REASONING_FIELDS)("reasoning in %s is filtered out (#36)", (reason
   });
 
   it("an event stream carries only answer text in its deltas, and done holds only the answer", async () => {
-    const base = await start();
+    const { started, base } = await start();
     upstream.reply(streamOf(reasoningThenAnswer(reasoningField)));
-    const session = await createSession(app, { provider: "nvidia" });
+    const session = await createSession(started, { provider: "nvidia" });
 
     const body = await sendSse(base, session.id, "What is the capital of France?");
 
@@ -177,9 +187,9 @@ describe.each(REASONING_FIELDS)("reasoning in %s is filtered out (#36)", (reason
   });
 
   it("a JSON send whose output budget ends in reasoning fails with llm_upstream_error and no content", async () => {
-    const base = await start();
+    const { started, base } = await start();
     upstream.reply(streamOf(reasoningOnly(reasoningField)));
-    const session = await createSession(app, { provider: "nvidia" });
+    const session = await createSession(started, { provider: "nvidia" });
 
     const response = await sendJson(base, session.id, "What is the capital of France?");
 
@@ -197,9 +207,9 @@ describe.each(REASONING_FIELDS)("reasoning in %s is filtered out (#36)", (reason
   });
 
   it("an event stream whose output budget ends in reasoning sends no delta and ends with error", async () => {
-    const base = await start();
+    const { started, base } = await start();
     upstream.reply(streamOf(reasoningOnly(reasoningField)));
-    const session = await createSession(app, { provider: "nvidia" });
+    const session = await createSession(started, { provider: "nvidia" });
 
     const body = await sendSse(base, session.id, "What is the capital of France?");
 

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { LlmError } from "../../src/llm/errors.js";
 import { OpenAiCompatibleProvider } from "../../src/llm/openai-compatible.js";
 import type { LlmEvent, LlmRequest } from "../../src/llm/port.js";
 import {
+  type ChunkSpec,
   REASONING_FIELDS,
   UPSTREAM_BASE_URL,
   endlessErrorOf,
@@ -375,8 +377,8 @@ describe("OpenAiCompatibleProvider", () => {
       async (reasoningField) => {
         upstream.reply(
           streamOf([
-            { reasoningField, reasoning: "thinking " },
-            { reasoningField, reasoning: "still thinking", content: "" },
+            { reasoningField, reasoning: "reasoning-marker-a1 " },
+            { reasoningField, reasoning: "reasoning-marker-a2", content: "" },
             { finishReason: "length", usage: { prompt_tokens: 4, completion_tokens: 256 } },
           ]),
         );
@@ -384,24 +386,47 @@ describe("OpenAiCompatibleProvider", () => {
 
         const failure = await collect(stream(), seen).catch((error: unknown) => error);
 
+        expect(failure).toBeInstanceOf(LlmError);
         expect(failure).toMatchObject({
-          name: "LlmError",
           code: "llm_upstream_error",
           detail: "The model used its whole output budget before it started the answer.",
         });
         expect(seen).toEqual([]);
-        expect(String((failure as Error).message)).not.toContain("thinking");
+        expect((failure as LlmError).message).not.toContain("reasoning-marker");
       },
     );
 
-    it("fails with llm_upstream_error when a stream finishes without any answer text", async () => {
-      upstream.reply(streamOf([{ content: "" }, { finishReason: "stop" }]));
+    it.each([
+      ["an empty content chunk and stop", [{ content: "" }, { finishReason: "stop" }]],
+      ["no delta at all and content_filter", [{ finishReason: "content_filter" }]],
+    ])(
+      "fails with llm_upstream_error when a stream finishes without any answer text: %s",
+      async (_name, chunks: ChunkSpec[]) => {
+        upstream.reply(streamOf(chunks));
 
-      await expect(collect(stream())).rejects.toMatchObject({
-        name: "LlmError",
-        code: "llm_upstream_error",
-        detail: "The model provider finished without any answer text.",
-      });
+        await expect(collect(stream())).rejects.toMatchObject({
+          name: "LlmError",
+          code: "llm_upstream_error",
+          detail: "The model provider finished without any answer text.",
+        });
+      },
+    );
+
+    it("still completes an answer that has text and then runs out of budget (length)", async () => {
+      upstream.reply(
+        streamOf([
+          { reasoning: "reasoning-marker-b" },
+          { content: "A partial ans" },
+          { finishReason: "length" },
+        ]),
+      );
+
+      const events = await collect(stream());
+
+      expect(events).toEqual([
+        { type: "delta", text: "A partial ans" },
+        { type: "finish", reason: "length", usage: null },
+      ]);
     });
   });
 });
