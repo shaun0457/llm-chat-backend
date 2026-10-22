@@ -90,41 +90,41 @@ exceed `JSON_MAX_WAIT_MS`. The four timing keys of [failure handling](#failure-h
 be positive whole numbers of milliseconds, at most one hour. `NVIDIA_BASE_URL` and
 `OLLAMA_BASE_URL` are checked only when their provider is enabled.
 
-| Variable                        | Default                      | Meaning                                                                                                                                         |
-| ------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                  | (required)                   | `postgres://` or `postgresql://` connection URL                                                                                                 |
-| `PORT`                          | `3000`                       | Listening port                                                                                                                                  |
-| `HOST`                          | `0.0.0.0`                    | Listening address                                                                                                                               |
-| `LOG_LEVEL`                     | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                                                                  |
-| `NODE_ENV`                      | `production`                 | `development`, `test` or `production`                                                                                                           |
-| `MODEL_CATALOG_PATH`            | bundled `config/models.json` | Model catalog file (see below)                                                                                                                  |
-| `PROVIDERS_ENABLED`             | `demo`                       | Comma-separated provider ids; each must be in the catalog                                                                                       |
-| `DEFAULT_PROVIDER`              | `demo`                       | Provider for sessions created without one; must be enabled                                                                                      |
-| `DEFAULT_MODEL`                 | the provider's default       | Model for sessions created with neither provider nor model; must be in the catalog                                                              |
-| `DEFAULT_SYSTEM_PROMPT`         | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                                                                  |
-| `FLUSH_INTERVAL_MS`             | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)                                                             |
-| `DEMO_DELAY_MS`                 | `50`                         | Pause between the demo provider's chunks (0–10,000)                                                                                             |
-| `JSON_DEFAULT_WAIT_MS`          | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                                                                    |
-| `JSON_MAX_WAIT_MS`              | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout                                                              |
-| `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`                                                            |
-| `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                                                     |
-| `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                                                               |
-| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                                                       |
-| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                                                     |
-| `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                                                    |
-| `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                                                       |
-| `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000)                                 |
-| `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                                                  |
-| `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`                                    |
-| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                                                       |
-| `RATE_LIMIT_GENERAL_PER_MIN`    | `120`                        | Requests per minute per client address to every route except `/health*`; then 429 `rate_limited`                                                |
-| `RATE_LIMIT_SEND_PER_MIN`       | `20`                         | Sends (`POST /sessions/:id/messages`, replays included) per minute per client address, on top of the general limit                              |
-| `TRUST_PROXY`                   | (none)                       | Comma-separated IPs or CIDR ranges of proxies whose `X-Forwarded-For` is believed; no hop counts, `true`, `*` or /0                             |
-| `CORS_ORIGINS`                  | (none)                       | Comma-separated `http(s)://host[:port]` origins allowed by CORS, or `*` alone; unset: no CORS headers                                           |
-| `RETENTION_DAYS`                | (none)                       | Delete sessions inactive for longer than this many days (1–3,650); unset: never                                                                 |
-| `RETENTION_INTERVAL_MS`         | `3600000`                    | How often retention runs while `RETENTION_DAYS` is set (10 ms to one day)                                                                       |
-| `DB_STATEMENT_TIMEOUT_MS`       | `10000`                      | Default limit of every database statement, lock waits included (100 ms to one hour)                                                             |
-| `REQUEST_TIMEOUT_MS`            | `30000`                      | How long a client may take to send a whole request (headers and body); then 408, at most a tenth later. Never limits a response (1,000–600,000) |
+| Variable                        | Default                      | Meaning                                                                                                                                                   |
+| ------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                  | (required)                   | `postgres://` or `postgresql://` connection URL                                                                                                           |
+| `PORT`                          | `3000`                       | Listening port                                                                                                                                            |
+| `HOST`                          | `0.0.0.0`                    | Listening address                                                                                                                                         |
+| `LOG_LEVEL`                     | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                                                                            |
+| `NODE_ENV`                      | `production`                 | `development`, `test` or `production`                                                                                                                     |
+| `MODEL_CATALOG_PATH`            | bundled `config/models.json` | Model catalog file (see below)                                                                                                                            |
+| `PROVIDERS_ENABLED`             | `demo`                       | Comma-separated provider ids; each must be in the catalog                                                                                                 |
+| `DEFAULT_PROVIDER`              | `demo`                       | Provider for sessions created without one; must be enabled                                                                                                |
+| `DEFAULT_MODEL`                 | the provider's default       | Model for sessions created with neither provider nor model; must be in the catalog                                                                        |
+| `DEFAULT_SYSTEM_PROMPT`         | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                                                                            |
+| `FLUSH_INTERVAL_MS`             | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)                                                                       |
+| `DEMO_DELAY_MS`                 | `50`                         | Pause between the demo provider's chunks (0–10,000)                                                                                                       |
+| `JSON_DEFAULT_WAIT_MS`          | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                                                                              |
+| `JSON_MAX_WAIT_MS`              | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout                                                                        |
+| `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`                                                                      |
+| `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                                                               |
+| `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                                                                         |
+| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                                                                 |
+| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                                                               |
+| `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                                                              |
+| `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                                                                 |
+| `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000)                                           |
+| `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                                                            |
+| `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`                                              |
+| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                                                                 |
+| `RATE_LIMIT_GENERAL_PER_MIN`    | `120`                        | Requests per minute per client address to every route except `/health*`; then 429 `rate_limited`                                                          |
+| `RATE_LIMIT_SEND_PER_MIN`       | `20`                         | Sends (`POST /sessions/:id/messages`, replays included) per minute per client address, on top of the general limit                                        |
+| `TRUST_PROXY`                   | (none)                       | Comma-separated IPs or CIDR ranges of proxies whose `X-Forwarded-For` is believed; no hop counts, `true`, `*`, or ranges shorter than IPv4 /8 or IPv6 /16 |
+| `CORS_ORIGINS`                  | (none)                       | Comma-separated `http(s)://host[:port]` origins allowed by CORS, or `*` alone; unset: no CORS headers                                                     |
+| `RETENTION_DAYS`                | (none)                       | Delete sessions inactive for longer than this many days (1–3,650); unset: never                                                                           |
+| `RETENTION_INTERVAL_MS`         | `3600000`                    | How often retention runs while `RETENTION_DAYS` is set (10 ms to one day)                                                                                 |
+| `DB_STATEMENT_TIMEOUT_MS`       | `10000`                      | Default limit of every database statement, lock waits included (100 ms to one hour)                                                                       |
+| `REQUEST_TIMEOUT_MS`            | `30000`                      | How long a client may take to send a whole request (headers and body); then 408, at most a tenth later. Never limits a response (1,000–600,000)           |
 
 The model catalog lists, per provider, whether it needs an API key, its default model, its
 models with context window and maximum output tokens, and optionally `maxConcurrency` (its
@@ -724,23 +724,29 @@ What is in place:
   120 requests a minute to every route except `/health` and `/health/ready`, and on top of
   that 20 sends a minute (`POST /sessions/:id/messages`; a repeated send is a send and counts
   too). Over a budget the answer is 429 problem details with code `rate_limited` and
-  `Retry-After`. IPv6 addresses are grouped by /64; each budget keeps counters for up to 100,000 addresses (the least recently seen are dropped first). CORS preflights are not counted. The counters restart with the process.
+  `Retry-After`. IPv6 addresses are grouped by /64; each budget keeps counters for up to
+  100,000 addresses (the least recently seen are dropped first). With `CORS_ORIGINS` set,
+  OPTIONS requests are not counted: CORS answers them first. The counters restart with the
+  process.
 - **Client address.** Without `TRUST_PROXY` it is the socket's address and `X-Forwarded-For`
-  is ignored. With `TRUST_PROXY` (IPs or CIDR ranges only), a request from a listed proxy is
-  keyed by the nearest `X-Forwarded-For` address that is not itself a listed proxy, read from
-  the right; the leftmost value, which any client can write, never decides, and a socket that
-  is not listed cannot supply a chain. **The public deployment ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14)) runs with `TRUST_PROXY` unset
-  for now, so every client behind the platform's proxy shares one budget** (the proxy's
-  address): one heavy user can rate-limit everyone. Setting it needs the platform's
+  is ignored. With `TRUST_PROXY` (IPs or CIDR ranges only, none shorter than an IPv4 /8, an
+  IPv6 /16 or, IPv4-mapped, a /104, so that no list can trust every address), a request from
+  a listed proxy is keyed by the nearest `X-Forwarded-For` address that is not itself a listed
+  proxy, read from the right; the leftmost value, which any client can write, never decides,
+  and a socket that is not listed cannot supply a chain. **The public deployment
+  ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14)) runs with `TRUST_PROXY` unset for now,
+  so every client behind the platform's proxy shares one budget** (the proxy's address): one
+  heavy user can rate-limit everyone. Setting it needs the platform's
   documented ingress addresses; client-IP attribution on the deployment is not verified yet
   ([#25](https://github.com/shaun0457/llm-chat-backend/issues/25)).
 - **Capacity limits**: at most 8 answers at a time in the process and 4 per provider, each
   over its limit answered at once with 503 ([Limits](#limits)).
-- **Request bounds**: bodies up to 128 KiB, 30 s to send a whole request (stalled headers or a stalled body are cut
-  with 408 within 33 s; responses, event streams and JSON waits are never cut), 10 s per database
-  statement so no request waits forever behind a lock.
-- **Security headers** from `@fastify/helmet` on every response, problem details and event
-  streams included: a Content-Security-Policy of `'self'` (the API documentation at `/docs`
+- **Request bounds**: bodies up to 128 KiB, 30 s to send a whole request (stalled headers or
+  a stalled body are cut with 408 within 33 s; responses, event streams and JSON waits are
+  never cut), 10 s per database statement so no request waits forever behind a lock.
+- **Security headers** from `@fastify/helmet` on every routed response, problem details,
+  429s and event streams included (an error raised before routing, such as an undecodable
+  URL, is answered without hooks, so without these headers, CORS or rate limits): a Content-Security-Policy of `'self'` (the API documentation at `/docs`
   loads only its own assets, so it still works; `upgrade-insecure-requests` is left out so it
   also works over plain HTTP), `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, HSTS and the
@@ -758,8 +764,11 @@ What is in place:
 
 Known gaps: one address may still hold every generation slot within its send budget, waiting
 JSON requests are bounded only by the send budget, and an operator key (if one is set) can be
-spent by any client. `/health/ready` is not rate limited (so a platform health check is never throttled) and queries the database on every call. A client holding a large IPv6 prefix gets one budget per /64, and enough addresses can push other addresses' counters out of the store. The `X-LLM-Api-Key` header is also forwarded to providers that need no
-key, such as `ollama`, because the credential order takes the header first; the exposure is
+spent by any client. `/health/ready` is not rate limited (so a platform health check is
+never throttled) and queries the database on every call. A client holding a large IPv6 prefix
+gets one budget per /64, and enough addresses can push other addresses' counters out of the
+store. The `X-LLM-Api-Key` header is also forwarded to providers that need no key, such as
+`ollama`, because the credential order takes the header first; the exposure is
 low (Ollama's address is server-defined and internal to compose), and changing it is left to
 the owner. See [What I would do next](#what-i-would-do-next).
 
@@ -771,20 +780,26 @@ of the address, with per-owner quotas.
 
 ## Data retention
 
-With `RETENTION_DAYS` set (the public deployment, [#14](https://github.com/shaun0457/llm-chat-backend/issues/14), sets `7`), the API deletes every session whose
-last activity (`lastActivityAt`: creation or the last message) is older than that many days,
+With `RETENTION_DAYS` set (the public deployment,
+[#14](https://github.com/shaun0457/llm-chat-backend/issues/14), sets `7`), the API deletes every
+session whose last activity (`lastActivityAt`: creation or the last message) is older than that many days,
 with all its messages. Locally it is unset and nothing is ever deleted.
 
 - It runs inside the API process every `RETENTION_INTERVAL_MS` (one hour by default) once the
   server listens, and stops when the server shuts down. One run at a time; a failed run is
-  logged and the next one tries again. Each run logs how many sessions it deleted, skipped and could not delete; one that fails is passed over and retried by the next run. A shutdown ends a run after its current session.
+  logged and the next one tries again. Each run logs how many sessions it deleted, skipped
+  and could not delete; one that fails is passed over and retried by the next run. A
+  shutdown ends a run after its current session, while running answers are stopped at the
+  same time.
 - A run takes its cutoff from the database clock, then walks the candidates oldest first in
   batches of 100 and deletes each through the same function as `DELETE /sessions/:id`. That
   function locks the session and checks its activity again, so a session that received a
   message after it was selected is skipped, not deleted.
-- Deleting a session (by a client or by retention) also stops its running answer as soon as the delete has committed: the
-  generation is aborted, writes nothing more, and its capacity slot is free when the delete
-  returns. Streams following it end without a final event.
+- Deleting a session (by a client or by retention) also stops its running answer as soon as
+  the delete has committed: the generation is aborted and writes nothing more. The delete
+  waits for it to end, at most `TERMINAL_STATEMENT_TIMEOUT_MS` + 0.5 s (a write may still be
+  in flight), so its capacity slot is normally free when the delete returns. Streams
+  following it end without a final event.
 - A deleted session cannot be recovered; there is no soft delete or backup in the API.
 
 ## Build vs reuse
