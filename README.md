@@ -1,7 +1,31 @@
 # LLM Chat Backend
 
 A multi-session chat API in front of large language models, built with Fastify, TypeScript and
-PostgreSQL.
+PostgreSQL. Based on [nhwang0/llm-chat-backend](https://github.com/nhwang0/llm-chat-backend)
+at [`8bf820d`](https://github.com/nhwang0/llm-chat-backend/tree/8bf820d).
+
+**Scope.** This goes beyond a typical 4–6 hour take-home: slow answers, client retries and
+users' own API keys make a naive chat backend lose answers, duplicate turns or leak keys, so
+every consistency rule here is enforced by PostgreSQL and proven by tests against a real
+database. The work lands as small test-first tickets, core requirements first, so the
+repository runs and is documented at every step; what is not built yet is listed under
+[What I would do next](#what-i-would-do-next).
+
+| Assignment item (paraphrased)                                   | README section                                                               |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Manage many chat sessions: create, list, read, update, delete   | [Query support](#query-support)                                              |
+| Send a message, get the model's answer, keep the history        | [Sending a message](#sending-a-message), [Database schema](#database-schema) |
+| Cope with answers that take a long time                         | [Long-running answers](#long-running-answers-json-clients)                   |
+| Talk to a real LLM provider, with the user's own API key        | [Providers and API keys](#providers-and-api-keys)                            |
+| Start everything with one command                               | [Run with Docker](#run-with-docker)                                          |
+| An architecture diagram                                         | [Architecture](#architecture)                                                |
+| The database schema                                             | [Database schema](#database-schema)                                          |
+| What the API can query                                          | [Query support](#query-support)                                              |
+| How to run the tests, and how the code is tested                | [Test](#test), [Testing approach](#testing-approach)                         |
+| Two or three build-versus-reuse decisions with their trade-offs | [Build vs reuse](#build-vs-reuse)                                            |
+| Where the API documentation is                                  | [API documentation](#api-documentation)                                      |
+| Why it was built this way                                       | [`docs/adr`](docs/adr)                                                       |
+| Bonus items: streaming, a local model, a public deployment      | Not built yet, see [What I would do next](#what-i-would-do-next)             |
 
 ## Prerequisites
 
@@ -180,7 +204,54 @@ moves to the first page, so clients refresh from the first page. Pages have no g
 duplicates while the ordering keys do not change. Timestamps are ISO-8601 UTC with microsecond
 precision, the database's own precision.
 
-## Architecture: sending a message
+## Architecture
+
+### Components
+
+```mermaid
+flowchart LR
+  client(["API client"])
+  nvidia["NVIDIA hosted API<br/>OpenAI-compatible, HTTPS"]
+
+  subgraph compose["docker compose"]
+    migrate["migrate<br/>one-shot: dist/migrate.js"]
+    postgres[("postgres<br/>PostgreSQL 17")]
+    subgraph api["api: dist/index.js, one process built by buildApp()"]
+      routes["Fastify routes<br/>health · providers · sessions · messages<br/>zod schemas: validation and /openapi.json"]
+      services["sessions service<br/>messages service: admission transaction"]
+      jobs["JobRegistry<br/>in-process jobs, one MessageBus each"]
+      registry["ProviderRegistry<br/>ModelCatalog: config/models.json"]
+      port{{"LlmProvider port"}}
+      demo["DemoProvider<br/>no key"]
+      openai["OpenAiCompatibleProvider<br/>openai SDK, a client per call"]
+    end
+  end
+
+  client -- "HTTP, JSON" --> routes
+  routes --> services
+  services --> jobs
+  services --> registry
+  registry --> port
+  jobs -- "stream(request, key)" --> port
+  port --- demo
+  port --- openai
+  openai -- "the turn's key, server-defined base URL" --> nvidia
+  migrate -- "advisory lock, Drizzle migrations" --> postgres
+  services -- "row lock, inserts, reads" --> postgres
+  jobs -- "fenced UPDATEs" --> postgres
+```
+
+`docker compose up` starts `postgres`, runs `migrate` once (it exits 0 after applying the
+migrations under an advisory lock) and only then starts `api`, which never migrates. `api` is a
+single Node process: Fastify routes validate requests with zod, the services run each send as
+one admission transaction, and every generation runs as a job inside the same process. Jobs
+reach models only through the `LlmProvider` port; the `ProviderRegistry` maps the enabled
+provider ids from the model catalog to their adapters. `demo` answers in process without a
+key, and `nvidia` goes through `OpenAiCompatibleProvider` to NVIDIA's hosted API with the key
+decided for that turn. PostgreSQL is the only shared state; memory holds what a restart may
+lose harmlessly (the text being streamed, abort controllers, capacity reservations).
+
+### Sending a message
 
 ```text
 POST /sessions/:id/messages
@@ -314,6 +385,39 @@ sent again.
 `errorDetail` is a short, scrubbed message (at most 500 characters), for example
 `The model provider answered HTTP 401: …`. See [ADR 0008](docs/adr/0008-llm-port-byok.md).
 
+## Build vs reuse
+
+**Reused: Fastify with zod route schemas and `@fastify/swagger`.** One zod schema per route
+validates the request, types the handler and generates the OpenAPI document, so the docs
+cannot drift from what the server accepts, and `inject()` lets the tests drive the whole app
+without a socket. The cost is coupling to the zod type provider: Fastify, zod and the provider
+must be chosen as a compatible set ([ADR 0001](docs/adr/0001-stack-and-tooling.md)), and its
+JSON Schema transform drops documented response headers, which `src/http/plugins.ts` puts
+back. Express or a hand-written OpenAPI file would avoid that coupling, but validation, types
+and docs would then be kept in step by hand.
+
+**Reused: the official `openai` SDK for OpenAI-compatible providers.** It already parses the
+streamed chunks, retries 429/5xx and connection errors with backoff, enforces request timeouts
+and classifies errors, and a further OpenAI-compatible server is just another server-configured
+base URL. The cost is adapting to its behaviour instead of owning it: `OpenAiCompatibleProvider`
+creates a client per call so that a user's key never lives in a shared client, its retry
+policy (two retries, 60 s per request) is the SDK's, and its error messages can echo request
+details, so they are scrubbed before they are stored or logged
+([ADR 0008](docs/adr/0008-llm-port-byok.md)). A hand-written client would mean reimplementing
+stream parsing and retries.
+
+**Built: an in-process job runner instead of a queue.** A generation runs as a job inside the
+API process (`JobRegistry`, `src/modules/messages/jobs.ts`), started after the admission
+transaction commits, with a `MessageBus` that holds the text so far. A queue (pg-boss, BullMQ
+on Redis, or a jobs table with `SKIP LOCKED`) would scale out, but adds a second moving part,
+leases, heartbeats, a sweeper and a hand-off between the worker and the request waiting for
+the answer. The cost is a single API process: capacity and live text are per process, and a
+restart loses the running generations. Correctness never depends on that memory: the row lock,
+the partial unique index and fenced writes in PostgreSQL decide every outcome
+([ADR 0003](docs/adr/0003-single-process-db-truth.md)). Until crash recovery
+([#6](https://github.com/shaun0457/llm-chat-backend/issues/6)) lands, though, an answer cut
+off by a restart stays `generating` and keeps its session busy.
+
 ## Test
 
 ```sh
@@ -323,33 +427,128 @@ pnpm test:unit   # unit and lint tests only; no Docker needed
 pnpm test        # everything; Docker must be running (testcontainers)
 ```
 
-The test suite never calls a real LLM provider; the boundary is faked at two levels. Service and
-integration tests inject `FakeLlmProvider` (`test/helpers/fake-llm.ts`), a scriptable
-implementation of the provider port: deltas, delays, gates, hangs, failures, a missing finish
-event, and usage, while it records the requests, abort signals and API keys it received. The
-OpenAI-compatible adapter itself is tested from the other side of the port, against an
-[msw](https://mswjs.io/)-mocked upstream HTTP API (`test/helpers/msw-openai.ts`): chunk
-arrangements, reasoning fields, 401/403, 429 then success, persistent 5xx, context overflow
-and timeouts. The sentinel tests combine the real adapter with msw. Separately, an opt-in live check
-calls every catalogued NVIDIA model: `LLM_LIVE_TESTS=1 NVIDIA_API_KEY=… pnpm test:unit`. It is
-skipped otherwise. In CI only the `live-llm` workflow runs it, with the repository secret: on
-pushes to `main`, by hand, or on a pull request labelled `live-llm`.
+Integration tests need Docker; `pnpm test` runs at most two test files at a time to keep memory
+low on a laptop.
 
-Integration tests start one PostgreSQL 17 container per run, migrate a template database once,
-and give every test file its own copy, so files run in parallel without seeing each other's
-rows. They drive the app in-process through `buildApp()` and `inject()` against that real
-database; process tests run the built server and migration entry as child processes. CI runs
-the same commands plus a container build-and-start check, a migration drift check, a
-`docker compose` smoke test, a production dependency audit, a gitleaks secret scan and a
-commit-message check. CodeQL runs once the repository is public; code scanning on private
-repositories needs a paid license.
+### Testing approach
+
+Tests check external behaviour: status codes, headers, bodies, and rows as the API returns them.
+They do not assert on internal calls, map contents or private state. Two boundary observations
+are allowed because some guarantees can only be seen there: the fake provider records the
+requests it receives (to check what context a turn sent), and read-only database queries check
+that no column holds an API key.
+
+| Layer            | Where                    | What it covers                                                                                                                                  |
+| ---------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit             | `test/unit`, `test/lint` | Pure pieces: configuration, catalog, `Prefer` parsing, context assembly, cursors, the scrubber, the OpenAPI file; the dependency-direction rule |
+| Adapter contract | `test/adapters`          | `OpenAiCompatibleProvider` against an msw-mocked upstream API                                                                                   |
+| Integration      | `test/integration`       | Nearly every behaviour, through HTTP: `buildApp()` and `inject()` against a real PostgreSQL 17, with a fake LLM provider                        |
+| Process          | `test/process`           | The built server and migration entries as child processes, and Node's server timeouts on a real listening socket                                |
+| CI only          | `.github/workflows`      | The container image, the `docker compose` stack, migration and OpenAPI drift, and the live hosted-model checks                                  |
+
+Integration tests start one PostgreSQL 17 container per run (testcontainers), migrate a
+template database once, and give every test file its own copy, so files run in parallel
+without seeing each other's rows. Locks, unique constraints and conditional updates are
+therefore tested for real, not against a mock database.
+
+**How the LLM is faked.** The test suite never calls a real LLM provider; the boundary is faked
+at two levels. Service and integration tests inject `FakeLlmProvider`
+(`test/helpers/fake-llm.ts`), a scriptable implementation of the provider port: deltas, delays,
+gates, hangs, failures, a missing finish event, and usage, while it records the requests, abort
+signals and API keys it received. The OpenAI-compatible adapter itself is tested from the other
+side of the port, against an [msw](https://mswjs.io/)-mocked upstream HTTP API
+(`test/helpers/msw-openai.ts`): chunk arrangements, reasoning fields, 401/403, 429 then
+success, persistent 5xx, context overflow and timeouts. The sentinel tests combine the real
+adapter with msw.
+
+**Against the real provider.** An opt-in live check calls every catalogued NVIDIA model through
+the adapter: `LLM_LIVE_TESTS=1 NVIDIA_API_KEY=… pnpm test:unit`. It is skipped otherwise. In CI
+only the `live-llm` workflow runs it, with the repository secret: on pushes to `main`, by hand,
+or on a pull request from this repository labelled `live-llm`. A second job of that workflow
+starts the built image with `docker compose`, the server's key and a CI-only catalog copy that
+caps answers at 32 tokens, creates an `nvidia` session and asks one question through
+`POST /sessions/:id/messages` (JSON, `Prefer: wait=150`). It passes only with a completed,
+non-empty answer, prints just the answer and its usage, and fails if a response or the
+container logs contain a key-shaped string. Neither job is a required check.
+
+**Not tested on purpose.** The quality of real model answers (the live checks prove the path,
+not the content); mutation testing; load and performance; running more than one API process,
+which is out of scope. A response-conformance test against the OpenAPI document and
+property-based tests are listed under [What I would do next](#what-i-would-do-next).
+
+CI runs the same commands plus a container build-and-start check, a migration drift check, an
+OpenAPI drift check, a `docker compose` smoke test, a production dependency audit, a gitleaks
+secret scan and a commit-message check. CodeQL runs once the repository is public; code
+scanning on private repositories needs a paid license.
 
 ## API documentation
 
 - Interactive docs: `GET /docs`
 - OpenAPI 3.1 document: `GET /openapi.json`
+- In the repository: [`docs/openapi.json`](docs/openapi.json), the same document with sorted
+  keys, readable without running anything
 
-Both are generated from the same zod schemas that validate requests. Errors use RFC 9457
-problem details (`application/problem+json`) with a stable `code` field.
+All three come from the same zod schemas that validate requests. Errors use RFC 9457 problem
+details (`application/problem+json`) with a stable `code` field.
+
+`pnpm docs:openapi` regenerates `docs/openapi.json` from the app factory with fixed test
+settings (no database, no `.env`), so every machine writes the same bytes. Any pull request
+that changes a route schema regenerates and commits it; otherwise the CI job `openapi-drift`
+fails with "docs/openapi.json is stale".
 
 Decisions are recorded in [`docs/adr`](docs/adr).
+
+## What I would do next
+
+A first version of this list; the final submission pass completes it.
+
+**Still being built for v1**, each as its own ticket:
+
+- Generation deadlines and crash recovery: a stuck call ends at a hard deadline, and an answer
+  cut off by a restart becomes `failed`/`interrupted`
+  ([#6](https://github.com/shaun0457/llm-chat-backend/issues/6))
+- Admission rules: an input-size budget, per-message provider and model overrides, and
+  per-process and per-provider capacity limits with 503
+  ([#7](https://github.com/shaun0457/llm-chat-backend/issues/7))
+- Streaming (SSE) and re-attaching to a running answer
+  ([#9](https://github.com/shaun0457/llm-chat-backend/issues/9))
+- Idempotent send with client-supplied message ids
+  ([#10](https://github.com/shaun0457/llm-chat-backend/issues/10))
+- A local model via Ollama as an optional compose profile
+  ([#11](https://github.com/shaun0457/llm-chat-backend/issues/11))
+- Stopping a generation when its session is deleted, retention of inactive sessions, rate
+  limits, security headers and CORS ([#12](https://github.com/shaun0457/llm-chat-backend/issues/12))
+- A public deployment of the demo ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14))
+
+**Extras after v1:**
+
+- Retrying a failed answer, made repeatable with `expectedAttempt`
+  ([#13](https://github.com/shaun0457/llm-chat-backend/issues/13))
+- `expectedLastMessageId` and 409 `stale_history`, so two tabs cannot talk over each other
+  ([#23](https://github.com/shaun0457/llm-chat-backend/issues/23))
+- SSE slow-consumer edge cases and a JSON-mode test of terminal-write exhaustion
+  ([#24](https://github.com/shaun0457/llm-chat-backend/issues/24))
+- Deployment hardening: a platform comparison, verified live SSE, proxy-timeout measurement,
+  client-IP verification and a post-deploy check
+  ([#25](https://github.com/shaun0457/llm-chat-backend/issues/25))
+- Submission extras: a response-conformance test against the OpenAPI document, more diagrams, a
+  load script and property-based tests
+  ([#26](https://github.com/shaun0457/llm-chat-backend/issues/26))
+
+**Deliberately out of scope:**
+
+- User accounts, authentication and per-user ownership. Sessions are global: anyone who can
+  reach the API can read, change or delete any session. Authentication would come first, before
+  any real users.
+- A per-session message queue: a busy session answers 409 instead.
+- Leases, heartbeats, a background sweeper or a job worker table, a generic `Idempotency-Key`
+  store, and more than one API instance with shared capacity limits. The database rules keep a
+  brief deploy overlap correct; these pay off only with several instances.
+- Storing or registering API keys on the server: a key lives in memory for one generation only.
+- A waiting room for busy providers: once capacity limits land
+  ([#7](https://github.com/shaun0457/llm-chat-backend/issues/7)), a full provider answers 503 at
+  once instead of queueing.
+- `Last-Event-ID` resumption of streams, streaming the model's reasoning, and branching or
+  editing messages (history is linear).
+- Metrics and tracing beyond structured logs, a frontend, and evaluating answer quality.
+- A native Anthropic adapter: optional, only after everything above.
