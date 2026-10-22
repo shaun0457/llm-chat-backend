@@ -96,7 +96,10 @@ jobs:
 
   live-e2e:
     name: Live hosted-LLM answer through the API
-    # The same guard as `live`: never for another label or a pull request from a fork.
+    # The same guard as `live`: never for another label or a pull request from a fork. This job
+    # builds and runs the PR's Dockerfile, docker-compose.yml and apps/server/src with the key in
+    # the api container, so before labelling also read the diff of those files, not only
+    # .github/, test/ and package.json: any of them could send the key elsewhere unnoticed.
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.label.name == 'live-llm' &&
@@ -130,7 +133,7 @@ jobs:
             '    environment:' \
             '      MODEL_CATALOG_PATH: /etc/llm-chat/models.json' \
             '    volumes:' \
-            "      - $RUNNER_TEMP/models.live.json:/etc/llm-chat/models.json:ro" \
+            "      - \"$RUNNER_TEMP/models.live.json:/etc/llm-chat/models.json:ro\"" \
             > "$RUNNER_TEMP/compose.live.yml"
           {
             echo "COMPOSE_PROJECT_NAME=live-e2e"
@@ -151,8 +154,9 @@ jobs:
             echo "started=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          docker compose up -d --no-build
+          # Before `up`: even a start that fails half-way gets its logs scanned for the key.
           echo "started=true" >> "$GITHUB_OUTPUT"
+          docker compose up -d --no-build
       - name: Wait for /health/ready (90 s)
         if: steps.start.outputs.started == 'true'
         shell: bash
@@ -196,10 +200,10 @@ jobs:
               || status=000
             echo "attempt $attempt: the send answered HTTP $status"
             case "$status" in
-              200 | 202 | 502) jq -e .assistantMessage "$body" > "$message" ;;
+              200 | 202 | 502) jq -e .assistantMessage "$body" > "$message" || echo '{}' > "$message" ;;
               *) echo '{}' > "$message" ;;
             esac
-            if [ "$status" = 202 ]; then
+            if [ "$status" = 202 ] && jq -e .id "$message" > /dev/null; then
               # Still generating: poll the assistant message for up to 60 s.
               mid=$(jq -er .id "$message")
               for _ in $(seq 1 12); do
@@ -236,6 +240,8 @@ jobs:
         if: always() && steps.start.outputs.started == 'true'
         shell: bash
         run: |
+          # NVIDIA keys start with nvapi-; GitHub additionally masks the exact secret value.
+          mkdir -p "$RUNNER_TEMP/live-e2e"
           docker compose logs --no-color > "$RUNNER_TEMP/live-e2e/compose.log" 2>&1 || true
           if grep -rq 'nvapi-' "$RUNNER_TEMP/live-e2e"; then
             echo "::error::A response or the container logs contain a key-shaped string: rotate NVIDIA_API_KEY and delete this run's logs."
