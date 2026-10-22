@@ -52,7 +52,10 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           "server shuts down; the wait only decides the response. 404 session_not_found; 409 session_busy while " +
           "an earlier answer in the session is still being generated; 422 " +
           "provider_unavailable or model_not_supported when the session's settings no longer " +
-          "resolve; 503 server_busy (Retry-After) while the server is shutting down.",
+          "resolve, llm_credential_missing when the provider needs a key and neither " +
+          "X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed " +
+          "X-LLM-Api-Key (its value is never echoed); 503 server_busy (Retry-After) while the " +
+          "server is shutting down.",
         tags: ["messages"],
         params: sessionIdParams,
         headers: sendMessageHeaders,
@@ -94,6 +97,7 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
       const preferences = parsePrefer(prefer === undefined ? [] : [prefer]);
       const outcome = await service.send(request.params.id, request.body, {
         waitMs: effectiveWaitMs(preferences, jsonWait),
+        apiKey: request.headers["x-llm-api-key"],
       });
       const applied = preferenceApplied(preferences, jsonWait);
       const headers: Record<string, string> =

@@ -100,6 +100,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     jobs,
     attach: createAttach({ jobs, readTurn: (assistantId) => findTurn(db.drizzle, assistantId) }),
     defaultSystemPrompt: config.defaultSystemPrompt,
+    operatorKeys: config.operatorKeys,
   });
   void app.register(messagesRoutes, {
     service: messages,

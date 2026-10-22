@@ -58,12 +58,14 @@ function untilAborted(signal: AbortSignal): Promise<never> {
 
 /**
  * A scriptable LLM provider for tests. Each call takes the next queued script (`script()`),
- * or `fallback` once the queue is empty. Records every request and abort signal it receives:
- * the boundary observation tests use to check context assembly and cancellation.
+ * or `fallback` once the queue is empty. Records every request, abort signal and API key it
+ * receives: the boundary observation tests use to check context assembly, cancellation and
+ * which credential a generation was given.
  */
 export class FakeLlmProvider implements LlmProvider {
   readonly requests: LlmRequest[] = [];
   readonly signals: AbortSignal[] = [];
+  readonly apiKeys: Array<string | null> = [];
   readonly #queue: FakeScript[] = [];
 
   constructor(
@@ -80,6 +82,7 @@ export class FakeLlmProvider implements LlmProvider {
   stream(request: LlmRequest, options: LlmStreamOptions): AsyncIterable<LlmEvent> {
     this.requests.push(request);
     this.signals.push(options.signal);
+    this.apiKeys.push(options.apiKey);
     return this.#run(this.#queue.shift() ?? this.fallback, options.signal);
   }
 
