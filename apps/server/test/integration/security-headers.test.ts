@@ -125,6 +125,24 @@ describe("security headers", () => {
       expect(other.headers["access-control-allow-origin"]).toBeUndefined();
     });
 
+    it("keeps Vary: Origin next to the send route's Vary: Accept", async () => {
+      start({ CORS_ORIGINS: "https://a.example, https://b.example" });
+
+      // Answered by validation, after every onRequest hook has run.
+      const response = await app.inject({
+        method: "POST",
+        url: "/sessions/not-a-uuid/messages",
+        headers: { "origin": "https://a.example", "content-type": "application/json" },
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(400);
+      const vary = String(response.headers.vary)
+        .toLowerCase()
+        .split(/\s*,\s*/);
+      expect(vary).toEqual(expect.arrayContaining(["origin", "accept"]));
+    });
+
     it("answers a preflight from a listed origin for a send with its headers", async () => {
       start({ CORS_ORIGINS: "https://a.example" });
       const preflight = (origin: string) =>

@@ -57,8 +57,14 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
       onRequest: [
         // Before validation, so every answer of this route says that Accept chose its form;
         // an event stream keeps it, as headers set before the hijack are copied (sse.ts).
+        // Appended, not set: CORS has already put Origin there when it allows a list of origins.
         async (_request, reply) => {
-          void reply.header("vary", "Accept");
+          const current = reply.getHeader("vary");
+          const values = current === undefined ? [] : String(current).split(/\s*,\s*/);
+          if (!values.some((value) => value.toLowerCase() === "accept")) {
+            values.push("Accept");
+          }
+          void reply.header("vary", values.filter((value) => value !== "").join(", "));
         },
         // After the general limit, an app-wide hook, which runs first.
         sendLimit,
