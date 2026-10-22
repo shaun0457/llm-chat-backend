@@ -29,7 +29,8 @@ repository runs and is documented at every step; what is not built yet is listed
 
 ## Prerequisites
 
-- Docker (Compose v2), for the one-command stack and the integration tests
+- Docker with Compose v2.20 or later (the stack uses `depends_on: required: false`), for the
+  one-command stack and the integration tests
 - Node.js 22 (the image uses 22.23.3) and pnpm 9 (`corepack enable`), to develop and test
 
 ## Run with Docker
@@ -614,10 +615,10 @@ again.
 ## Local model (Ollama)
 
 An optional compose profile runs a small model on your own machine, with no key and no hosted
-provider:
+provider. One command turns it on:
 
 ```sh
-PROVIDERS_ENABLED=demo,ollama docker compose --profile local-llm up --build
+docker compose --env-file local-llm.env up --build
 curl -X POST localhost:3000/sessions -H 'content-type: application/json' \
   -d '{"provider":"ollama"}'
 curl -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
@@ -631,12 +632,15 @@ model, `qwen2.5:0.5b` (about 400 MB). The API starts only after that job has exi
 starts find the model in the volume and download nothing again. Without the profile none of
 this runs and the stack is unchanged.
 
-The profile does not enable the provider by itself: `PROVIDERS_ENABLED`, on the command line as
-above or in `.env`, adds `ollama` to the enabled providers, and `demo` stays the default
-provider. Enabled without the profile, `ollama` stays listed but every answer fails as
-`llm_upstream_error`, because nothing answers at its address. Ollama is on its own compose
-network with the api; PostgreSQL is not on it. `docker compose --profile local-llm down -v`
-also removes the model volume.
+[`local-llm.env`](local-llm.env) sets two things: `COMPOSE_PROFILES=local-llm`, which starts
+the profile, and `PROVIDERS_ENABLED=demo,ollama`, which enables the provider; `demo` stays the
+default provider and every other setting keeps its default. With `--env-file`, compose does
+not read `.env`; to keep your own settings too, pass both, yours first:
+`docker compose --env-file .env --env-file local-llm.env up --build`. The profile alone does
+not enable the provider, and enabled without the profile, `ollama` stays listed but every
+answer fails as `llm_upstream_error`, because nothing answers at its address. Ollama is on its
+own compose network with the api; PostgreSQL is not on it.
+`docker compose --env-file local-llm.env down -v` also removes the model volume.
 
 The compose file repeats three catalog values: the model it pulls, `OLLAMA_NUM_PARALLEL`
 (the catalog's `maxConcurrency`) and the context (twice the `contextWindow`). A unit test
@@ -652,9 +656,13 @@ the same changes in the compose file.
 - **Hardware.** CPU only; GPU configuration is out of scope. The model needs about 1 GB of
   memory with two 8,192-token contexts. Any machine that runs Docker comfortably can run it,
   but answers are slow.
-- **Speed.** Short answers take seconds on a laptop CPU; a 512-token answer takes far longer.
-  The `local-llm` workflow measures the time to the first token and to the full answer on a
-  GitHub runner on every run (its job summary).
+- **Speed.** Measured on a GitHub runner with 2 CPUs and 7.8 GiB of memory (2026-10-22,
+  [run 39755308412](https://github.com/shaun0457/llm-chat-backend/actions/runs/39755308412)):
+  the model download took 8 s; the first question took 1.1 s to the first token and 1.2 s in
+  all, including loading the model; with the model loaded, a short JSON answer took 0.16 s.
+  Two 512-token answers at once took about 36 s each, about 14 tokens per second per answer.
+  The whole CI job, with a cold model cache, took 3 min 22 s. A slower machine takes
+  proportionally longer, still well inside the 180 s deadline.
 - **The limit is 2.** Ollama answers `OLLAMA_NUM_PARALLEL=2` requests at a time, and the
   catalog gives `ollama` the same number as `maxConcurrency`. A third concurrent send gets
   503 `provider_busy` with `Retry-After: 10` at once and writes nothing. Without the limit,
@@ -676,7 +684,9 @@ the same changes in the compose file.
 one number." once as an event stream, which must end with `done`, and once as JSON with
 `Prefer: wait=180`, where a 202 is followed by polling. Both must end in a completed, non-empty
 answer without reasoning markers. Then two long answers run at once: a third send must get
-503 `provider_busy`, and both answers must stop at the 512-token limit. The workflow runs on
+503 `provider_busy`; at least one of the two answers must stop at the 512-token limit (finish
+reason `length`), and neither may go past it. The workflow starts the stack with the command
+above. It runs on
 pushes to `main`, on pull requests that touch provider, catalog or compose files, on pull
 requests from this repository labelled `local-llm`, and by hand. It caches the model between
 runs and is not a required check. The script works against any base URL and provider, for
