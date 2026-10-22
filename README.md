@@ -407,7 +407,9 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot hav
   (rolled back), otherwise when the answer's job ends, however it ends.
 - **The counters are per process**, in memory. The service is designed to run as one process
   (see [ADR 0003](docs/adr/0003-single-process-db-truth.md)); while a deploy briefly overlaps
-  two processes the effective limits double.
+  two processes the effective limits double. Every active answer also uses database
+  connections (history read, flushes, final write), so keep `MAX_ACTIVE_GENERATIONS` below the
+  connection pool's size (node-postgres' default of 10).
 - **History budget** = context window − `maxOutputTokens` − 10 % of the context window − the
   system prompt − the new message − 8 tokens per message sent. A negative budget means the
   message cannot fit at all: 422 `input_too_long` before anything is written. Otherwise the

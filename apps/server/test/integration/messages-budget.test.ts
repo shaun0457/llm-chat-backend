@@ -82,6 +82,8 @@ describe("history budget", () => {
     expect(response.statusCode).toBe(422);
     expect(response.headers["content-type"]).toContain("application/problem+json");
     expect(response.json()).toMatchObject({ status: 422, code: "input_too_long" });
+    // The system prompt counts too, so the detail names both.
+    expect(response.json().detail).toContain("system prompt");
     expect(await allMessages(app, session.id)).toEqual(before);
     expect(fake.requests).toHaveLength(1);
   });

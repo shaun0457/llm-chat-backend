@@ -199,7 +199,7 @@ export function createMessagesService(deps: {
       throw new ProblemError(
         422,
         "input_too_long",
-        "The message is too long for the model's context window",
+        "The message and the system prompt do not fit the model's context window with its output reservation",
       );
     }
     return budget;

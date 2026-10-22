@@ -43,7 +43,8 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
         summary: "Send a message and wait a bounded time for the answer",
         description:
           "Stores the user message and a generating assistant message, then generates the " +
-          "answer with the session's provider and model. The response waits for the answer " +
+          "answer with the session's provider and model, or with the body's provider/model " +
+          "for this turn only. The response waits for the answer " +
           "at most the effective wait (Prefer: wait=N, otherwise the server's default wait, " +
           "always capped by its maximum; none with Prefer: respond-async): 200 with both " +
           "messages when it " +
@@ -52,11 +53,14 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           "server shuts down (the answer then fails as cancelled); the wait only decides the " +
           "response. 404 session_not_found; 409 session_busy while " +
           "an earlier answer in the session is still being generated; 422 " +
-          "provider_unavailable or model_not_supported when the session's settings no longer " +
-          "resolve, llm_credential_missing when the provider needs a key and neither " +
+          "provider_unavailable or model_not_supported when the requested or the session's " +
+          "pair does not resolve, input_too_long when the message and the system prompt " +
+          "cannot fit the model's context window with its output reservation, " +
+          "llm_credential_missing when the provider needs a key and neither " +
           "X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed " +
-          "X-LLM-Api-Key (its value is never echoed); 503 server_busy (Retry-After) while the " +
-          "server is shutting down.",
+          "X-LLM-Api-Key (its value is never echoed); 503 with Retry-After: 10, server_busy " +
+          "when the server is at its limit of active answers or shutting down, provider_busy " +
+          "when the turn's provider is at its limit. Nothing is stored on any of these errors.",
         tags: ["messages"],
         params: sessionIdParams,
         headers: sendMessageHeaders,

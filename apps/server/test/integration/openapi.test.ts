@@ -101,6 +101,11 @@ describe("API documentation", () => {
     expect(send.properties.provider.description).toContain(
       "Alone: that provider's default model, including when it is the session's provider",
     );
+    const sendDescription: string = paths["/sessions/{id}/messages"].post.description;
+    for (const code of ["input_too_long", "provider_busy", "server_busy", "Retry-After: 10"]) {
+      expect(sendDescription).toContain(code);
+    }
+    expect(sendDescription).toContain("provider/model for this turn only");
   });
 
   it("documents Prefer, the three send outcomes and their headers, and the uncached poll target", async () => {
