@@ -28,16 +28,16 @@ function catalogError(input: unknown): CatalogError {
 }
 
 describe("model catalog", () => {
-  it("ships only NVIDIA models that passed the live check (ADR 0008, V3)", () => {
+  it("ships nemotron-3-ultra as the only NVIDIA model, which passed the live check (#36)", () => {
     // Re-run the live-llm workflow before adding a model here.
     const catalog = loadCatalog(DEFAULT_MODEL_CATALOG_PATH);
 
     expect(catalog.provider("nvidia")).toMatchObject({
       requiresKey: true,
-      defaultModel: "meta/llama-3.2-11b-vision-instruct",
+      defaultModel: "nvidia/nemotron-3-ultra-550b-a55b",
     });
     expect(catalog.provider("nvidia")?.models.map((model) => model.id)).toEqual([
-      "meta/llama-3.2-11b-vision-instruct",
+      "nvidia/nemotron-3-ultra-550b-a55b",
     ]);
   });
 
