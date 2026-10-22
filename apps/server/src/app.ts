@@ -11,7 +11,7 @@ import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
 import { registerApiDocs } from "./http/plugins.js";
 import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-details.js";
-import { type Capacity, createCapacity } from "./llm/capacity.js";
+import { capacityFor } from "./llm/capacity.js";
 import type { ModelCatalog } from "./llm/catalog.js";
 import type { ProviderRegistry } from "./llm/registry.js";
 import { healthRoutes } from "./modules/health/routes.js";
@@ -77,21 +77,6 @@ const REDACTED_PATHS = [
 function requestId(request: IncomingMessage): string {
   const incoming = request.headers[REQUEST_ID_HEADER];
   return typeof incoming === "string" && VALID_REQUEST_ID.test(incoming) ? incoming : randomUUID();
-}
-
-/**
- * The process and provider limits: MAX_ACTIVE_GENERATIONS in all, and per provider its
- * catalog maxConcurrency, else MAX_ACTIVE_PER_PROVIDER.
- */
-export function capacityFor(
-  config: Pick<AppConfig, "maxActiveGenerations" | "maxActivePerProvider">,
-  catalog: ModelCatalog,
-): Capacity {
-  return createCapacity({
-    maxActive: config.maxActiveGenerations,
-    perProvider: (provider) =>
-      catalog.provider(provider)?.maxConcurrency ?? config.maxActivePerProvider,
-  });
 }
 
 /** Returns a configured app that is not listening; only `server.ts` calls `listen`. */

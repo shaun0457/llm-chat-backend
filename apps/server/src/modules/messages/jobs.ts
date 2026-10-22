@@ -28,10 +28,10 @@ import { TerminalWriteError, writeWithinBudget } from "./terminal-write.js";
  * A slot of generation capacity (process and provider), held from admission to the end of the
  * job and released exactly once (on rollback, or in the job's `finally`).
  */
-export type Reservation = { release(): void };
+export type Reservation = Readonly<{ release: () => void }>;
 
 /** Why reserve() granted no slot: shutdown has begun, or a capacity limit is reached. */
-export type ReserveRefusal = { rejected: "shutting_down" } | CapacityRejection;
+export type ReserveRefusal = Readonly<{ rejected: "shutting_down" }> | CapacityRejection;
 
 const TIMEOUT_DETAIL = "The answer was not finished within the time limit.";
 const CANCELLED_DETAIL = "The server shut down before the answer was finished.";

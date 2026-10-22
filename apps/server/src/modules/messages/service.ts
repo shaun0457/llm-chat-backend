@@ -275,9 +275,17 @@ export function createMessagesService(deps: {
     if (!("rejected" in reservation)) {
       return reservation;
     }
-    throw reservation.rejected === "provider_busy"
-      ? providerBusy(provider, reservation.limit)
-      : serverBusy();
+    switch (reservation.rejected) {
+      case "provider_busy":
+        throw providerBusy(provider, reservation.limit);
+      case "server_busy":
+      case "shutting_down":
+        throw serverBusy();
+      default: {
+        const unhandled: never = reservation;
+        throw new Error(`unhandled reservation refusal: ${JSON.stringify(unhandled)}`);
+      }
+    }
   }
 
   async function admit(
@@ -292,7 +300,7 @@ export function createMessagesService(deps: {
         const session = await lockStep(tx, sessionId);
         await reclaimStep(tx, sessionId);
         const { content } = input;
-        const resolved = resolveStep(session, input);
+        const resolved = resolveStep(session, { provider: input.provider, model: input.model });
         const systemPrompt = systemPromptOf(session);
         const budget = budgetStep(resolved, systemPrompt, content);
         const apiKey = credentialStep(resolved, headerKey);

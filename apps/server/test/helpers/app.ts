@@ -1,9 +1,10 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
-import { type AppDeps, buildApp, capacityFor } from "../../src/app.js";
+import { type AppDeps, buildApp } from "../../src/app.js";
 import { type Clock, systemClock } from "../../src/clock.js";
 import { type AppConfig, loadConfig } from "../../src/config.js";
 import { type Db, createDb } from "../../src/db/client.js";
+import { capacityFor } from "../../src/llm/capacity.js";
 import { type ModelCatalog, loadCatalog } from "../../src/llm/catalog.js";
 import { DemoProvider } from "../../src/llm/demo.js";
 import { createRegistry } from "../../src/llm/registry.js";

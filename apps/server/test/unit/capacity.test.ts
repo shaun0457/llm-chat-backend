@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { type Capacity, type Reservation, createCapacity } from "../../src/llm/capacity.js";
+import { type Capacity, type CapacitySlot, createCapacity } from "../../src/llm/capacity.js";
 
-function reserved(capacity: Capacity, provider: string): Reservation {
+function reserved(capacity: Capacity, provider: string): CapacitySlot {
   const result = capacity.tryReserve(provider);
   if ("rejected" in result) {
     throw new Error(`expected a reservation, got ${result.rejected}`);

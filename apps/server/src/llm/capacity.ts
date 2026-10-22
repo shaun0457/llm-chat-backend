@@ -1,8 +1,17 @@
-/** One active generation's slot, for one provider. `release()` gives it back once. */
-export type Reservation = { readonly provider: string; release(): void };
+import type { AppConfig } from "../config.js";
+import type { ModelCatalog } from "./catalog.js";
+
+/**
+ * One active generation's slot, for one provider. `release()` gives it back once. The job
+ * registry wraps it in its own Reservation, which admission and the job hold.
+ */
+export type CapacitySlot = Readonly<{ provider: string; release: () => void }>;
 
 /** Why no slot was granted, and the limit that was reached. */
-export type CapacityRejection = { rejected: "server_busy" | "provider_busy"; limit: number };
+export type CapacityRejection = Readonly<{
+  rejected: "server_busy" | "provider_busy";
+  limit: number;
+}>;
 
 /**
  * In-memory counters of active generations: one for the whole process and one per provider.
@@ -13,15 +22,15 @@ export interface Capacity {
    * Synchronous check-and-increment of both counters. The process limit is checked first, so
    * when both are full the answer is server_busy. Nothing is counted when it refuses.
    */
-  tryReserve(provider: string): Reservation | CapacityRejection;
+  tryReserve(provider: string): CapacitySlot | CapacityRejection;
 }
 
-export type CapacityLimits = {
+export type CapacityLimits = Readonly<{
   /** Active generations in this process at most. */
   maxActive: number;
   /** Active generations per provider at most. */
   perProvider: (provider: string) => number;
-};
+}>;
 
 export function createCapacity(limits: CapacityLimits): Capacity {
   let active = 0;
@@ -58,4 +67,19 @@ export function createCapacity(limits: CapacityLimits): Capacity {
       };
     },
   };
+}
+
+/**
+ * The configured limits: MAX_ACTIVE_GENERATIONS in all, and per provider its catalog
+ * maxConcurrency, else MAX_ACTIVE_PER_PROVIDER.
+ */
+export function capacityFor(
+  config: Pick<AppConfig, "maxActiveGenerations" | "maxActivePerProvider">,
+  catalog: ModelCatalog,
+): Capacity {
+  return createCapacity({
+    maxActive: config.maxActiveGenerations,
+    perProvider: (provider) =>
+      catalog.provider(provider)?.maxConcurrency ?? config.maxActivePerProvider,
+  });
 }
