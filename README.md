@@ -572,8 +572,8 @@ other OpenAI-compatible server can be added the same way. Only the answer conten
 `nemotron-3-ultra` reasons before it answers, and its reasoning (`reasoning_content` or
 `reasoning`) is never read: it is not stored, returned, streamed, logged or sent as history.
 While the model reasons, an event stream shows only `message.created` and `: ping` comments,
-and a JSON client simply waits. An answer that ends without any text, typically because the
-reasoning used up `maxOutputTokens`, fails as `llm_upstream_error` instead of completing empty.
+and a JSON client simply waits. An answer that has no text after reasoning, or that used up
+`maxOutputTokens` before any text, fails as `llm_upstream_error` instead of completing empty.
 Answers are the model's text as written, which may include Markdown such as `**bold**`.
 `GET /providers` lists the enabled providers, their models and `requiresKey`; it never says
 whether the server has a key of its own.
@@ -630,12 +630,12 @@ again.
 
 **Failures** are stored on the assistant message and answered with 502 in JSON mode:
 
-| `errorCode`            | When                                                                                           |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `llm_auth_failed`      | the provider rejected the key (401/403); never retried                                         |
-| `llm_context_overflow` | the provider said the input is too long for the model's context                                |
-| `llm_timeout`          | no response headers within 60 s, on each of three attempts; or `GENERATION_DEADLINE_MS` passed |
-| `llm_upstream_error`   | 429, 5xx, a connection error, a malformed stream, no finish reason, or no answer text at all   |
+| `errorCode`            | When                                                                                                                          |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `llm_auth_failed`      | the provider rejected the key (401/403); never retried                                                                        |
+| `llm_context_overflow` | the provider said the input is too long for the model's context                                                               |
+| `llm_timeout`          | no response headers within 60 s, on each of three attempts; or `GENERATION_DEADLINE_MS` passed                                |
+| `llm_upstream_error`   | 429, 5xx, a connection error, a malformed stream, no finish reason, or no answer text after reasoning or at the output budget |
 
 429, 5xx, connection errors and timeouts are retried twice by the SDK before they fail.
 `errorDetail` is a short, scrubbed message (at most 500 characters), for example

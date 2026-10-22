@@ -45,8 +45,8 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
     context length or window → `llm_context_overflow`;
   - an SDK timeout → `llm_timeout`;
   - 429, 5xx, connection errors, error events inside the stream, malformed streams, a missing
-    finish reason, and (since the amendment for issue #36) a stream that finishes without any
-    answer text → `llm_upstream_error`.
+    finish reason, and (since the amendment for issue #36) a stream without answer text that
+    reasoned or used up its output budget → `llm_upstream_error`.
 
   The SDK keeps only an OpenAI-style `error` object from an error body, so the adapter passes
   the SDK a `fetch` that remembers the last failed response body of that call. This finds the
@@ -219,12 +219,15 @@ retries:
   confirms that a request without `chat_template_kwargs` reasons and answers exactly like one
   with `enable_thinking: true`. The catalog therefore needs no per-model request options, and
   its schema is unchanged.
-- **An answer without text fails.** A stream that finishes without any `content` text throws
-  `llm_upstream_error`: "The model used its whole output budget before it started the answer."
-  for finish reason `length`, otherwise "The model provider finished without any answer text."
-  The existing code fits best: the other codes name a key, the input length or time, while
-  here the upstream's answer is unusable. This holds for every OpenAI-compatible provider: an
-  empty completed answer would otherwise be stored and sent as history in later turns.
+- **No answer after reasoning fails.** A stream with no answer text (whitespace does not
+  count) throws `llm_upstream_error` when it finished with `length` ("The model used its whole
+  output budget before it started the answer.") or when the model reasoned ("The model reasoned
+  but finished without any answer text."). Only the presence of a reasoning field is noted,
+  never its text. The existing code fits best: the other codes name a key, the input length or
+  time, while here the upstream's answer is unusable. A stream without reasoning that finishes
+  otherwise without text (for example `content_filter`) completes as before, so a provider's
+  refusal does not turn into a 502 that clients would retry. The rule is in the
+  OpenAI-compatible adapter, the only adapter that can see reasoning.
 - Answers may contain Markdown (for example `**bold**`); they are stored and returned as the
   model wrote them.
 
@@ -237,8 +240,9 @@ and the sources named):
   The hosted API does not reveal its limit: its public `GET /v1/models` lists only id, object,
   created and owned_by, and a request with `max_tokens` 4,000,000 was accepted and answered
   normally (35 completion tokens), so the bound is not checked against a request. The catalog
-  takes the documented default of 262,144; were the hosted deployment shorter, an overflow
-  would fail as `llm_context_overflow`. A prompt that large was not sent: it would cost about
+  takes the documented default of 262,144. Were the hosted deployment shorter, an overflow
+  would fail as `llm_context_overflow` only if NVIDIA reports it; it might also cut the history
+  silently. Neither was observed. A prompt that large was not sent: it would cost about
   a quarter of a million tokens per check.
 - **V2 reasoning size.** Four prompts (one short sentence, at most 150 characters, three
   sentences, a short logic puzzle), each without options and with `enable_thinking: true`:
@@ -260,8 +264,9 @@ and the sources named):
   per-attempt timeout, the two retries and the 180 s generation deadline stay unchanged.
 
 **Tests.** `test/adapters/openai-compatible.test.ts` ("contract.reasoning": reasoning in either
-field never becomes text and keeps finish reason and usage; a budget that ends in reasoning, or
-a stream without text, fails with `llm_upstream_error`).
+field never becomes text and keeps finish reason and usage; a budget that ends in reasoning,
+reasoning followed by whitespace only or by `stop`, and `length` before any text fail with
+`llm_upstream_error`; a stream without reasoning and without text still finishes as before).
 `test/integration/messages-reasoning.test.ts`: for both field names, over JSON and SSE, the
 stored and returned answer and the SSE deltas hold only the answer, the next turn's history
 holds only the answer, no log line, response or database row contains reasoning, and a budget
