@@ -259,6 +259,42 @@ describe("SSE sends", () => {
       expect(eventsOf(frames).at(-1)?.event).toBe("done");
     });
   });
+
+  describe("sse.slow-consumer", () => {
+    it("closes a connection that stops reading before its pending bytes pass the limit; the answer still completes", async () => {
+      const logs = captureLogs();
+      // No flush while the answer grows to 16 MiB: only its final state is written.
+      await start({ LOG_LEVEL: "warn", FLUSH_INTERVAL_MS: "60000" }, logs.stream);
+      // Far more than the operating system buffers for a client that does not read.
+      const piece = "x".repeat(4096);
+      const count = 4096;
+      fake.script({ deltas: Array.from({ length: count }, () => piece) });
+      const session = await createSession(app);
+
+      const stream = await streamSend(session.id, "Hi");
+      const created = await stream.nextEvent();
+      const { assistantMessage } = created?.data as TurnBody;
+      // The client reads nothing more until the answer is stored.
+      const stored = await eventually(
+        () => getMessage(app, session.id, assistantMessage.id),
+        (response) => response.json().status !== "generating",
+        30_000,
+      );
+      const { frames } = await stream.drain();
+
+      expect(stored.json().status).toBe("completed");
+      expect(stored.json().content).toHaveLength(piece.length * count);
+      const events = eventsOf(frames);
+      expect(events.length).toBeLessThan(count);
+      expect(events.map(({ event }) => event)).not.toContain("done");
+      const closing = logs
+        .entries()
+        .filter((entry) => entry.msg === "closing an event stream whose client does not keep up");
+      expect(closing).toHaveLength(1);
+      expect(closing[0]).toMatchObject({ limitBytes: 262_144 });
+      expect(closing[0]?.pendingBytes).toBeLessThanOrEqual(262_144);
+    }, 60_000);
+  });
 });
 
 function text(data: unknown): string {
