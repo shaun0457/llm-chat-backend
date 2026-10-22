@@ -24,6 +24,12 @@ export const sendMessageBody = z.strictObject({ content });
 
 /** Fastify merges the validated headers over the raw ones, so the other headers stay as sent. */
 export const sendMessageHeaders = z.object({
+  "accept": z
+    .string()
+    .optional()
+    .describe(
+      "text/event-stream for an event stream of the answer; anything else (or none) for JSON",
+    ),
   "prefer": z
     .string()
     .optional()
@@ -108,6 +114,20 @@ export const failedTurnProblem = z
     assistantMessage: messageResponse,
   })
   .describe("The answer failed: problem details carrying both stored messages");
+
+/** The event stream, for the OpenAPI document only: hijacked replies are never serialised. */
+export const sseResponse = z
+  .string()
+  .describe(
+    "Server-sent events, each `event: <name>` plus one `data:` line of JSON: " +
+      "message.created { userMessage, assistantMessage } (the snapshot: content so far), " +
+      "delta { id, attempt, text } (only text after the snapshot), " +
+      "done { assistantMessage } (completed, with usage), " +
+      "error { code, detail, assistantMessage } (failed), " +
+      "message.detached { assistantMessage } (generating where this server cannot follow " +
+      "it; poll the message). A `: ping` comment every 15 s (SSE_PING_INTERVAL_MS). No " +
+      "event ids: a reconnecting client re-attaches and gets a fresh snapshot.",
+  );
 
 export const messagePage = z.object({
   items: z.array(messageResponse).describe("Ascending seq"),

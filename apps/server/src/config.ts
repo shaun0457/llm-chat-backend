@@ -58,6 +58,9 @@ const envSchema = z.object({
   TERMINAL_STATEMENT_TIMEOUT_MS: timingMs(3_000),
   TERMINAL_WRITE_BUDGET_MS: timingMs(10_000),
   RECLAIM_GRACE_MS: timingMs(50_000),
+  SSE_PING_INTERVAL_MS: z.coerce.number().int().min(10).max(MAX_TIMING_MS).default(15_000),
+  // At least one large frame must fit; at most 64 MiB per connection.
+  SSE_BUFFER_LIMIT_BYTES: z.coerce.number().int().min(16_384).max(67_108_864).default(262_144),
   // Server configuration only: clients can never choose where a provider call goes.
   NVIDIA_BASE_URL: z
     .url({ protocol: /^https?$/ })
@@ -107,6 +110,13 @@ export type AppConfig = Readonly<{
    * (database clock) has no live job and is failed as `interrupted` by stale reclaim.
    */
   staleThresholdMs: number;
+  /** How often a quiet event stream gets a `: ping` comment. */
+  ssePingIntervalMs: number;
+  /**
+   * Bytes an event stream may have waiting to be sent to its client; a frame that would go
+   * beyond closes that connection (a slow consumer), never the generation.
+   */
+  sseBufferLimitBytes: number;
   /** Where the nvidia provider's OpenAI-compatible API lives. */
   nvidiaBaseUrl: string;
   /** `<PROVIDER>_API_KEY` of each enabled provider that has one, by provider id. Secrets. */
@@ -216,6 +226,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     reclaimGraceMs: parsed.RECLAIM_GRACE_MS,
     staleThresholdMs:
       parsed.GENERATION_DEADLINE_MS + parsed.TERMINAL_WRITE_BUDGET_MS + parsed.RECLAIM_GRACE_MS,
+    ssePingIntervalMs: parsed.SSE_PING_INTERVAL_MS,
+    sseBufferLimitBytes: parsed.SSE_BUFFER_LIMIT_BYTES,
     nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,
     operatorKeys: readOperatorKeys(providersEnabled, present),
   });

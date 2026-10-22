@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 
 import { ProblemError } from "../../http/problem-details.js";
+import { type SseOptions, openSseStream } from "../../http/sse.js";
 import { type WaitConfig, effectiveWaitMs, parsePrefer, preferenceApplied } from "./prefer.js";
 import {
   failedTurnProblem,
@@ -11,6 +12,7 @@ import {
   sendMessageBody,
   sendMessageHeaders,
   sessionIdParams,
+  sseResponse,
   turnResponse,
 } from "./schemas.js";
 import type { MessagesService } from "./service.js";
@@ -32,18 +34,40 @@ const noStoreHeader = {
   description: "The state may change until the answer is completed or failed; never cache it",
 };
 
+/**
+ * Whether the client asked for an event stream: `text/event-stream` among the media ranges of
+ * `Accept` (parameters ignored, except that q=0 refuses it).
+ */
+export function wantsEventStream(accept: string | undefined): boolean {
+  if (accept === undefined) {
+    return false;
+  }
+  return accept.split(",").some((range) => {
+    const [type = "", ...parameters] = range.split(";").map((part) => part.trim().toLowerCase());
+    if (type !== "text/event-stream") {
+      return false;
+    }
+    const q = parameters.find((parameter) => parameter.startsWith("q="));
+    return q === undefined || Number(q.slice(2)) !== 0;
+  });
+}
+
 export const messagesRoutes: FastifyPluginAsyncZod<{
   service: MessagesService;
   jsonWait: WaitConfig;
-}> = async (app, { service, jsonWait }) => {
+  sse: SseOptions;
+}> = async (app, { service, jsonWait, sse }) => {
   app.post(
     "/sessions/:id/messages",
     {
       schema: {
-        summary: "Send a message and wait a bounded time for the answer",
+        summary: "Send a message; stream the answer or wait a bounded time for it",
         description:
           "Stores the user message and a generating assistant message, then generates the " +
-          "answer with the session's provider and model. The response waits for the answer " +
+          "answer with the session's provider and model. With Accept: text/event-stream the " +
+          "response is an event stream (see the 200 response); errors found before it starts " +
+          "are ordinary problem details with the statuses below. Otherwise (JSON) the " +
+          "response waits for the answer " +
           "at most the effective wait (Prefer: wait=N, otherwise the server's default wait, " +
           "always capped by its maximum; none with Prefer: respond-async): 200 with both " +
           "messages when it " +
@@ -63,9 +87,14 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
         body: sendMessageBody,
         response: {
           200: {
-            description: "The answer completed within the wait",
+            description:
+              "JSON: the answer completed within the wait. Event stream: the answer as it is " +
+              "generated (generation failures arrive as an error event, the status stays 200)",
             headers: { "Preference-Applied": preferenceAppliedHeader },
-            content: { "application/json": { schema: turnResponse } },
+            content: {
+              "application/json": { schema: turnResponse },
+              "text/event-stream": { schema: sseResponse },
+            },
           },
           202: {
             description:
@@ -93,6 +122,16 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
       },
     },
     async (request, reply) => {
+      if (wantsEventStream(request.headers.accept)) {
+        // Prefer applies to JSON responses only.
+        await service.sendStreaming(
+          request.params.id,
+          request.body,
+          { apiKey: request.headers["x-llm-api-key"] },
+          () => openSseStream(reply, sse),
+        );
+        return reply;
+      }
       // Node joins repeated Prefer lines into one comma-separated value.
       const { prefer } = request.headers;
       const preferences = parsePrefer(prefer === undefined ? [] : [prefer]);
@@ -179,6 +218,37 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
       // 404 is not cached either.
       void reply.header("cache-control", "no-store");
       return service.get(request.params.id, request.params.mid);
+    },
+  );
+
+  app.get(
+    "/sessions/:id/messages/:mid/events",
+    {
+      schema: {
+        summary: "Follow an answer as an event stream",
+        description:
+          "Re-attaches to an assistant message's current attempt, whatever the Accept header: " +
+          "message.created with both messages as they are now (the text so far), then the " +
+          "remaining deltas exactly once and done or error. A message that is already " +
+          "completed or failed gets message.created and done or error; one that is being " +
+          "generated where this server cannot follow it (another process, or a lost " +
+          "generation not yet failed as interrupted) gets message.created and " +
+          "message.detached: poll the message instead. The stream then ends. 404 " +
+          "session_not_found; message_not_found unless it is an assistant message of this " +
+          "session.",
+        tags: ["messages"],
+        params: messageParams,
+        response: {
+          200: {
+            description: "The answer as an event stream",
+            content: { "text/event-stream": { schema: sseResponse } },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      await service.events(request.params.id, request.params.mid, () => openSseStream(reply, sse));
+      return reply;
     },
   );
 };
