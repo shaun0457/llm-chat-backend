@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { useTestDatabase } from "../helpers/db.js";
 import { makeHostedTestApp } from "../helpers/hosted.js";
+import { captureLogs } from "../helpers/log-capture.js";
 import { type Message, createSession, getMessage, send } from "../helpers/messages.js";
 import { errorOf, streamOf, useUpstream } from "../helpers/msw-openai.js";
 
@@ -145,5 +146,33 @@ describe("hosted provider (nvidia) end to end", () => {
 
     expect(response.statusCode).toBe(502);
     expect(response.json()).toMatchObject({ code: "llm_context_overflow" });
+  });
+
+  it("keeps the upstream account id out of the stored and returned detail and every log line", async () => {
+    const logs = captureLogs();
+    app = makeHostedTestApp({ db: testDb.db, env: { LOG_LEVEL: "trace" }, logStream: logs.stream });
+    upstream.reply(
+      errorOf(404, {
+        status: 404,
+        title: "Not Found",
+        detail: "Function 'fn-42': Not found for account 'acct-123'",
+      }),
+    );
+    const session = await createSession(app, { provider: "nvidia" });
+
+    const response = await send(app, session.id, { content: "Hi" }, { "x-llm-api-key": KEY });
+
+    expect(response.statusCode).toBe(502);
+    const expected =
+      "The model provider answered HTTP 404: Function 'fn-42': Not found for account '[REDACTED]'";
+    const { assistantMessage }: Turn = response.json();
+    expect(response.json()).toMatchObject({ detail: expected });
+    expect(assistantMessage.errorDetail).toBe(expected);
+    const stored = await getMessage(app, session.id, assistantMessage.id);
+    expect(stored.json()).toMatchObject({ errorDetail: expected });
+    expect(stored.body).not.toContain("acct-123");
+    expect(response.body).not.toContain("acct-123");
+    expect(logs.lines().length).toBeGreaterThan(0);
+    expect(logs.lines().filter((line) => line.includes("acct-123"))).toEqual([]);
   });
 });

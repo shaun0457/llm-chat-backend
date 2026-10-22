@@ -76,3 +76,24 @@ describe("scrub", () => {
     expect(scrub(`?api_key=${KEY}`, KEY)).toBe("?api_key=[REDACTED]");
   });
 });
+
+describe("scrub: upstream account identifiers", () => {
+  it.each([
+    [
+      "Function 'abc': Not found for account 'acct-123'",
+      "Function 'abc': Not found for account '[REDACTED]'",
+    ],
+    ['Not found for Account "acct-123"', 'Not found for Account "[REDACTED]"'],
+    ["NOT FOUND FOR ACCOUNT 'acct-123'.", "NOT FOUND FOR ACCOUNT '[REDACTED]'."],
+  ])("replaces the quoted value after the word account: %s", (input, expected) => {
+    expect(scrub(input, null)).toBe(expected);
+  });
+
+  it.each([
+    "Function 'abc': Not found",
+    "Your account has no credits left",
+    "accounting 'x' is fine",
+  ])("leaves text without an account clause unchanged: %s", (input) => {
+    expect(scrub(input, null)).toBe(input);
+  });
+});
