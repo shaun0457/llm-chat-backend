@@ -82,9 +82,10 @@ describe("job.finally", () => {
     app = fakeApp;
     const session = await createSession(fakeApp);
     const pending = send(fakeApp, session.id, { content: "Hi" });
+    // The partial text has been produced and flushed before the shutdown begins.
     await eventually(
       () => allMessages(fakeApp, session.id),
-      (messages) => messages.length === 2,
+      (messages) => messages.length === 2 && messages[1]?.content === "Hel",
     );
 
     await fakeApp.close();

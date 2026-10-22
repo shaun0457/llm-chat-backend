@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { LlmProvider } from "../../src/llm/port.js";
+import type { LlmEvent, LlmProvider } from "../../src/llm/port.js";
 import { makeTestApp, testJobs } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider } from "../helpers/fake-llm.js";
@@ -48,13 +48,32 @@ describe("generation robustness", () => {
 
   it("stores an answer that finished just before shutdown aborted its job", async () => {
     const jobs = testJobs(testDb.db);
+    const signals: AbortSignal[] = [];
+    let shutdown: Promise<void> | undefined;
     const finishesThenShutsDown: LlmProvider = {
       id: "late",
-      async *stream() {
-        yield { type: "delta", text: "Complete answer" };
-        yield { type: "finish", reason: "stop", usage: null };
-        // The job has its finish event; shutdown now aborts it before the terminal write.
-        void jobs.shutdown(1_000);
+      stream(_request, { signal }) {
+        signals.push(signal);
+        const events: LlmEvent[] = [
+          { type: "delta", text: "Complete answer" },
+          { type: "finish", reason: "stop", usage: null },
+        ];
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: async () => {
+              const event = events.shift();
+              return event === undefined
+                ? { done: true as const, value: undefined }
+                : { done: false as const, value: event };
+            },
+            // The job has its finish event and closes the stream; shutdown begins right then,
+            // before the job decides what to store.
+            return: async () => {
+              shutdown = jobs.shutdown(1_000);
+              return { done: true as const, value: undefined };
+            },
+          }),
+        };
       },
     };
     app = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: finishesThenShutsDown }) });
@@ -62,10 +81,13 @@ describe("generation robustness", () => {
 
     const response = await send(app, session.id, { content: "Hi" });
 
+    expect(shutdown).toBeDefined();
+    expect(signals[0]?.aborted).toBe(true);
     expect(response.statusCode).toBe(200);
     expect(response.json().assistantMessage).toMatchObject({
       status: "completed",
       content: "Complete answer",
     });
+    await shutdown;
   });
 });
