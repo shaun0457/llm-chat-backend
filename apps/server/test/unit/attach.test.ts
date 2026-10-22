@@ -148,13 +148,13 @@ describe("attach.json", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("fails when the job could not store the final state", async () => {
+  it("is pending when the job could not store the final state (stale reclaim fails it later)", async () => {
     const { job, end } = controlledJob();
     end("write_failed");
 
-    await expect(
-      attachWith(job, () => turn("generating")).json(ASSISTANT, 1, 5_000),
-    ).rejects.toThrow("could not be stored");
+    const outcome = await attachWith(job, () => turn("generating")).json(ASSISTANT, 1, 5_000);
+
+    expect(outcome?.kind).toBe("pending");
   });
 
   it("is undefined when the turn no longer exists", async () => {

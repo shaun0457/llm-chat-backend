@@ -1,6 +1,6 @@
-import { performance } from "node:perf_hooks";
 import { v7 as uuidv7 } from "uuid";
 
+import type { Clock } from "../../clock.js";
 import { ApiKey } from "../../credentials/api-key.js";
 import { type OperatorKeys, decideCredential } from "../../credentials/decide.js";
 import type { Db, Tx } from "../../db/client.js";
@@ -13,6 +13,7 @@ import { type LockedSession, lockSession } from "../sessions/repository.js";
 import { resolvedPair, sessionNotFound } from "../sessions/service.js";
 import type { Attach, JsonOutcome } from "./attach.js";
 import type { JobRegistry, Reservation } from "./jobs.js";
+import { reclaimStale } from "./reclaim.js";
 import {
   findMessage,
   findSeq,
@@ -98,13 +99,26 @@ export function createMessagesService(deps: {
   jobs: JobRegistry;
   attach: Attach;
   defaultSystemPrompt: string | undefined;
+  clock: Clock;
+  /** A generating row older than this has no live job; see reclaimStale. */
+  staleThresholdMs: number;
   /** Secrets: the server's own key per provider id. */
   operatorKeys: OperatorKeys;
 }): MessagesService {
-  const { db, registry, catalog, jobs, attach, defaultSystemPrompt, operatorKeys } = deps;
+  const {
+    db,
+    registry,
+    catalog,
+    jobs,
+    attach,
+    defaultSystemPrompt,
+    clock,
+    staleThresholdMs,
+    operatorKeys,
+  } = deps;
 
-  // Admission steps, in the order the spec fixes. Later steps (stale reclaim, replay, budget,
-  // credential, expected history, capacity limits) slot in between these.
+  // Admission steps, in the order the spec fixes. Later steps (replay, budget, credential,
+  // expected history, capacity limits) slot in between these.
 
   async function lockStep(tx: Tx, sessionId: string): Promise<LockedSession> {
     const session = await lockSession(tx, sessionId);
@@ -112,6 +126,11 @@ export function createMessagesService(deps: {
       throw sessionNotFound();
     }
     return session;
+  }
+
+  /** A turn left generating by a crash or a failed final write no longer blocks the session. */
+  async function reclaimStep(tx: Tx, sessionId: string): Promise<void> {
+    await reclaimStale(tx, sessionId, staleThresholdMs);
   }
 
   function resolveStep(session: LockedSession): {
@@ -182,7 +201,9 @@ export function createMessagesService(deps: {
       (defaultSystemPrompt !== undefined && defaultSystemPrompt.length > 0
         ? defaultSystemPrompt
         : null);
-    const startedAtMonotonic = performance.now();
+    // Immediately before the insert that sets started_at: the deadline then never ends later
+    // than started_at + deadline, without comparing this clock with the database's.
+    const startedAtMonotonic = clock.monotonicNow();
     const turn = await insertTurn(tx, {
       sessionId,
       userId: uuidv7(),
@@ -211,12 +232,13 @@ export function createMessagesService(deps: {
     sessionId: string,
     content: string,
     headerKey: string | undefined,
-  ): Promise<{ admitted: Admitted; reservation: Reservation }> {
+  ): Promise<{ admitted: Admitted; attempt: number; reservation: Reservation }> {
     // Kept outside the callback only so a rollback (or a failed commit) can release it.
     let held: Reservation | undefined;
     try {
       return await db.tx(async (tx) => {
         const session = await lockStep(tx, sessionId);
+        await reclaimStep(tx, sessionId);
         const resolved = resolveStep(session);
         const apiKey = credentialStep(resolved, headerKey);
         await busyStep(tx, sessionId);
@@ -226,7 +248,12 @@ export function createMessagesService(deps: {
         }
         held = reservation;
         const admitted = await insertStep(tx, sessionId, session, content, resolved, apiKey);
-        return { admitted, reservation };
+        const { attempt } = admitted.turn.assistantMessage;
+        if (attempt === null) {
+          // Thrown inside the transaction, so the turn is rolled back instead of left generating.
+          throw new Error("an admitted assistant message has no attempt");
+        }
+        return { admitted, attempt, reservation };
       });
     } catch (error) {
       held?.release();
@@ -240,12 +267,8 @@ export function createMessagesService(deps: {
 
   return {
     async send(sessionId, input, { waitMs, apiKey }) {
-      const { admitted, reservation } = await admit(sessionId, input.content, apiKey);
+      const { admitted, attempt, reservation } = await admit(sessionId, input.content, apiKey);
       const { userMessage, assistantMessage } = admitted.turn;
-      const { attempt } = assistantMessage;
-      if (attempt === null) {
-        throw new Error("an admitted assistant message has no attempt");
-      }
       jobs.start({
         assistantId: assistantMessage.id,
         attempt,
@@ -269,6 +292,7 @@ export function createMessagesService(deps: {
     },
 
     async list(sessionId, { limit, before }) {
+      await reclaimStale(db.drizzle, sessionId, staleThresholdMs);
       if (!(await sessionExists(db.drizzle, sessionId))) {
         throw sessionNotFound();
       }
@@ -289,6 +313,7 @@ export function createMessagesService(deps: {
     },
 
     async get(sessionId, messageId) {
+      await reclaimStale(db.drizzle, sessionId, staleThresholdMs);
       const message = await findMessage(db.drizzle, sessionId, messageId);
       if (message === undefined) {
         throw messageNotFound();

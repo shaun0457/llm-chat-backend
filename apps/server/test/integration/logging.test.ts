@@ -256,4 +256,34 @@ describe("logging", () => {
       ]);
     });
   });
+
+  describe("startup notices", () => {
+    const notice = () =>
+      logs.entries().filter((entry) => String(entry.msg).includes("JSON_MAX_WAIT_MS"));
+
+    function appWith(env: Record<string, string>): FastifyInstance {
+      logs = captureLogs();
+      return makeTestApp({
+        config: loadConfig({ ...TEST_ENV, LOG_LEVEL: "info", ...env }),
+        logStream: logs.stream,
+      });
+    }
+
+    it("notes when JSON clients may get 202 for answers that are still within their deadline", async () => {
+      // 60 s of wait against 180 s of deadline + 10 s of terminal budget.
+      app = appWith({ JSON_DEFAULT_WAIT_MS: "30000", JSON_MAX_WAIT_MS: "60000" });
+      await app.ready();
+
+      expect(notice()).toEqual([
+        expect.objectContaining({ level: 30, jsonMaxWaitMs: 60_000, generationLimitMs: 190_000 }),
+      ]);
+    });
+
+    it("says nothing when the maximum wait covers the deadline and the terminal budget", async () => {
+      app = appWith({});
+      await app.ready();
+
+      expect(notice()).toEqual([]);
+    });
+  });
 });

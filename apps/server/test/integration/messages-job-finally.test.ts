@@ -1,8 +1,8 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createJobRegistry } from "../../src/modules/messages/jobs.js";
-import { makeTestApp } from "../helpers/app.js";
+import type { JobRegistry } from "../../src/modules/messages/jobs.js";
+import { makeTestApp, testJobs } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import { allMessages, createSession, eventually, send } from "../helpers/messages.js";
@@ -40,7 +40,7 @@ describe("job.finally", () => {
     const fake = new FakeLlmProvider();
     const gate = createGate();
     fake.script({ deltas: ["Hel", "lo"], gate: gate.promise, gateAfter: 1 });
-    const jobs = createJobRegistry({ db: testDb.db, flushIntervalMs: 50, log: Fastify().log });
+    const jobs = testJobs(testDb.db);
     const fakeApp = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
     app = fakeApp;
     const session = await createSession(fakeApp);
@@ -53,6 +53,11 @@ describe("job.finally", () => {
     if (job === undefined) {
       throw new Error("expected the generation to be running");
     }
+    // The first delta is in before the gate; subscribing after it hears the rest only.
+    await eventually(
+      async () => job.bus.snapshot(),
+      (text) => text === "Hel",
+    );
     const heard: string[] = [];
 
     job.bus.subscribe(() => {
@@ -70,16 +75,17 @@ describe("job.finally", () => {
     expect(heard).toEqual(["delta", "terminal"]);
   });
 
-  it("shuts down while a generation hangs: the generation is aborted and the waiting send answers", async () => {
+  it("shuts down while a generation hangs: the generation is cancelled and the waiting send answers", async () => {
     const fake = new FakeLlmProvider();
     fake.script({ deltas: ["Hel"], hang: true });
     const fakeApp = makeTestApp({ db: testDb.db, ...testProviders({ llm: fake }) });
     app = fakeApp;
     const session = await createSession(fakeApp);
     const pending = send(fakeApp, session.id, { content: "Hi" });
+    // The partial text has been produced and flushed before the shutdown begins.
     await eventually(
       () => allMessages(fakeApp, session.id),
-      (messages) => messages.length === 2,
+      (messages) => messages.length === 2 && messages[1]?.content === "Hel",
     );
 
     await fakeApp.close();
@@ -87,14 +93,53 @@ describe("job.finally", () => {
 
     expect(fake.signals[0]?.aborted).toBe(true);
     const response = await pending;
-    expect(response.statusCode).toBe(202);
-    const { assistantMessage } = response.json();
-    expect(assistantMessage).toMatchObject({ status: "generating" });
-    // The full 202 contract: the client knows where to look later.
-    expect(response.headers.location).toBe(
-      `/sessions/${session.id}/messages/${assistantMessage.id}`,
+    // The turn reached a terminal state before the server closed: the client learns it.
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({
+      code: "cancelled",
+      assistantMessage: { status: "failed", errorCode: "cancelled", content: "Hel" },
+    });
+  });
+
+  it("still leaves the registry and publishes the terminal state when releasing capacity throws", async () => {
+    const inner = testJobs(testDb.db);
+    const jobs: JobRegistry = {
+      ...inner,
+      reserve: () => ({
+        release: () => {
+          throw new Error("a broken reservation");
+        },
+      }),
+    };
+    const fake = new FakeLlmProvider();
+    const gate = createGate();
+    fake.script({ deltas: ["Hel", "lo"], gate: gate.promise, gateAfter: 1 });
+    const fakeApp = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
+    app = fakeApp;
+    const session = await createSession(fakeApp);
+    const response = await send(
+      fakeApp,
+      session.id,
+      { content: "Hi" },
+      { prefer: "respond-async" },
     );
-    expect(response.headers["retry-after"]).toBe("2");
-    expect(response.headers["cache-control"]).toBe("no-store");
+    const assistantId: string = response.json().assistantMessage.id;
+    const job = jobs.get(assistantId);
+    if (job === undefined) {
+      throw new Error("expected the generation to be running");
+    }
+    // The first delta is in before the gate; subscribing after it hears the rest only.
+    await eventually(
+      async () => job.bus.snapshot(),
+      (text) => text === "Hel",
+    );
+    const heard: string[] = [];
+    job.bus.subscribe((event) => heard.push(event.type));
+
+    gate.release();
+
+    expect(await job.finished).toBe("terminal");
+    expect(heard).toEqual(["delta", "terminal"]);
+    expect(jobs.get(assistantId)).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ConfigError, loadConfig } from "../../src/config.js";
+import { type AppConfig, ConfigError, loadConfig } from "../../src/config.js";
 import { DEFAULT_MODEL_CATALOG_PATH } from "../../src/paths.js";
 
 const DATABASE_URL = "postgres://app:pw@db.internal:5432/app";
@@ -34,6 +34,11 @@ describe("loadConfig", () => {
       demoDelayMs: 50,
       jsonDefaultWaitMs: 30_000,
       jsonMaxWaitMs: 195_000,
+      generationDeadlineMs: 180_000,
+      terminalStatementTimeoutMs: 3_000,
+      terminalWriteBudgetMs: 10_000,
+      reclaimGraceMs: 50_000,
+      staleThresholdMs: 240_000,
       nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
       operatorKeys: {},
     });
@@ -55,6 +60,10 @@ describe("loadConfig", () => {
       DEMO_DELAY_MS: "0",
       JSON_DEFAULT_WAIT_MS: "0",
       JSON_MAX_WAIT_MS: "20000",
+      GENERATION_DEADLINE_MS: "60000",
+      TERMINAL_STATEMENT_TIMEOUT_MS: "400",
+      TERMINAL_WRITE_BUDGET_MS: "2000",
+      RECLAIM_GRACE_MS: "1500",
       NVIDIA_BASE_URL: "http://nim.internal:8000/v1",
       NVIDIA_API_KEY: "operator-key-1",
     });
@@ -74,6 +83,11 @@ describe("loadConfig", () => {
       demoDelayMs: 0,
       jsonDefaultWaitMs: 0,
       jsonMaxWaitMs: 20_000,
+      generationDeadlineMs: 60_000,
+      terminalStatementTimeoutMs: 400,
+      terminalWriteBudgetMs: 2_000,
+      reclaimGraceMs: 1_500,
+      staleThresholdMs: 63_500,
       nvidiaBaseUrl: "http://nim.internal:8000/v1",
       operatorKeys: { nvidia: "operator-key-1" },
     });
@@ -152,6 +166,16 @@ describe("loadConfig", () => {
     ["JSON_DEFAULT_WAIT_MS", "0.5"],
     ["JSON_MAX_WAIT_MS", "-1"],
     ["JSON_MAX_WAIT_MS", "600001"],
+    ["GENERATION_DEADLINE_MS", "0"],
+    ["GENERATION_DEADLINE_MS", "-1"],
+    ["GENERATION_DEADLINE_MS", "1.5"],
+    ["GENERATION_DEADLINE_MS", "3600001"],
+    ["TERMINAL_STATEMENT_TIMEOUT_MS", "0"],
+    ["TERMINAL_STATEMENT_TIMEOUT_MS", "-3000"],
+    ["TERMINAL_WRITE_BUDGET_MS", "0"],
+    ["TERMINAL_WRITE_BUDGET_MS", "-1"],
+    ["RECLAIM_GRACE_MS", "0"],
+    ["RECLAIM_GRACE_MS", "-50000"],
   ])("rejects %s=%s", (key, value) => {
     expect(configError({ DATABASE_URL, [key]: value }).message).toContain(key);
   });
@@ -169,6 +193,24 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ DATABASE_URL, JSON_DEFAULT_WAIT_MS: "5000", JSON_MAX_WAIT_MS: "5000" }),
     ).toMatchObject({ jsonDefaultWaitMs: 5_000, jsonMaxWaitMs: 5_000 });
+  });
+
+  it("rejects a reclaim grace that a live job could outlast after its deadline and budget", () => {
+    // After its deadline a live job may still wait one statement timeout for a flush before
+    // its terminal budget (read-back included); reclaim must not fail it while it does, and
+    // a second of slack covers late timers.
+    const load = (): AppConfig =>
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "3999" });
+
+    expect(load).toThrow(ConfigError);
+    expect(load).toThrow(/RECLAIM_GRACE_MS/);
+    expect(load).toThrow(/TERMINAL_STATEMENT_TIMEOUT_MS/);
+  });
+
+  it("accepts a reclaim grace of the statement timeout plus one second", () => {
+    expect(
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "4000" }),
+    ).toMatchObject({ reclaimGraceMs: 4_000 });
   });
 
   it("lists every invalid key", () => {
