@@ -724,7 +724,7 @@ What is in place:
   120 requests a minute to every route except `/health` and `/health/ready`, and on top of
   that 20 sends a minute (`POST /sessions/:id/messages`; a repeated send is a send and counts
   too). Over a budget the answer is 429 problem details with code `rate_limited` and
-  `Retry-After`. IPv6 addresses are grouped by /64. The counters restart with the process.
+  `Retry-After`. IPv6 addresses are grouped by /64; each budget keeps counters for up to 100,000 addresses (the least recently seen are dropped first). CORS preflights are not counted. The counters restart with the process.
 - **Client address.** Without `TRUST_PROXY` it is the socket's address and `X-Forwarded-For`
   is ignored. With `TRUST_PROXY` (IPs or CIDR ranges only), a request from a listed proxy is
   keyed by the nearest `X-Forwarded-For` address that is not itself a listed proxy, read from
@@ -777,7 +777,7 @@ with all its messages. Locally it is unset and nothing is ever deleted.
 
 - It runs inside the API process every `RETENTION_INTERVAL_MS` (one hour by default) once the
   server listens, and stops when the server shuts down. One run at a time; a failed run is
-  logged and the next one tries again. Each run logs how many sessions it deleted and skipped.
+  logged and the next one tries again. Each run logs how many sessions it deleted, skipped and could not delete; one that fails is passed over and retried by the next run. A shutdown ends a run after its current session.
 - A run takes its cutoff from the database clock, then walks the candidates oldest first in
   batches of 100 and deletes each through the same function as `DELETE /sessions/:id`. That
   function locks the session and checks its activity again, so a session that received a
