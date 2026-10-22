@@ -1,9 +1,68 @@
+import fastifyRateLimit from "@fastify/rate-limit";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { jsonSchemaTransform } from "fastify-type-provider-zod";
 
+import { ProblemError } from "./problem-details.js";
+
 type Transform = typeof jsonSchemaTransform;
+
+const ONE_MINUTE_MS = 60_000;
+
+/**
+ * One rate-limit budget: a fixed one-minute window per client address (`request.ip`, IPv6
+ * grouped by /64), in this process's memory. Throws 429 rate_limited with Retry-After once
+ * the address has used it up. Routes that share one policy object share its counter.
+ */
+export type RateLimitPolicy = (request: FastifyRequest) => Promise<void>;
+
+/**
+ * A new, independent budget of `perMinute` requests. Call only once registerRateLimits' plugin
+ * has loaded, e.g. inside a route plugin registered after it.
+ *
+ * Built on @fastify/rate-limit's `createRateLimit` (its store and address handling) rather
+ * than its route hooks: a request passes only the first of those hooks (the plugin marks it
+ * as checked), and a route's own `config.rateLimit` replaces the global one. Policies applied
+ * as separate hooks hold together instead (V2 in #12).
+ */
+export function rateLimitPolicy(app: FastifyInstance, perMinute: number): RateLimitPolicy {
+  const check = app.createRateLimit({ max: perMinute, timeWindow: ONE_MINUTE_MS });
+  return async (request) => {
+    const result = await check(request);
+    if (!result.isAllowed && result.isExceeded) {
+      const seconds = String(Math.max(1, result.ttlInSeconds));
+      throw new ProblemError(
+        429,
+        "rate_limited",
+        `Too many requests from this address; try again in ${seconds} s`,
+        undefined,
+        { "retry-after": seconds },
+      );
+    }
+  };
+}
+
+/** Health checks are never limited: the platform polls them. */
+function isHealthCheck(request: FastifyRequest): boolean {
+  return request.routeOptions.url?.startsWith("/health") === true;
+}
+
+/**
+ * The general per-address limit on every request (unknown routes included) except the health
+ * checks. Register before the routes; route-specific budgets (sends) add their own policy.
+ */
+export function registerRateLimits(app: FastifyInstance, generalPerMinute: number): void {
+  void app.register(fastifyRateLimit, { global: false });
+  app.after(() => {
+    const general = rateLimitPolicy(app, generalPerMinute);
+    app.addHook("onRequest", async (request) => {
+      if (!isHealthCheck(request)) {
+        await general(request);
+      }
+    });
+  });
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

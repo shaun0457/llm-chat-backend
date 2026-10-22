@@ -9,7 +9,7 @@ import { REDACTED } from "./credentials/scrub.js";
 import { serializeError } from "./credentials/serialize-error.js";
 import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
-import { registerApiDocs } from "./http/plugins.js";
+import { registerApiDocs, registerRateLimits } from "./http/plugins.js";
 import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-details.js";
 import { capacityFor } from "./llm/capacity.js";
 import type { ModelCatalog } from "./llm/catalog.js";
@@ -99,6 +99,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     },
     requestIdHeader: false,
     genReqId: requestId,
+    // request.ip: the socket's address, or, from a listed proxy, the nearest X-Forwarded-For
+    // address that is not itself a listed proxy (read right to left).
+    trustProxy: config.trustProxy === undefined ? false : [...config.trustProxy],
     // Errors raised before routing (e.g. an undecodable URL) bypass hooks and the error handler.
     frameworkErrors: (error, request, reply) => {
       void reply.header(REQUEST_ID_HEADER, request.id);
@@ -123,6 +126,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerProblemDetails(app);
+  registerRateLimits(app, config.rateLimitGeneralPerMin);
   registerApiDocs(app);
 
   void app.register(healthRoutes, {
@@ -182,6 +186,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     service: messages,
     jsonWait: { defaultMs: config.jsonDefaultWaitMs, maxMs: config.jsonMaxWaitMs },
     sse: config,
+    sendsPerMinute: config.rateLimitSendPerMin,
   });
   // Before the server stops accepting: running generations are aborted and store failed /
   // cancelled, so waiting responses finish instead of holding the close open.

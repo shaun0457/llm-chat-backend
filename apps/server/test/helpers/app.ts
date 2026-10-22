@@ -17,6 +17,9 @@ export const TEST_ENV = {
   DATABASE_URL: "postgres://unused@127.0.0.1:9/unused",
   FLUSH_INTERVAL_MS: "50",
   DEMO_DELAY_MS: "1",
+  // Tests send far more than a client would; the rate-limit tests set their own limits.
+  RATE_LIMIT_GENERAL_PER_MIN: "1000000",
+  RATE_LIMIT_SEND_PER_MIN: "1000000",
 } as const;
 
 /**

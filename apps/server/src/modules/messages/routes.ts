@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 
 import { prefersEventStream } from "../../http/accept.js";
+import { rateLimitPolicy } from "../../http/plugins.js";
 import { ProblemError } from "../../http/problem-details.js";
 import { type SseOptions, openSseStream } from "../../http/sse.js";
 import { type WaitConfig, effectiveWaitMs, parsePrefer, preferenceApplied } from "./prefer.js";
@@ -44,15 +45,24 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
   service: MessagesService;
   jsonWait: WaitConfig;
   sse: SseOptions;
-}> = async (app, { service, jsonWait, sse }) => {
+  /** Per client address, on top of the general limit; replays count as sends. */
+  sendsPerMinute: number;
+}> = async (app, { service, jsonWait, sse, sendsPerMinute }) => {
+  // One policy object: a retry route (#13) shares this counter by using it too.
+  const sendLimit = rateLimitPolicy(app, sendsPerMinute);
+
   app.post(
     "/sessions/:id/messages",
     {
-      // Before validation, so every answer of this route says that Accept chose its form; an
-      // event stream keeps it, as headers set before the hijack are copied (sse.ts).
-      onRequest: async (_request, reply) => {
-        void reply.header("vary", "Accept");
-      },
+      onRequest: [
+        // Before validation, so every answer of this route says that Accept chose its form;
+        // an event stream keeps it, as headers set before the hijack are copied (sse.ts).
+        async (_request, reply) => {
+          void reply.header("vary", "Accept");
+        },
+        // After the general limit, an app-wide hook, which runs first.
+        sendLimit,
+      ],
       schema: {
         summary: "Send a message; stream the answer or wait a bounded time for it",
         description:
