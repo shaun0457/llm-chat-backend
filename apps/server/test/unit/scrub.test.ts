@@ -37,9 +37,16 @@ describe("scrub", () => {
   });
 
   it("removes well-known key formats without knowing the key", () => {
-    expect(scrub("got nvapi-AbCdEf0123456789_xyz and sk-proj-ABCDEFGHIJ0123456789", null)).toBe(
+    expect(scrub("got nvapi-EXAMPLE000000_xyz and sk-proj-EXAMPLE0000000000000", null)).toBe(
       "got [REDACTED] and [REDACTED]",
     );
+  });
+
+  it("removes partially masked keys an upstream echoes back", () => {
+    expect(scrub("Incorrect API key provided: sk-proj-********abcd.", null)).toBe(
+      "Incorrect API key provided: [REDACTED].",
+    );
+    expect(scrub("key nvapi-****wxyz is invalid", null)).toBe("key [REDACTED] is invalid");
   });
 
   it("leaves text without credentials unchanged, with or without a key", () => {

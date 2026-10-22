@@ -100,6 +100,16 @@ describe("loadConfig", () => {
     },
   );
 
+  it("rejects a NVIDIA_BASE_URL with credentials in it, without echoing them", () => {
+    const error = configError({
+      DATABASE_URL,
+      NVIDIA_BASE_URL: "https://user:pw0rd@nim.internal/v1",
+    });
+
+    expect(error.message).toContain("NVIDIA_BASE_URL");
+    expect(error.message).not.toContain("pw0rd");
+  });
+
   it.each(["ftp://nim.internal/v1", "not a url"])(
     "rejects a NVIDIA_BASE_URL that is not an http(s) URL: %s",
     (url) => {

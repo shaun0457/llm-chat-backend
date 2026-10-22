@@ -24,6 +24,28 @@ export type OpenAiCompatibleOptions = Readonly<{
 /** The SDK insists on a key; keyless servers (e.g. a local model) ignore this one. */
 const KEYLESS_PLACEHOLDER = "no-key";
 
+/**
+ * The only request headers sent upstream. The SDK adds others: telemetry about this host
+ * (`x-stainless-*`) and, from the OPENAI_CUSTOM_HEADERS environment variable, whatever an
+ * operator configured for some other use, possibly including credentials.
+ */
+const ALLOWED_HEADERS: ReadonlySet<string> = new Set([
+  "accept",
+  "authorization",
+  "content-type",
+  "user-agent",
+]);
+
+function allowedHeaders(headers: HeadersInit | undefined): Headers {
+  const allowed = new Headers();
+  new Headers(headers).forEach((value, name) => {
+    if (ALLOWED_HEADERS.has(name)) {
+      allowed.set(name, value);
+    }
+  });
+  return allowed;
+}
+
 /** How much of an upstream error body is read at most. */
 const MAX_ERROR_BODY_BYTES = 8192;
 /** Statuses whose Response must not have a body. */
@@ -86,7 +108,12 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     let errorBody: string | undefined;
     const recordingFetch: typeof fetch = async (input, init) => {
       errorBody = undefined;
-      const response = await fetch(input, init);
+      const response = await fetch(input, {
+        ...init,
+        headers: allowedHeaders(init?.headers),
+        // Only the configured base URL is ever called, even if the upstream redirects.
+        redirect: "error",
+      });
       if (response.ok) {
         return response;
       }
@@ -105,7 +132,8 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       timeout: this.#timeoutMs,
       maxRetries: this.#maxRetries,
       fetch: recordingFetch,
-      // Never read from the environment: an operator's OpenAI settings must not leak upstream.
+      // Not read from the environment: an operator's OpenAI settings must not leak upstream
+      // (OPENAI_CUSTOM_HEADERS is dropped by the header allowlist).
       organization: null,
       project: null,
       // The SDK's own logging could print request details; this service logs on its own terms.

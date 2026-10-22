@@ -140,6 +140,21 @@ describe("OpenAiCompatibleProvider", () => {
       expect(events.at(-1)).toEqual({ type: "finish", reason: "other", usage: null });
     });
 
+    it("sends only the headers it needs, never extra headers from the environment", async () => {
+      upstream.reply(streamOf([{ content: "ok", finishReason: "stop" }]));
+      process.env.OPENAI_CUSTOM_HEADERS = "X-Leak: operator-secret";
+      try {
+        await collect(stream());
+      } finally {
+        delete process.env.OPENAI_CUSTOM_HEADERS;
+      }
+
+      const names = Object.keys(upstream.requests[0]?.headers ?? {});
+      expect(names).not.toContain("x-leak");
+      expect(names.filter((name) => name.startsWith("x-"))).toEqual([]);
+      expect(names).toContain("authorization");
+    });
+
     it("uses a placeholder key for a keyless call, never an environment key", async () => {
       upstream.reply(streamOf([{ content: "ok", finishReason: "stop" }]));
 

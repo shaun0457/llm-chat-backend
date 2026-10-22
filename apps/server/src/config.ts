@@ -47,7 +47,14 @@ const envSchema = z.object({
     .default(DEFAULT_JSON_WAIT_MS),
   JSON_MAX_WAIT_MS: z.coerce.number().int().min(0).max(MAX_JSON_WAIT_MS).default(195_000),
   // Server configuration only: clients can never choose where a provider call goes.
-  NVIDIA_BASE_URL: z.url({ protocol: /^https?$/ }).default(DEFAULT_NVIDIA_BASE_URL),
+  NVIDIA_BASE_URL: z
+    .url({ protocol: /^https?$/ })
+    .refine((value) => {
+      // Runs after a failed URL check too: only judge what parses.
+      const url = URL.canParse(value) ? new URL(value) : undefined;
+      return url === undefined || (url.username === "" && url.password === "");
+    }, "must not contain credentials")
+    .default(DEFAULT_NVIDIA_BASE_URL),
 });
 
 /** Holds the database password and operator API keys: never log it. */

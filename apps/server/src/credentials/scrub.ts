@@ -4,8 +4,8 @@ const REDACTED = "[REDACTED]";
 const BEARER = /\b(bearer)\s+[\w.~+/=-]+/gi;
 /** `api_key=…`, `apikey=…`, `api-key=…` and `key=…` query or form values. */
 const KEY_PARAM = /([?&;\s]|^)(api[_-]?key|key)=[^&;\s"']+/gi;
-/** Key formats that are recognisable without knowing the key. */
-const KNOWN_KEY_FORMATS = /\b(?:nvapi-[\w-]{8,}|sk-[\w-]{16,})/g;
+/** Key formats that are recognisable without knowing the key, also partially masked. */
+const KNOWN_KEY_FORMATS = /\b(?:nvapi-[\w-]{8,}|sk-[\w-]{16,}|(?:nvapi|sk)-[\w-]*\*[\w*-]*)/g;
 
 /**
  * Removes credentials from text before it is stored, returned or logged: the literal `key`

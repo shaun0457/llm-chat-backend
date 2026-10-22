@@ -102,7 +102,9 @@ function upstreamCode(body: string | undefined, error: APIError): string | undef
  * Maps anything an OpenAI-compatible call threw (after the SDK's own retries) to an LlmError.
  * `errorBody` is the raw body of the last failed HTTP response, when there was one.
  */
-export function toLlmError(error: unknown, key: string | null, errorBody?: string): LlmError {
+export function toLlmError(error: unknown, key: string | null, rawErrorBody?: string): LlmError {
+  // Scrubbed whole before anything cuts it, so no cut can leave part of the key behind.
+  const errorBody = rawErrorBody === undefined ? undefined : scrub(rawErrorBody, key);
   if (error instanceof LlmError) {
     return error;
   }

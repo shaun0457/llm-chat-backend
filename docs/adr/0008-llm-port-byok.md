@@ -72,8 +72,18 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
   database errors, constraint, table and column, along the cause chain. SDK request options
   and headers, `pg` error `detail`/`where` and drizzle's query parameters (replaced by
   `[omitted]` in the message) are never written. The SDK's own logger is off.
+- **Scrubbing** also covers the key as JSON-escaped and URL-encoded text, and partially masked
+  echoes such as `sk-proj-****abcd`.
 - **Base URLs** come only from server configuration (`NVIDIA_BASE_URL`, default
-  `https://integrate.api.nvidia.com/v1`, `http`/`https` only). Clients cannot choose a host.
+  `https://integrate.api.nvidia.com/v1`, `http`/`https` only, no credentials in the URL).
+  Clients cannot choose a host, and the adapter never follows a redirect (`redirect: "error"`).
+- **Outgoing headers** are an allowlist: `authorization`, `content-type`, `accept` and
+  `user-agent`. The SDK would also send `x-stainless-*` telemetry about this host and any
+  headers an operator configured in `OPENAI_CUSTOM_HEADERS`, which the SDK reads from the
+  environment even when every other option is explicit.
+- **Error bodies** are read up to 8 KiB, and the SDK gets that bounded copy, so a huge or
+  endless body can neither fill memory nor hang a call. The body is scrubbed whole before any
+  part of it is cut.
 - **Catalog.** Only models expected to stream their answer without inline reasoning are listed:
   `google/gemma-3-12b-it` (default) and `nvidia/llama-3.1-nemotron-70b-instruct`, both with a
   conservative 32,768-token context window and 2,048 output tokens.
@@ -106,7 +116,8 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
   `timeout` applies per HTTP attempt and covers the time until the response headers; a
   streaming body is not bounded by it. Contract tests: 401 and 403 → one request; 429 then a
   stream → two; persistent 503 → three; a response slower than a shortened timeout →
-  `llm_timeout` after three requests.
+  `llm_timeout` after three requests. msw does not follow a mocked redirect, so
+  `redirect: "error"` rests on the fetch specification rather than a test.
 
 ## Consequences
 

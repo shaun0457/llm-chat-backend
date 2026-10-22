@@ -120,7 +120,12 @@ export function slow(ms: number): Responder {
 
 export type Responder = () => Response | Promise<Response>;
 
-export type RecordedRequest = { authorization: string | null; body: Record<string, unknown> };
+export type RecordedRequest = {
+  authorization: string | null;
+  /** Every request header, names in lower case. */
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+};
 
 export type Upstream = {
   /** Every request the upstream received, in order. */
@@ -140,6 +145,7 @@ export function useUpstream(): Upstream {
     http.post(COMPLETIONS_URL, async ({ request }) => {
       requests.push({
         authorization: request.headers.get("authorization"),
+        headers: Object.fromEntries(request.headers.entries()),
         body: (await request.json()) as Record<string, unknown>,
       });
       const next = queue.length > 1 ? queue.shift() : queue[0];
