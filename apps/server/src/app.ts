@@ -89,6 +89,21 @@ function requestId(request: IncomingMessage): string {
   return typeof incoming === "string" && VALID_REQUEST_ID.test(incoming) ? incoming : randomUUID();
 }
 
+/**
+ * Node server options that make REQUEST_TIMEOUT_MS the bound for receiving a whole request.
+ * Node 22 checks open requests only every `connectionsCheckingInterval` (30 s by default), and
+ * a request whose headers have arrived but whose body stalls is ended only after
+ * `headersTimeout` (60 s by default), whatever `requestTimeout` says (measured). So both
+ * follow the timeout: a stalled request gets 408 within the timeout plus a tenth of it.
+ */
+export function requestTimeoutOptions(requestTimeoutMs: number) {
+  return {
+    requestTimeout: requestTimeoutMs,
+    headersTimeout: requestTimeoutMs,
+    connectionsCheckingInterval: Math.min(30_000, Math.max(100, Math.floor(requestTimeoutMs / 10))),
+  };
+}
+
 /** Returns a configured app that is not listening; only `server.ts` calls `listen`. */
 export function buildApp(deps: AppDeps): FastifyInstance {
   const { config, db, catalog, registry, logStream } = deps;
@@ -104,9 +119,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // request.ip: the socket's address, or, from a listed proxy, the nearest X-Forwarded-For
     // address that is not itself a listed proxy (read right to left).
     trustProxy: config.trustProxy === undefined ? false : [...config.trustProxy],
-    // Bounds receiving a request (a slow body ends with 408), never a response: SSE streams
-    // and long JSON waits are unaffected (V3 of #2). The socket inactivity timeout stays 0.
+    // Bounds receiving a request (slow headers or body end with 408), never a response: SSE
+    // streams and long JSON waits are unaffected (V3 of #2). The socket inactivity timeout
+    // stays 0.
     requestTimeout: config.requestTimeoutMs,
+    http: requestTimeoutOptions(config.requestTimeoutMs),
     // A send's 16,000 characters fit with room to spare, even if all escaped as \uXXXX.
     bodyLimit: BODY_LIMIT_BYTES,
     // Errors raised before routing (e.g. an undecodable URL) bypass hooks and the error handler.

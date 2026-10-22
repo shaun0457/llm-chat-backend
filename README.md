@@ -90,41 +90,41 @@ exceed `JSON_MAX_WAIT_MS`. The four timing keys of [failure handling](#failure-h
 be positive whole numbers of milliseconds, at most one hour. `NVIDIA_BASE_URL` and
 `OLLAMA_BASE_URL` are checked only when their provider is enabled.
 
-| Variable                        | Default                      | Meaning                                                                                                             |
-| ------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                  | (required)                   | `postgres://` or `postgresql://` connection URL                                                                     |
-| `PORT`                          | `3000`                       | Listening port                                                                                                      |
-| `HOST`                          | `0.0.0.0`                    | Listening address                                                                                                   |
-| `LOG_LEVEL`                     | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                                      |
-| `NODE_ENV`                      | `production`                 | `development`, `test` or `production`                                                                               |
-| `MODEL_CATALOG_PATH`            | bundled `config/models.json` | Model catalog file (see below)                                                                                      |
-| `PROVIDERS_ENABLED`             | `demo`                       | Comma-separated provider ids; each must be in the catalog                                                           |
-| `DEFAULT_PROVIDER`              | `demo`                       | Provider for sessions created without one; must be enabled                                                          |
-| `DEFAULT_MODEL`                 | the provider's default       | Model for sessions created with neither provider nor model; must be in the catalog                                  |
-| `DEFAULT_SYSTEM_PROMPT`         | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                                      |
-| `FLUSH_INTERVAL_MS`             | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)                                 |
-| `DEMO_DELAY_MS`                 | `50`                         | Pause between the demo provider's chunks (0–10,000)                                                                 |
-| `JSON_DEFAULT_WAIT_MS`          | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                                        |
-| `JSON_MAX_WAIT_MS`              | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout                                  |
-| `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`                                |
-| `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                         |
-| `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                                   |
-| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                           |
-| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                         |
-| `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                        |
-| `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                           |
-| `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000)     |
-| `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                      |
-| `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`        |
-| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                           |
-| `RATE_LIMIT_GENERAL_PER_MIN`    | `120`                        | Requests per minute per client address to every route except `/health*`; then 429 `rate_limited`                    |
-| `RATE_LIMIT_SEND_PER_MIN`       | `20`                         | Sends (`POST /sessions/:id/messages`, replays included) per minute per client address, on top of the general limit  |
-| `TRUST_PROXY`                   | (none)                       | Comma-separated IPs or CIDR ranges of proxies whose `X-Forwarded-For` is believed; no hop counts, `true`, `*` or /0 |
-| `CORS_ORIGINS`                  | (none)                       | Comma-separated `http(s)://host[:port]` origins allowed by CORS, or `*` alone; unset: no CORS headers               |
-| `RETENTION_DAYS`                | (none)                       | Delete sessions inactive for longer than this many days (1–3,650); unset: never                                     |
-| `RETENTION_INTERVAL_MS`         | `3600000`                    | How often retention runs while `RETENTION_DAYS` is set (10 ms to one day)                                           |
-| `DB_STATEMENT_TIMEOUT_MS`       | `10000`                      | Default limit of every database statement, lock waits included (100 ms to one hour)                                 |
-| `REQUEST_TIMEOUT_MS`            | `30000`                      | How long a client may take to send a whole request; then 408. Never limits a response (1,000–600,000)               |
+| Variable                        | Default                      | Meaning                                                                                                                                         |
+| ------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                  | (required)                   | `postgres://` or `postgresql://` connection URL                                                                                                 |
+| `PORT`                          | `3000`                       | Listening port                                                                                                                                  |
+| `HOST`                          | `0.0.0.0`                    | Listening address                                                                                                                               |
+| `LOG_LEVEL`                     | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                                                                  |
+| `NODE_ENV`                      | `production`                 | `development`, `test` or `production`                                                                                                           |
+| `MODEL_CATALOG_PATH`            | bundled `config/models.json` | Model catalog file (see below)                                                                                                                  |
+| `PROVIDERS_ENABLED`             | `demo`                       | Comma-separated provider ids; each must be in the catalog                                                                                       |
+| `DEFAULT_PROVIDER`              | `demo`                       | Provider for sessions created without one; must be enabled                                                                                      |
+| `DEFAULT_MODEL`                 | the provider's default       | Model for sessions created with neither provider nor model; must be in the catalog                                                              |
+| `DEFAULT_SYSTEM_PROMPT`         | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                                                                  |
+| `FLUSH_INTERVAL_MS`             | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)                                                             |
+| `DEMO_DELAY_MS`                 | `50`                         | Pause between the demo provider's chunks (0–10,000)                                                                                             |
+| `JSON_DEFAULT_WAIT_MS`          | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                                                                    |
+| `JSON_MAX_WAIT_MS`              | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout                                                              |
+| `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`                                                            |
+| `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                                                     |
+| `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                                                               |
+| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                                                       |
+| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                                                     |
+| `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                                                    |
+| `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                                                       |
+| `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000)                                 |
+| `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                                                  |
+| `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`                                    |
+| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                                                       |
+| `RATE_LIMIT_GENERAL_PER_MIN`    | `120`                        | Requests per minute per client address to every route except `/health*`; then 429 `rate_limited`                                                |
+| `RATE_LIMIT_SEND_PER_MIN`       | `20`                         | Sends (`POST /sessions/:id/messages`, replays included) per minute per client address, on top of the general limit                              |
+| `TRUST_PROXY`                   | (none)                       | Comma-separated IPs or CIDR ranges of proxies whose `X-Forwarded-For` is believed; no hop counts, `true`, `*` or /0                             |
+| `CORS_ORIGINS`                  | (none)                       | Comma-separated `http(s)://host[:port]` origins allowed by CORS, or `*` alone; unset: no CORS headers                                           |
+| `RETENTION_DAYS`                | (none)                       | Delete sessions inactive for longer than this many days (1–3,650); unset: never                                                                 |
+| `RETENTION_INTERVAL_MS`         | `3600000`                    | How often retention runs while `RETENTION_DAYS` is set (10 ms to one day)                                                                       |
+| `DB_STATEMENT_TIMEOUT_MS`       | `10000`                      | Default limit of every database statement, lock waits included (100 ms to one hour)                                                             |
+| `REQUEST_TIMEOUT_MS`            | `30000`                      | How long a client may take to send a whole request (headers and body); then 408, at most a tenth later. Never limits a response (1,000–600,000) |
 
 The model catalog lists, per provider, whether it needs an API key, its default model, its
 models with context window and maximum output tokens, and optionally `maxConcurrency` (its
@@ -520,21 +520,21 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot hav
 
 ## Limits
 
-| Limit                          | Default                                                      | When it is reached                                                       |
-| ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| Active answers in this process | 8 (`MAX_ACTIVE_GENERATIONS`)                                 | 503 `server_busy`, `Retry-After: 10`                                     |
-| Active answers per provider    | catalog `maxConcurrency`, else 4 (`MAX_ACTIVE_PER_PROVIDER`) | 503 `provider_busy` naming the provider and its limit, `Retry-After: 10` |
-| Active turns per session       | 1 (a database rule)                                          | 409 `session_busy`                                                       |
-| Message length                 | 16,000 characters                                            | 400 `validation_error`                                                   |
-| Message plus system prompt     | the model's context window, see below                        | 422 `input_too_long`                                                     |
-| History sent to the model      | the model's history budget, see below                        | the oldest whole turns are left out                                      |
-| Output per attempt             | the catalog's `maxOutputTokens`                              | finish reason `length`                                                   |
-| Wall time per attempt          | 180 s (`GENERATION_DEADLINE_MS`)                             | failed / `llm_timeout`                                                   |
-| Requests per client address    | 120 a minute (`RATE_LIMIT_GENERAL_PER_MIN`), not `/health*`  | 429 `rate_limited`, `Retry-After` in seconds                             |
-| Sends per client address       | 20 a minute (`RATE_LIMIT_SEND_PER_MIN`), replays included    | 429 `rate_limited`, `Retry-After` in seconds                             |
-| Request body                   | 128 KiB                                                      | 413 `request_error`                                                      |
-| Time to send a request         | 30 s (`REQUEST_TIMEOUT_MS`), never the response              | 408, the connection is closed                                            |
-| One database statement         | 10 s (`DB_STATEMENT_TIMEOUT_MS`), lock waits included        | 500 `internal_error`, logged                                             |
+| Limit                          | Default                                                               | When it is reached                                                       |
+| ------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Active answers in this process | 8 (`MAX_ACTIVE_GENERATIONS`)                                          | 503 `server_busy`, `Retry-After: 10`                                     |
+| Active answers per provider    | catalog `maxConcurrency`, else 4 (`MAX_ACTIVE_PER_PROVIDER`)          | 503 `provider_busy` naming the provider and its limit, `Retry-After: 10` |
+| Active turns per session       | 1 (a database rule)                                                   | 409 `session_busy`                                                       |
+| Message length                 | 16,000 characters                                                     | 400 `validation_error`                                                   |
+| Message plus system prompt     | the model's context window, see below                                 | 422 `input_too_long`                                                     |
+| History sent to the model      | the model's history budget, see below                                 | the oldest whole turns are left out                                      |
+| Output per attempt             | the catalog's `maxOutputTokens`                                       | finish reason `length`                                                   |
+| Wall time per attempt          | 180 s (`GENERATION_DEADLINE_MS`)                                      | failed / `llm_timeout`                                                   |
+| Requests per client address    | 120 a minute (`RATE_LIMIT_GENERAL_PER_MIN`), not `/health*`           | 429 `rate_limited`, `Retry-After` in seconds                             |
+| Sends per client address       | 20 a minute (`RATE_LIMIT_SEND_PER_MIN`), replays included             | 429 `rate_limited`, `Retry-After` in seconds                             |
+| Request body                   | 128 KiB                                                               | 413 `request_error`                                                      |
+| Time to send a request         | 30 s (`REQUEST_TIMEOUT_MS`; enforced within 33 s), never the response | 408, the connection is closed                                            |
+| One database statement         | 10 s (`DB_STATEMENT_TIMEOUT_MS`), lock waits included                 | 500 `internal_error`, logged                                             |
 
 - **Capacity** is checked at admission, after the busy check and right before the turn is
   inserted, and taken synchronously. There is no queue or waiting room: a full server or
@@ -736,8 +736,8 @@ What is in place:
   ([#25](https://github.com/shaun0457/llm-chat-backend/issues/25)).
 - **Capacity limits**: at most 8 answers at a time in the process and 4 per provider, each
   over its limit answered at once with 503 ([Limits](#limits)).
-- **Request bounds**: bodies up to 128 KiB, 30 s to send a whole request (a slow body is cut
-  with 408; responses, event streams and JSON waits are never cut), 10 s per database
+- **Request bounds**: bodies up to 128 KiB, 30 s to send a whole request (stalled headers or a stalled body are cut
+  with 408 within 33 s; responses, event streams and JSON waits are never cut), 10 s per database
   statement so no request waits forever behind a lock.
 - **Security headers** from `@fastify/helmet` on every response, problem details and event
   streams included: a Content-Security-Policy of `'self'` (the API documentation at `/docs`
