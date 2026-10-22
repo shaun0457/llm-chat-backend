@@ -124,14 +124,16 @@ describe("API documentation", () => {
 
     const headersOf = (status: string): string[] =>
       Object.keys(send.responses[status].headers ?? {}).sort();
-    expect(headersOf("200")).toEqual(["Preference-Applied"]);
+    expect(headersOf("200")).toEqual(["Preference-Applied", "Vary"]);
     expect(headersOf("202")).toEqual([
       "Cache-Control",
       "Location",
       "Preference-Applied",
       "Retry-After",
+      "Vary",
     ]);
-    expect(headersOf("502")).toEqual(["Preference-Applied"]);
+    expect(headersOf("502")).toEqual(["Preference-Applied", "Vary"]);
+    expect(send.responses["200"].headers.Vary.schema).toMatchObject({ enum: ["Accept"] });
     for (const status of ["200", "202"]) {
       expect(send.responses[status].content["application/json"].schema.required).toEqual(
         expect.arrayContaining(["userMessage", "assistantMessage"]),
