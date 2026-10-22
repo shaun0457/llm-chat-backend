@@ -226,6 +226,7 @@ export function createMessagesService(deps: {
       const { userMessage, assistantMessage } = admitted.turn;
       const { attempt } = assistantMessage;
       if (attempt === null) {
+        reservation.release();
         throw new Error("an admitted assistant message has no attempt");
       }
       jobs.start({
