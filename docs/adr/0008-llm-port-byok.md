@@ -89,7 +89,8 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
 - **Catalog.** Only models that streamed a clean answer in the live check are listed:
   `meta/llama-3.2-11b-vision-instruct` (default), with a conservative 32,768-token context
   window and 2,048 output tokens (not measured). A unit test pins the shipped NVIDIA list, so
-  adding a model means running the live check first.
+  adding a model means running the live check first. Superseded by the amendment for issue
+  #36: the catalog is now `nvidia/nemotron-3-ultra-550b-a55b`, a reasoning model.
 
 ## Verification findings
 
@@ -177,3 +178,92 @@ read it. Decided by the owner: the decision now starts with the provider. `requi
 provider (a malformed one is a 400 that is never echoed), and replays still skip the decision.
 Tests: `decideCredential` unit cases, and an `ollama` send behind the msw upstream that records
 `Authorization: Bearer no-key` with a header and with `OLLAMA_API_KEY` set.
+
+## Amendment (2026-10-22, issue #36): nemotron-3-ultra, a reasoning model, with reasoning filtered out
+
+Decided by the owner. This reverses the exclusion of reasoning models in V3 above and replaces
+the catalog.
+
+**Why.** `meta/llama-3.2-11b-vision-instruct` had been catalogued by elimination, and it was
+unreliable: in a five-run benchmark it answered 3 of 5 times (the other two calls sent nothing
+within 120 s), with a median of 21 s, and on a local trial stack one turn got no token for
+177 s and failed `llm_timeout`. Every model the key's account could use was then probed; all
+of them reason before answering, 12 others answered 404 and 2 timed out. The five usable ones
+ran 20 times each in rotating order (a three-sentence answer, an explanation of at most 150
+characters, and two-turn recall), streamed with `max_tokens` 4096, a 90 s timeout and no
+retries:
+
+| Model                                  | OK                                | First answer token p50 / p95 | Total p50 / p95 | Recall |
+| -------------------------------------- | --------------------------------- | ---------------------------- | --------------- | ------ |
+| nvidia/nemotron-3-ultra-550b-a55b      | 20/20                             | 2.0 / 10.6 s                 | 6.7 / 19.4 s    | 6/6    |
+| nvidia/nemotron-3.5-lightning-30b-a3b  | 20/20                             | 12.3 / 22.2 s                | 13.1 / 23.1 s   | 5/6    |
+| z-ai/glm-5.3-flash                     | 20/20                             | 14.5 / 85.5 s                | 19.3 / 86.9 s   | 6/6    |
+| deepseek-ai/deepseek-v4.1-flash        | 20/20                             | 27.4 / 49.2 s                | 27.9 / 52.9 s   | 6/6    |
+| nvidia/nemotron-3.5-super-vl-120b-a12b | 14/20 (3 × HTTP 500, 3 × timeout) | 7.6 / 44.9 s                 | 8.3 / 46.0 s    | 5/5    |
+
+`nemotron-3-ultra` used about 166 output tokens per call (about 86 characters of reasoning and
+131 of answer); no model ran out of output budget.
+
+**Decision.**
+
+- `nvidia/nemotron-3-ultra-550b-a55b` is the only `nvidia` model and its default, with a
+  262,144-token context window and 4,096 output tokens (V1, V2 below). Text only.
+- **Reasoning is filtered out.** The adapter reads only `choices[0].delta.content`; the
+  reasoning side fields (`reasoning_content`, `reasoning`) are never read, so reasoning is never
+  stored, returned, streamed, logged or sent as history. The API does not change: no new field
+  and no new event. While the model reasons, an event stream shows only `message.created` and
+  `: ping` comments, and a JSON client waits as usual. Showing reasoning is out of scope.
+- **No request options.** The model card says reasoning is on by default ("Reasoning ON
+  (default)", switched by `chat_template_kwargs.enable_thinking`), and the live probe below
+  confirms that a request without `chat_template_kwargs` reasons and answers exactly like one
+  with `enable_thinking: true`. The catalog therefore needs no per-model request options, and
+  its schema is unchanged.
+- **An answer without text fails.** A stream that finishes without any `content` text throws
+  `llm_upstream_error`: "The model used its whole output budget before it started the answer."
+  for finish reason `length`, otherwise "The model provider finished without any answer text."
+  The existing code fits best: the other codes name a key, the input length or time, while
+  here the upstream's answer is unusable. This holds for every OpenAI-compatible provider: an
+  empty completed answer would otherwise be stored and sent as history in later turns.
+- Answers may contain Markdown (for example `**bold**`); they are stored and returned as the
+  model wrote them.
+
+**Verification findings** (live probe in the `live-llm` workflow,
+[run 39808368033](https://github.com/shaun0457/llm-chat-backend/actions/runs/39808368033),
+and the sources named):
+
+- **V1 context and output limits.** The model card gives a context of "up to 1M tokens", and its
+  vLLM and SGLang recipes serve 262,144 tokens (256k) unless long context is enabled explicitly.
+  The hosted API does not reveal its limit: its public `GET /v1/models` lists only id, object,
+  created and owned_by, and a request with `max_tokens` 4,000,000 was accepted and answered
+  normally (35 completion tokens), so the bound is not checked against a request. The catalog
+  takes the documented default of 262,144; were the hosted deployment shorter, an overflow
+  would fail as `llm_context_overflow`. A prompt that large was not sent: it would cost about
+  a quarter of a million tokens per check.
+- **V2 reasoning size.** Four prompts (one short sentence, at most 150 characters, three
+  sentences, a short logic puzzle), each without options and with `enable_thinking: true`:
+  31 to 299 completion tokens including 86 to 1,061 characters of reasoning, every call
+  finishing with `stop`. With `enable_thinking: false` there was no reasoning (8 and 70 tokens).
+  The two longest answers (260 and 299 tokens) streamed at about 64 and 52 tokens per second
+  after their first chunk (shorter calls had pauses that make a rate meaningless), so 4,096
+  tokens take roughly 65 to 80 s, inside the 180 s generation deadline, where 8,192 would not
+  fit reliably. 4,096 is over 13 times the largest use seen here or in the benchmark.
+- **V3 the reasoning field with the `openai` SDK.** openai 7.28.0 yields each chunk's parsed
+  JSON unchanged (`core/streaming.js`), so fields the SDK's types do not declare survive.
+  NVIDIA streamed the reasoning in `delta.reasoning_content` (a string) before the
+  `delta.content` chunks in every call; `delta.reasoning` was not seen, but the contract tests
+  cover both names. `stream_options.include_usage` reported usage in every call, and the
+  completion tokens include the reasoning.
+- **V4 timeouts.** First chunk after 0.4 to 3.5 s, once 20.5 s (a queued request); whole
+  answers within 26.2 s; the benchmark's p95 was 10.6 s to the first answer token and 19.4 s in
+  total. Reasoning chunks count as progress for the 60 s bound between chunks. The 60 s
+  per-attempt timeout, the two retries and the 180 s generation deadline stay unchanged.
+
+**Tests.** `test/adapters/openai-compatible.test.ts` ("contract.reasoning": reasoning in either
+field never becomes text and keeps finish reason and usage; a budget that ends in reasoning, or
+a stream without text, fails with `llm_upstream_error`).
+`test/integration/messages-reasoning.test.ts`: for both field names, over JSON and SSE, the
+stored and returned answer and the SSE deltas hold only the answer, the next turn's history
+holds only the answer, no log line, response or database row contains reasoning, and a budget
+used up by reasoning fails with `llm_upstream_error` and no content.
+`test/adapters/nvidia-live.test.ts` and the `live-llm` workflow run against the new model with
+1,024 output tokens (reasoning plus a short answer) instead of 32.
