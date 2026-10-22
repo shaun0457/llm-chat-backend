@@ -5,6 +5,7 @@ import type { Clock } from "../../clock.js";
 import type { Db, Tx } from "../../db/client.js";
 import { pgErrorCode } from "../../db/errors.js";
 import { remainingMs } from "./deadline.js";
+import { TIMED_OUT, withTimeout } from "./race.js";
 
 /** The first pause between tries; it doubles after every failed try (100, 200, 400 … ms). */
 const FIRST_BACKOFF_MS = 100;
@@ -37,20 +38,16 @@ class BudgetExhausted extends Error {
   }
 }
 
-/** `promise`, or a rejection once `ms` have passed; the timer never outlives the call. */
+/** `promise`, or a BudgetExhausted rejection once `ms` have passed first. */
 async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   // A try abandoned here still ends on its own (at its statement timeout, V2); its outcome is
   // then of no interest, but must not surface as an unhandled rejection.
   promise.catch(() => {});
-  let timer: NodeJS.Timeout | undefined;
-  const expired = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new BudgetExhausted()), ms);
-  });
-  try {
-    return await Promise.race([promise, expired]);
-  } finally {
-    clearTimeout(timer);
+  const result = await withTimeout(promise, ms);
+  if (result === TIMED_OUT) {
+    throw new BudgetExhausted();
   }
+  return result;
 }
 
 export type TerminalWriteLimits = {

@@ -1,4 +1,5 @@
-import type { JobEnd, JobRegistry } from "./jobs.js";
+import type { JobRegistry } from "./jobs.js";
+import { withTimeout } from "./race.js";
 import type { Message, Turn } from "./schemas.js";
 
 /**
@@ -22,27 +23,6 @@ export type Attach = {
   json(assistantId: string, attempt: number, waitMs: number): Promise<JsonOutcome | undefined>;
 };
 
-const TIMED_OUT = "timed_out";
-
-/** The job's end, or TIMED_OUT once `waitMs` passed first. The timer never outlives the call. */
-async function endWithin(
-  finished: Promise<JobEnd>,
-  waitMs: number,
-): Promise<JobEnd | typeof TIMED_OUT> {
-  if (waitMs <= 0) {
-    return TIMED_OUT;
-  }
-  let timer: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<typeof TIMED_OUT>((resolve) => {
-    timer = setTimeout(resolve, waitMs, TIMED_OUT);
-  });
-  try {
-    return await Promise.race([finished, timedOut]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function kindOf(status: Message["status"]): JsonOutcome["kind"] {
   return status === "generating" ? "pending" : status;
 }
@@ -57,7 +37,7 @@ export function createAttach(deps: {
     async json(assistantId, attempt, waitMs) {
       const job = jobs.get(assistantId);
       if (job !== undefined && job.attempt === attempt) {
-        await endWithin(job.finished, waitMs);
+        await withTimeout(job.finished, waitMs);
       }
       const turn = await readTurn(assistantId);
       if (turn === undefined) {

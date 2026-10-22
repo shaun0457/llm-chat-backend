@@ -9,6 +9,7 @@ import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
 import { remainingMs } from "./deadline.js";
+import { untilAbort, withTimeout } from "./race.js";
 import {
   completeAssistant,
   failAssistant,
@@ -83,20 +84,10 @@ function describeFailure(
  */
 async function* untilAborted<T>(events: AsyncIterable<T>, signal: AbortSignal): AsyncGenerator<T> {
   const iterator = events[Symbol.asyncIterator]();
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(signal.reason);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  aborted.catch(() => {});
   let exhausted = false;
   try {
     for (;;) {
-      signal.throwIfAborted();
-      const next = iterator.next();
-      // A next() that loses the race may still reject later; that is no longer of interest.
-      next.catch(() => {});
-      const result = await Promise.race([next, aborted]);
+      const result = await untilAbort(iterator.next(), signal);
       if (result.done === true) {
         exhausted = true;
         return;
@@ -104,29 +95,11 @@ async function* untilAborted<T>(events: AsyncIterable<T>, signal: AbortSignal): 
       yield result.value;
     }
   } finally {
-    if (onAbort !== undefined) {
-      signal.removeEventListener("abort", onAbort);
-    }
     if (!exhausted) {
       // Not awaited: a provider that ignores the signal may never settle it.
       Promise.resolve(iterator.return?.()).catch(() => {});
     }
   }
-}
-
-/** Waits until `pending` (which never rejects) settles or `ms` pass, whichever comes first. */
-async function settledWithin(pending: Promise<void> | undefined, ms: number): Promise<void> {
-  if (pending === undefined) {
-    return;
-  }
-  let timer: NodeJS.Timeout | undefined;
-  await Promise.race([
-    pending,
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, ms);
-    }),
-  ]);
-  clearTimeout(timer);
 }
 
 /** Everything a job needs, frozen at admission. */
@@ -347,7 +320,9 @@ export function createJobRegistry(deps: {
       // A stalled database must not hold the job here past its deadline and budget. A flush
       // still running afterwards is fenced on `generating`, so it can never overwrite the
       // terminal state, which carries the full text anyway.
-      await settledWithin(flushing, timing.terminalStatementTimeoutMs);
+      if (flushing !== undefined) {
+        await withTimeout(flushing, timing.terminalStatementTimeoutMs);
+      }
     }
 
     // A complete answer is stored below even if the job was stopped meanwhile (unless its
