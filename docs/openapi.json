@@ -974,7 +974,7 @@
                 }
               }
             },
-            "description": "validation_error: the id is not a UUID"
+            "description": "validation_error: the id is not a UUID, or a sent body is malformed"
           },
           "404": {
             "content": {
@@ -1976,7 +1976,7 @@
                             "type": "string"
                           },
                           "errorCode": {
-                            "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                            "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                             "type": [
                               "string",
                               "null"
@@ -2462,7 +2462,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -2642,7 +2642,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -2862,7 +2862,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -3042,7 +3042,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -3630,7 +3630,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -3832,7 +3832,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                          "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -4132,7 +4132,7 @@
                       "type": "string"
                     },
                     "errorCode": {
-                      "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
+                      "description": "Failed assistant messages: llm_auth_failed (the provider rejected the key), llm_upstream_error (any other provider failure, including no answer text; also a database failure while reading the history), llm_timeout (no response in time, or the generation deadline passed), llm_context_overflow (the provider said the input is too long for the model), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                       "type": [
                         "string",
                         "null"

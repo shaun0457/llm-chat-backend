@@ -130,7 +130,7 @@ export const sessionsRoutes: FastifyPluginAsyncZod<{ service: SessionsService }>
         response: {
           204: z.null().describe("No content"),
           ...problemResponses({
-            400: "validation_error: the id is not a UUID",
+            400: "validation_error: the id is not a UUID, or a sent body is malformed",
             ...NOT_FOUND,
             // Fastify parses a DELETE body too, although this route reads none.
             ...BODY_PROBLEMS,

@@ -132,7 +132,8 @@ export const messageResponse = z
       .nullable()
       .describe(
         "Failed assistant messages: llm_auth_failed (the provider rejected the key), " +
-          "llm_upstream_error (any other provider failure, including no answer text), " +
+          "llm_upstream_error (any other provider failure, including no answer text; also a " +
+          "database failure while reading the history), " +
           "llm_timeout (no response in time, or the generation deadline passed), " +
           "llm_context_overflow (the provider said the input is too long for the model), " +
           "cancelled (the server shut down), interrupted (the generation was lost, e.g. in a " +
