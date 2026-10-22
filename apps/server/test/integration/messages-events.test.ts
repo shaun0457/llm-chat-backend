@@ -8,7 +8,14 @@ import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import { type Message, createSession, eventually, getMessage, send } from "../helpers/messages.js";
 import { testProviders } from "../helpers/providers.js";
-import { type SseEvent, eventsOf, listen, openSse, parseSse } from "../helpers/sse-client.js";
+import {
+  type SseEvent,
+  closeListeningApp,
+  eventsOf,
+  listen,
+  openSse,
+  parseSse,
+} from "../helpers/sse-client.js";
 
 const testDb = useTestDatabase();
 
@@ -64,7 +71,7 @@ describe("re-attaching with the events endpoint", () => {
     for (const release of gates.splice(0)) {
       release();
     }
-    await app.close();
+    await closeListeningApp(app);
   });
 
   describe("events.live", () => {

@@ -13,7 +13,7 @@ import {
   streamOf,
   useUpstream,
 } from "../helpers/msw-openai.js";
-import { eventsOf, listen, parseSse } from "../helpers/sse-client.js";
+import { closeListeningApp, eventsOf, listen, parseSse } from "../helpers/sse-client.js";
 
 /** Obviously fake, and in no format the scrubber recognises: only its literal removal helps. */
 const SENTINEL = "sentinel-byok-7d1e2f90";
@@ -136,7 +136,7 @@ describe("the sentinel key appears nowhere", () => {
 
   afterEach(async () => {
     responses.length = 0;
-    await app.close();
+    await closeListeningApp(app);
   });
 
   it("on success", async () => {

@@ -49,6 +49,16 @@ export async function listen(app: FastifyInstance): Promise<string> {
   return `http://127.0.0.1:${port}`;
 }
 
+/**
+ * Closes an app that listened on a real socket. Client connections are dropped first: fetch
+ * may keep a spare idle connection open for seconds (its own keep-alive), and closing the
+ * server would wait for it.
+ */
+export async function closeListeningApp(app: FastifyInstance): Promise<void> {
+  app.server.closeAllConnections();
+  await app.close();
+}
+
 export type SseConnection = {
   readonly status: number;
   readonly headers: Headers;

@@ -8,7 +8,13 @@ import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import { type LogCapture, captureLogs } from "../helpers/log-capture.js";
 import { type Message, createSession, eventually, getMessage, send } from "../helpers/messages.js";
 import { testProviders } from "../helpers/providers.js";
-import { type SseConnection, eventsOf, listen, openSse } from "../helpers/sse-client.js";
+import {
+  type SseConnection,
+  closeListeningApp,
+  eventsOf,
+  listen,
+  openSse,
+} from "../helpers/sse-client.js";
 
 const testDb = useTestDatabase();
 
@@ -58,7 +64,7 @@ describe("SSE sends", () => {
     for (const release of gates.splice(0)) {
       release();
     }
-    await app.close();
+    await closeListeningApp(app);
   });
 
   describe("sse.send", () => {
