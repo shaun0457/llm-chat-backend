@@ -69,7 +69,7 @@ describe("job.finally", () => {
     expect(heard).toEqual(["delta", "terminal"]);
   });
 
-  it("shuts down while a generation hangs: the generation is aborted and the waiting send answers", async () => {
+  it("shuts down while a generation hangs: the generation is cancelled and the waiting send answers", async () => {
     const fake = new FakeLlmProvider();
     fake.script({ deltas: ["Hel"], hang: true });
     const fakeApp = makeTestApp({ db: testDb.db, ...testProviders({ llm: fake }) });
@@ -86,14 +86,11 @@ describe("job.finally", () => {
 
     expect(fake.signals[0]?.aborted).toBe(true);
     const response = await pending;
-    expect(response.statusCode).toBe(202);
-    const { assistantMessage } = response.json();
-    expect(assistantMessage).toMatchObject({ status: "generating" });
-    // The full 202 contract: the client knows where to look later.
-    expect(response.headers.location).toBe(
-      `/sessions/${session.id}/messages/${assistantMessage.id}`,
-    );
-    expect(response.headers["retry-after"]).toBe("2");
-    expect(response.headers["cache-control"]).toBe("no-store");
+    // The turn reached a terminal state before the server closed: the client learns it.
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({
+      code: "cancelled",
+      assistantMessage: { status: "failed", errorCode: "cancelled", content: "Hel" },
+    });
   });
 });

@@ -36,8 +36,17 @@ export type AppDeps = {
 };
 
 const REQUEST_ID_HEADER = "x-request-id";
-/** How long closing the app waits for aborted generations; below server.ts's shutdown timeout. */
-const JOB_SHUTDOWN_WAIT_MS = 5_000;
+/** Time for providers to honour the abort before the job's terminal write starts. */
+const JOB_STOP_GRACE_MS = 1_000;
+
+/**
+ * How long closing the app waits for aborted generations to store their final state: the
+ * terminal-write budget plus a grace for providers to stop. server.ts's forced-exit timeout is
+ * longer still. Rows not stored in time are left for stale reclaim.
+ */
+export function jobShutdownWaitMs(config: Pick<AppConfig, "terminalWriteBudgetMs">): number {
+  return config.terminalWriteBudgetMs + JOB_STOP_GRACE_MS;
+}
 const VALID_REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 
 /**
@@ -113,10 +122,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     service: messages,
     jsonWait: { defaultMs: config.jsonDefaultWaitMs, maxMs: config.jsonMaxWaitMs },
   });
-  // Before the server stops accepting: running generations end, so waiting responses finish
-  // instead of holding the close open. An aborted row stays generating for now.
+  // Before the server stops accepting: running generations are aborted and store failed /
+  // cancelled, so waiting responses finish instead of holding the close open.
   app.addHook("preClose", async () => {
-    await jobs.shutdown(JOB_SHUTDOWN_WAIT_MS);
+    await jobs.shutdown(jobShutdownWaitMs(config));
   });
 
   return app;

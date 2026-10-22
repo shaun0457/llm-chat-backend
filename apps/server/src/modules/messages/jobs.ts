@@ -22,6 +22,7 @@ export type Reservation = { release(): void };
 
 const UPSTREAM_ERROR_DETAIL = "The model provider returned an error.";
 const TIMEOUT_DETAIL = "The answer was not finished within the time limit.";
+const CANCELLED_DETAIL = "The server shut down before the answer was finished.";
 
 /**
  * Why a job was stopped from outside its generation. `deleted` / `fenced`: its row is gone or
@@ -210,6 +211,8 @@ export function createJobRegistry(deps: {
           userMessage: spec.userMessage,
         }),
       };
+      // Stopped already (e.g. admitted while the server closes): do not call the provider.
+      controller.signal.throwIfAborted();
       for await (const event of spec.provider.stream(request, {
         signal: controller.signal,
         apiKey: spec.apiKey,
@@ -233,23 +236,25 @@ export function createJobRegistry(deps: {
       await flushing;
     }
 
+    // A complete answer is stored below even if the job was stopped meanwhile (unless its
+    // fence was lost): the work is done, and storing it is the honest outcome.
     const answered = finish !== undefined && !generationFailed;
-    if (!answered && !fenceLost && stopReasonOf(controller.signal) === "deadline") {
-      jobLog.warn("the generation deadline passed");
+    const stopped = stopReasonOf(controller.signal);
+    if (fenceLost || stopped === "fenced" || stopped === "deleted") {
+      // The row is gone or belongs to a newer attempt: nothing more may be written.
+      jobLog.info({ stopped }, "generation stopped without a terminal write");
+      return undefined;
+    }
+    if (!answered && (stopped === "deadline" || stopped === "shutdown")) {
+      jobLog.warn({ stopped }, "generation stopped before the answer was finished");
+      const timedOut = stopped === "deadline";
       return store((tx) =>
         failAssistant(tx, fence, {
           content: bus.snapshot(),
-          errorCode: "llm_timeout",
-          errorDetail: TIMEOUT_DETAIL,
+          errorCode: timedOut ? "llm_timeout" : "cancelled",
+          errorDetail: timedOut ? TIMEOUT_DETAIL : CANCELLED_DETAIL,
         }),
       );
-    }
-    if (fenceLost || (controller.signal.aborted && !answered)) {
-      // Fencing lost (nothing more may be written) or shutdown before the answer was complete
-      // (the row stays generating until stale reclaim exists). A complete answer is still
-      // stored below, even if shutdown began meanwhile.
-      jobLog.info({ fenceLost }, "generation aborted");
-      return undefined;
     }
     if (generationFailed) {
       jobLog.warn({ err: generationError }, "generation failed");
