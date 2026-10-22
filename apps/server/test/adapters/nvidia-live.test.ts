@@ -88,6 +88,8 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
       expect(text.trim().length).toBeGreaterThan(0);
       expect(text).not.toMatch(INLINE_REASONING);
       expect(finishes).toHaveLength(1);
+      // V2: the provider honours stream_options.include_usage (checked 2026-10-22).
+      expect(finish?.usage).not.toBeNull();
     },
   );
 });
