@@ -49,7 +49,10 @@ export const sendMessageBody = z.strictObject({
     .uuid()
     // Ids are global: a placeholder like the nil UUID would be taken by its first user.
     .regex(NOT_NIL_OR_MAX_UUID, "must not be the nil or max UUID")
-    // Zod leaves the format out of the document once a string has two patterns.
+    // Canonical like the path ids, should the id ever be compared as a string.
+    .toLowerCase()
+    // Zod leaves the format out of the document once a string has two patterns. Last: metadata
+    // belongs to one schema instance, and every further check makes a new one.
     .meta({ format: "uuid" })
     .optional()
     .describe(
