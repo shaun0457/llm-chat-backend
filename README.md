@@ -310,16 +310,16 @@ pnpm test:unit   # unit and lint tests only; no Docker needed
 pnpm test        # everything; Docker must be running (testcontainers)
 ```
 
-No test reaches a real LLM provider; the boundary is faked at two levels. Service and
+The test suite never calls a real LLM provider; the boundary is faked at two levels. Service and
 integration tests inject `FakeLlmProvider` (`test/helpers/fake-llm.ts`), a scriptable
 implementation of the provider port: deltas, delays, gates, hangs, failures, a missing finish
 event, and usage, while it records the requests, abort signals and API keys it received. The
 OpenAI-compatible adapter itself is tested from the other side of the port, against an
 [msw](https://mswjs.io/)-mocked upstream HTTP API (`test/helpers/msw-openai.ts`): chunk
 arrangements, reasoning fields, 401/403, 429 then success, persistent 5xx, context overflow
-and timeouts. The sentinel tests combine the real adapter with msw. With `NVIDIA_API_KEY` set
-locally, `pnpm test:unit` also runs a live check of every catalogued NVIDIA model; it never
-runs in CI.
+and timeouts. The sentinel tests combine the real adapter with msw. Separately, an opt-in live check
+calls every catalogued NVIDIA model: `LLM_LIVE_TESTS=1 NVIDIA_API_KEY=… pnpm test:unit`. It is
+skipped otherwise and never runs in CI.
 
 Integration tests start one PostgreSQL 17 container per run, migrate a template database once,
 and give every test file its own copy, so files run in parallel without seeing each other's

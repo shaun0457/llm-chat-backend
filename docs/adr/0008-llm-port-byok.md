@@ -108,7 +108,8 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
 - **V3 reasoning in content:** the two catalogued models are instruction models without a
   reasoning mode. A live stream per model is **pending** (needs a key); the optional test
   `test/adapters/nvidia-live.test.ts` checks for `<think>` in the text, exactly one finish
-  and the presence of usage, and runs only when `NVIDIA_API_KEY` is set outside CI.
+  and the presence of usage, and runs only with `LLM_LIVE_TESTS=1` and `NVIDIA_API_KEY` set,
+  outside CI.
 - **V4 SDK retries and timeout** (openai 7.28.0 source, `client.js`): `shouldRetry` retries
   408, 409, 429 and every status ≥ 500, plus connection errors and timeouts; 401/403 are not
   retried, unless the server sends `x-should-retry: true`, which the SDK obeys. Retries honour
@@ -135,8 +136,9 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
 - Upstream error formats differ by provider: the mapping relies on the status first and
   best-effort message matching for context overflow. An upstream (server-configured, so
   trusted) could force a retry of a 401 with `x-should-retry: true`.
-- A stream that stalls after its headers is not ended by the SDK timeout; the per-attempt
-  generation deadline ends it.
+- The SDK timeout ends when the headers arrive, so the adapter applies the same 60 s to every
+  gap between chunks: a stream that stops sending fails with `llm_timeout`. The total time of
+  an attempt is bounded by the generation deadline.
 - Adding an OpenAI-compatible provider (for example a local model) means a catalog entry, a
   base URL setting and one line in `server.ts`, with no key for a keyless server.
 - Ordinary error messages could in principle contain a key the serializer cannot recognise;

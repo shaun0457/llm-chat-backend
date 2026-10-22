@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
 import type { AppConfig } from "./config.js";
+import { REDACTED } from "./credentials/scrub.js";
 import { serializeError } from "./credentials/serialize-error.js";
 import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
@@ -68,7 +69,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({
     logger: {
       level: config.logLevel,
-      redact: { paths: REDACTED_PATHS, censor: "[REDACTED]" },
+      redact: { paths: REDACTED_PATHS, censor: REDACTED },
       serializers: { err: serializeError },
       ...(logStream === undefined ? {} : { stream: logStream }),
     },

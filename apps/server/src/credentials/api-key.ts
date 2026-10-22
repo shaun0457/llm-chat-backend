@@ -1,6 +1,6 @@
 import { inspect } from "node:util";
 
-const REDACTED = "[REDACTED]";
+import { REDACTED } from "./scrub.js";
 
 /** A well-formed API key, from the X-LLM-Api-Key header or the environment: 1–512 visible ASCII. */
 export const API_KEY_PATTERN = /^[\x21-\x7e]{1,512}$/;

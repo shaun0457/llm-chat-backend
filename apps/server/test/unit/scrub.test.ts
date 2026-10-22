@@ -18,7 +18,7 @@ describe("scrub", () => {
   it.each([
     ["Authorization: Bearer abc.def-ghi_123", "Authorization: Bearer [REDACTED]"],
     ["bearer   tok/en+=", "bearer [REDACTED]"],
-    ['{"auth":"Bearer xyz"}', '{"auth":"Bearer [REDACTED]"}'],
+    ['{"auth":"Bearer abcDEF123"}', '{"auth":"Bearer [REDACTED]"}'],
   ])("removes bearer tokens without knowing the key: %s", (input, expected) => {
     expect(scrub(input, null)).toBe(expected);
   });
@@ -30,6 +30,12 @@ describe("scrub", () => {
     ["url: x?api-key=abc;y", "url: x?api-key=[REDACTED];y"],
   ])("removes key query values: %s", (input, expected) => {
     expect(scrub(input, null)).toBe(expected);
+  });
+
+  it("keeps the ordinary word that follows 'bearer' in prose", () => {
+    expect(scrub("Missing bearer token in the Authorization header", null)).toBe(
+      "Missing bearer token in the Authorization header",
+    );
   });
 
   it("keeps ordinary words that only contain 'key'", () => {

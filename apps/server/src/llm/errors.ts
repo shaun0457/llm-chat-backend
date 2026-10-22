@@ -37,8 +37,8 @@ export function failureOf(error: unknown): { errorCode: UpstreamErrorCode; error
     : { errorCode: "llm_upstream_error", errorDetail: DEFAULT_UPSTREAM_DETAIL };
 }
 const MAX_DETAIL_LENGTH = 500;
-/** How much of an upstream error body is looked at. */
-const MAX_BODY_LENGTH = 4096;
+/** How much of an upstream error body is looked at: all the adapter reads (8 KiB). */
+const MAX_BODY_LENGTH = 8192;
 const CONTEXT_STATUSES: ReadonlySet<number> = new Set([400, 413, 422]);
 const CONTEXT_MESSAGE =
   /context[ _-]?(length|window)|maximum context|too many tokens|prompt is too long|input is too long/i;

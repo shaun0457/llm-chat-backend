@@ -1,7 +1,10 @@
-const REDACTED = "[REDACTED]";
+export const REDACTED = "[REDACTED]";
 
-/** `Bearer <token>` in any case, with the token's usual characters. */
-const BEARER = /\b(bearer)\s+[\w.~+/=-]+/gi;
+/**
+ * `Bearer <token>` in any case. The token must contain a digit or symbol, so that prose such
+ * as "missing bearer token" stays readable; real tokens and keys always do.
+ */
+const BEARER = /\b(bearer)\s+(?=[a-z]*[\d.~+/=_-])[\w.~+/=-]+/gi;
 /** `api_key=…`, `apikey=…`, `api-key=…` and `key=…` query or form values. */
 const KEY_PARAM = /([?&;\s]|^)(api[_-]?key|key)=[^&;\s"']+/gi;
 /** Key formats that are recognisable without knowing the key, also partially masked. */

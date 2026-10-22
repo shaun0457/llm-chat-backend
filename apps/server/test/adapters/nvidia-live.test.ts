@@ -6,12 +6,16 @@ import { OpenAiCompatibleProvider } from "../../src/llm/openai-compatible.js";
 import type { LlmEvent } from "../../src/llm/port.js";
 
 /**
- * Optional live check against NVIDIA's hosted API (ADR 0008, V2/V3). Runs only on a developer
- * machine with NVIDIA_API_KEY set; never in CI. The key is read from the environment and
- * never written anywhere.
+ * Optional live check against NVIDIA's hosted API (ADR 0008, V2/V3). Opt-in: runs only with
+ * LLM_LIVE_TESTS=1 and NVIDIA_API_KEY set, and never in CI, so an exported key alone never
+ * makes `pnpm test` call a paid API. The key is read from the environment and written nowhere.
  */
 const key = process.env.NVIDIA_API_KEY;
-const live = key !== undefined && key.length > 0 && process.env.CI === undefined;
+const live =
+  process.env.LLM_LIVE_TESTS === "1" &&
+  key !== undefined &&
+  key.length > 0 &&
+  process.env.CI === undefined;
 
 describe.skipIf(!live)("nvidia live", { timeout: 120_000 }, () => {
   const config = loadConfig({ DATABASE_URL: "postgres://unused@127.0.0.1:9/unused" });
