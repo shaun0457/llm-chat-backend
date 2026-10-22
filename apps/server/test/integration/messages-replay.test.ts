@@ -3,7 +3,8 @@ import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
-import { TEST_ENV, makeTestApp } from "../helpers/app.js";
+import type { JobRegistry } from "../../src/modules/messages/jobs.js";
+import { TEST_ENV, makeTestApp, testJobs } from "../helpers/app.js";
 import { insertCrashedTurn } from "../helpers/crash.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
@@ -40,7 +41,7 @@ describe("idempotent send: client message ids", () => {
 
   function start(
     env: Record<string, string> = {},
-    options: { operatorKeys?: Record<string, string> } = {},
+    options: { operatorKeys?: Record<string, string>; jobs?: JobRegistry } = {},
   ): FastifyInstance {
     fake = new FakeLlmProvider();
     app = makeTestApp({
@@ -227,6 +228,7 @@ describe("idempotent send: client message ids", () => {
       const session = await createSession(app);
       const payload = { id: crypto.randomUUID(), content: "Hi" };
       const original: TurnBody = (await send(app, session.id, payload)).json();
+      const sessionBefore = await getSession(app, session.id);
 
       const replay = await send(app, session.id, payload, SSE);
 
@@ -239,6 +241,7 @@ describe("idempotent send: client message ids", () => {
       expect(events[1]?.data).toEqual({ assistantMessage: original.assistantMessage });
       expect(fake.requests).toHaveLength(1);
       expect(await allMessages(app, session.id)).toHaveLength(2);
+      expect(await getSession(app, session.id)).toEqual(sessionBefore);
     });
 
     it("streams message.created and error for a repeated send of a failed turn", async () => {
@@ -270,6 +273,7 @@ describe("idempotent send: client message ids", () => {
       const original = await send(app, session.id, payload, { prefer: "respond-async" });
       expect(original.statusCode).toBe(202);
       const { userMessage, assistantMessage }: TurnBody = original.json();
+      const sessionBefore = await getSession(app, session.id);
 
       const modes: Array<Record<string, string>> = [{ prefer: "respond-async" }, {}];
       for (const headers of modes) {
@@ -292,30 +296,49 @@ describe("idempotent send: client message ids", () => {
       }
       expect(fake.requests).toHaveLength(1);
       expect(await allMessages(app, session.id)).toHaveLength(2);
+      expect(await getSession(app, session.id)).toEqual(sessionBefore);
     });
 
     it("answers with the outcome when the turn ends within the replay's wait", async () => {
-      start();
+      const inner = testJobs(testDb.db);
+      const waiting: { for?: string } = {};
+      const replayWaiting = createGate();
+      const jobs: JobRegistry = {
+        ...inner,
+        get(assistantId) {
+          const job = inner.get(assistantId);
+          // A JSON send looks the job up to wait for it. Found, it is still generating: the
+          // test holds its gate until this point.
+          if (job !== undefined && assistantId === waiting.for) {
+            replayWaiting.release();
+          }
+          return job;
+        },
+      };
+      start({}, { jobs });
       const release = holdGeneration();
       const session = await createSession(app);
       const payload = { id: crypto.randomUUID(), content: "Hi" };
       const original = await send(app, session.id, payload, { prefer: "respond-async" });
       expect(original.statusCode).toBe(202);
+      waiting.for = (original.json() as TurnBody).assistantMessage.id;
 
       const replay = send(app, session.id, payload, { prefer: "wait=5" });
       pending.push(replay);
-      // Let the replay reach its wait, then let the answer finish.
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The answer finishes only once the replay is waiting for its generation.
+      await replayWaiting.promise;
       release();
 
       const response = await replay;
       expect(response.statusCode).toBe(200);
       expect(response.headers["preference-applied"]).toBe("wait=5");
       expect((response.json() as TurnBody).assistantMessage).toMatchObject({
+        id: waiting.for,
         status: "completed",
         content: "Hello",
       });
       expect(fake.requests).toHaveLength(1);
+      expect(await allMessages(app, session.id)).toHaveLength(2);
     });
 
     it("streams the snapshot, then the remaining deltas without gap or duplicate, then done", async () => {
@@ -332,6 +355,7 @@ describe("idempotent send: client message ids", () => {
         async () => (await getMessage(app, session.id, assistantMessage.id)).json().content,
         (content) => content === "Hel",
       );
+      const sessionBefore = await getSession(app, session.id);
 
       const stream = await openSse(`${base}/sessions/${session.id}/messages`, {
         method: "POST",
@@ -364,6 +388,9 @@ describe("idempotent send: client message ids", () => {
         assistantMessage: expect.objectContaining({ status: "completed", content: "Hello there" }),
       });
       expect(fake.requests).toHaveLength(1);
+      // The generation's completion does not touch the session either.
+      expect(await allMessages(app, session.id)).toHaveLength(2);
+      expect(await getSession(app, session.id)).toEqual(sessionBefore);
     });
   });
 
@@ -544,6 +571,7 @@ describe("idempotent send: client message ids", () => {
 
         expectConflict(response, detail);
         expect(await allMessages(app, session.id)).toHaveLength(2);
+        expect(await getSession(app, session.id)).toEqual(session);
         expect(fake.requests).toHaveLength(1);
       },
     );
@@ -559,6 +587,8 @@ describe("idempotent send: client message ids", () => {
 
       expectConflict(response, "The id is already used by an assistant message");
       expect(await allMessages(app, session.id)).toHaveLength(2);
+      expect(await getSession(app, session.id)).toEqual(session);
+      expect(fake.requests).toHaveLength(1);
     });
 
     it("rejects a conflicting id with 422 even while the session is busy", async () => {
