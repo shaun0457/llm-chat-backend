@@ -396,19 +396,60 @@ describe("OpenAiCompatibleProvider", () => {
       },
     );
 
-    it.each([
-      ["an empty content chunk and stop", [{ content: "" }, { finishReason: "stop" }]],
-      ["no delta at all and content_filter", [{ finishReason: "content_filter" }]],
-    ])(
-      "fails with llm_upstream_error when a stream finishes without any answer text: %s",
-      async (_name, chunks: ChunkSpec[]) => {
-        upstream.reply(streamOf(chunks));
+    it.each(REASONING_FIELDS)(
+      "fails when reasoning in %s is followed by whitespace only, even at the output budget",
+      async (reasoningField) => {
+        upstream.reply(
+          streamOf([
+            { reasoningField, reasoning: "reasoning-marker-c" },
+            { content: "\n\n" },
+            { finishReason: "length" },
+          ]),
+        );
 
         await expect(collect(stream())).rejects.toMatchObject({
           name: "LlmError",
           code: "llm_upstream_error",
-          detail: "The model provider finished without any answer text.",
+          detail: "The model used its whole output budget before it started the answer.",
         });
+      },
+    );
+
+    it.each(REASONING_FIELDS)(
+      "fails when reasoning in %s ends with stop but no answer text",
+      async (reasoningField) => {
+        upstream.reply(
+          streamOf([{ reasoningField, reasoning: "reasoning-marker-d" }, { finishReason: "stop" }]),
+        );
+
+        await expect(collect(stream())).rejects.toMatchObject({
+          name: "LlmError",
+          code: "llm_upstream_error",
+          detail: "The model reasoned but finished without any answer text.",
+        });
+      },
+    );
+
+    it("fails a stream without reasoning that hits the output budget before any text", async () => {
+      upstream.reply(streamOf([{ content: " " }, { finishReason: "length" }]));
+
+      await expect(collect(stream())).rejects.toMatchObject({
+        code: "llm_upstream_error",
+        detail: "The model used its whole output budget before it started the answer.",
+      });
+    });
+
+    it.each([
+      ["an empty content chunk and stop", [{ content: "" }, { finishReason: "stop" }], "stop"],
+      ["no delta at all and content_filter", [{ finishReason: "content_filter" }], "other"],
+    ] as const)(
+      "still finishes, as before, a stream without reasoning and without text: %s",
+      async (_name, chunks: readonly ChunkSpec[], reason) => {
+        upstream.reply(streamOf(chunks));
+
+        const events = await collect(stream());
+
+        expect(events).toEqual([{ type: "finish", reason, usage: null }]);
       },
     );
 
