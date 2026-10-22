@@ -12,12 +12,16 @@ export function liveCheckEnabled(env: Readonly<Record<string, string | undefined
 
 /**
  * A failure worth one more attempt in the live check: the upstream answered 429 or 5xx even
- * after the SDK's own retries. Anything else (auth, a rejected model, a wrong answer) is final.
+ * after the SDK's own retries, or a queued request got no answer in time (NVIDIA queues
+ * requests to busy models). Anything else (auth, an unavailable model, a wrong answer) is final.
  */
 export function isTransientUpstreamFailure(error: unknown): boolean {
-  return (
-    error instanceof LlmError &&
-    error.code === "llm_upstream_error" &&
-    /^The model provider answered HTTP (429|5\d\d)\b/.test(error.detail)
-  );
+  if (error instanceof LlmError) {
+    return (
+      error.code === "llm_timeout" ||
+      (error.code === "llm_upstream_error" &&
+        /^The model provider answered HTTP (429|5\d\d)\b/.test(error.detail))
+    );
+  }
+  return error instanceof Error && error.name === "TimeoutError";
 }

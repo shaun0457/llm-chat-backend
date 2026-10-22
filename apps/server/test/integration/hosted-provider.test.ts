@@ -31,14 +31,9 @@ describe("hosted provider (nvidia) end to end", () => {
     expect(nvidia).toEqual({
       id: "nvidia",
       requiresKey: true,
-      defaultModel: "google/gemma-3-12b-it",
+      defaultModel: "meta/llama-3.2-11b-vision-instruct",
       models: [
-        { id: "google/gemma-3-12b-it", contextWindow: 32768, maxOutputTokens: 2048 },
-        {
-          id: "nvidia/llama-3.1-nemotron-70b-instruct",
-          contextWindow: 32768,
-          maxOutputTokens: 2048,
-        },
+        { id: "meta/llama-3.2-11b-vision-instruct", contextWindow: 32768, maxOutputTokens: 2048 },
       ],
     });
   });
@@ -63,7 +58,7 @@ describe("hosted provider (nvidia) end to end", () => {
       status: "completed",
       content: "Hello there",
       provider: "nvidia",
-      model: "google/gemma-3-12b-it",
+      model: "meta/llama-3.2-11b-vision-instruct",
       usage: { promptTokens: 21, completionTokens: 3 },
       finishReason: "stop",
     });
@@ -72,7 +67,7 @@ describe("hosted provider (nvidia) end to end", () => {
     expect(upstream.requests).toHaveLength(1);
     expect(upstream.requests[0]?.authorization).toBe(`Bearer ${KEY}`);
     expect(upstream.requests[0]?.body).toMatchObject({
-      model: "google/gemma-3-12b-it",
+      model: "meta/llama-3.2-11b-vision-instruct",
       max_tokens: 2048,
       messages: [{ role: "user", content: "Hi" }],
     });

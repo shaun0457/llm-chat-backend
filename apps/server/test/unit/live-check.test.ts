@@ -24,7 +24,9 @@ describe("isTransientUpstreamFailure", () => {
     [new LlmError("llm_upstream_error", "The model provider answered HTTP 503: busy"), true],
     [new LlmError("llm_upstream_error", "The model provider answered HTTP 404: no model"), false],
     [new LlmError("llm_auth_failed", "The model provider answered HTTP 401: bad key"), false],
-    [new LlmError("llm_timeout", "The model provider did not answer in time."), false],
+    [new LlmError("llm_timeout", "The model provider did not answer in time."), true],
+    [new DOMException("The operation was aborted due to timeout", "TimeoutError"), true],
+    [new DOMException("This operation was aborted", "AbortError"), false],
     [new Error("The model provider answered HTTP 503: busy"), false],
   ])("%s → %s", (error, expected) => {
     expect(isTransientUpstreamFailure(error)).toBe(expected);

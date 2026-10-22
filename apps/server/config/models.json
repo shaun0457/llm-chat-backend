@@ -3,62 +3,16 @@
     "demo": {
       "defaultModel": "demo",
       "requiresKey": false,
-      "models": [
-        {
-          "id": "demo",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        }
-      ]
+      "models": [{ "id": "demo", "contextWindow": 8192, "maxOutputTokens": 1024 }]
     },
     "nvidia": {
-      "defaultModel": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "defaultModel": "meta/llama-3.2-11b-vision-instruct",
       "requiresKey": true,
       "models": [
         {
-          "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "nvidia/nemotron-3-super-120b-a12b",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "z-ai/glm-5.3-flash",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "deepseek-ai/deepseek-v4.1-flash",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "openai/gpt-oss-20b",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "moonshotai/kimi-k2.6",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "google/gemma-4-31b-it",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
           "id": "meta/llama-3.2-11b-vision-instruct",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "mistralai/mistral-large",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
+          "contextWindow": 32768,
+          "maxOutputTokens": 2048
         }
       ]
     }
