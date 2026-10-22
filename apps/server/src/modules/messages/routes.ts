@@ -68,8 +68,15 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           "completed, 502 problem details with both messages when it failed, 202 with both " +
           "messages when it is still being generated. Generation continues unless the " +
           "server shuts down (the answer then fails as cancelled); the wait only decides the " +
-          "response. 404 session_not_found; 409 session_busy while " +
+          "response. A repeated send (the body's id names a user message of this session " +
+          "with identical content, and the provider/model, where given, of its turn) admits " +
+          "nothing: it answers with that turn as it is now, in the same form (200, 502 or 202; " +
+          "or the event stream: the snapshot, then live deltas while it is generating), " +
+          "without checking the key, the model, the session's activity or capacity. 404 " +
+          "session_not_found; 409 session_busy while " +
           "an earlier answer in the session is still being generated; 422 " +
+          "message_id_conflict when the id is used by another message (another session, an " +
+          "assistant message, different content or a different provider/model), " +
           "provider_unavailable or model_not_supported when the requested or the session's " +
           "pair does not resolve, input_too_long when the message and the system prompt " +
           "cannot fit the model's context window with its output reservation, " +

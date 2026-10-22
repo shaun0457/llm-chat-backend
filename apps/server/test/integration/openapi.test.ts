@@ -102,7 +102,13 @@ describe("API documentation", () => {
       "Alone: that provider's default model, including when it is the session's provider",
     );
     const sendDescription: string = paths["/sessions/{id}/messages"].post.description;
-    for (const code of ["input_too_long", "provider_busy", "server_busy", "Retry-After: 10"]) {
+    for (const code of [
+      "input_too_long",
+      "provider_busy",
+      "server_busy",
+      "Retry-After: 10",
+      "message_id_conflict",
+    ]) {
       expect(sendDescription).toContain(code);
     }
     expect(sendDescription).toContain("provider/model for this turn only");
