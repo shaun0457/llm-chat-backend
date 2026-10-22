@@ -63,6 +63,21 @@ describe("credentials", () => {
     expect(fake.apiKeys).toEqual([null]);
   });
 
+  it("gives a keyless provider no key, even with a header and an operator key (#33)", async () => {
+    start({ demo: "operator-key-not-real-33" });
+    const session = await createSession(app, { provider: "demo" });
+
+    const response = await send(
+      app,
+      session.id,
+      { content: "Hi" },
+      { "x-llm-api-key": HEADER_KEY },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(fake.apiKeys).toEqual([null]);
+  });
+
   it("rejects a provider that needs a key with 422 llm_credential_missing and writes nothing", async () => {
     start({});
     const session = await createSession(app, { provider: "other" });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideCredential } from "../../src/credentials/decide.js";
+import { type OperatorKeys, decideCredential } from "../../src/credentials/decide.js";
 
 const keyed = { id: "hosted", requiresKey: true };
 const keyless = { id: "local", requiresKey: false };
@@ -18,12 +18,13 @@ describe("decideCredential", () => {
     });
   });
 
-  it("needs no key for a keyless provider", () => {
-    expect(decideCredential(undefined, keyless, {})).toEqual({ key: null });
-  });
-
-  it("still passes a header key on to a keyless provider", () => {
-    expect(decideCredential("from-header", keyless, {})).toEqual({ key: "from-header" });
+  it.each<[string, string | undefined, OperatorKeys]>([
+    ["neither a header nor an operator key", undefined, {}],
+    ["a header key", "from-header", {}],
+    ["an operator key", undefined, { local: "from-env" }],
+    ["both", "from-header", { local: "from-env" }],
+  ])("never gives a keyless provider a key, with %s (#33)", (_label, header, operator) => {
+    expect(decideCredential(header, keyless, operator)).toEqual({ key: null });
   });
 
   it("rejects a provider that needs a key when there is none", () => {

@@ -54,7 +54,9 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
   caller can tell it from an upstream failure. `LlmError` carries no `cause`, so nothing of the
   SDK error can be logged through it.
 
-- **Credential decision**, once per new turn inside the admission transaction, after the
+- **Credential decision** (superseded for keyless providers by the
+  [#33 amendment](#amendment-2026-10-22-issue-33-keyless-providers-never-receive-a-key): they
+  never receive a key), once per new turn inside the admission transaction, after the
   provider is resolved: the `X-LLM-Api-Key` header (validated by the route schema as 1–512
   visible ASCII characters, a 400 otherwise, never echoed) → the operator key
   `<PROVIDER>_API_KEY` of the turn's provider (read at startup for enabled providers only) →
@@ -162,3 +164,16 @@ need over a minute before its first token, and every retry would evaluate the wh
 inside the same 180 s generation deadline, so a retry would mostly turn an upstream error into a
 later `llm_timeout`. The 120 s also applies to every gap between chunks. `nvidia` keeps 60 s and
 two retries. Contract test: a 500 from the local model → one request, `llm_upstream_error`.
+
+## Amendment (2026-10-22, issue #33): keyless providers never receive a key
+
+The credential decision above took the `X-LLM-Api-Key` header first, whatever the provider, so
+a turn on a keyless provider carried the caller's key to the adapter, which sent it upstream as
+`Authorization: Bearer <key>` instead of `no-key`. Ollama ignores it, but a hosted-provider key
+then reached a service with no use for it, and anyone controlling `OLLAMA_BASE_URL`'s host could
+read it. Decided by the owner: the decision now starts with the provider. `requiresKey: false`
+→ `null`, ignoring the header and any operator key; otherwise header → operator key → 422
+`llm_credential_missing`, as before. The header is still validated by the route schema on every
+provider (a malformed one is a 400 that is never echoed), and replays still skip the decision.
+Tests: `decideCredential` unit cases, and an `ollama` send behind the msw upstream that records
+`Authorization: Bearer no-key` with a header and with `OLLAMA_API_KEY` set.

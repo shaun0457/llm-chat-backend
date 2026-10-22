@@ -116,7 +116,7 @@ be positive whole numbers of milliseconds, at most one hour. `NVIDIA_BASE_URL` a
 | `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000)                                           |
 | `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                                                            |
 | `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`                                              |
-| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                                                                 |
+| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII); never used for a provider with `requiresKey: false`            |
 | `RATE_LIMIT_GENERAL_PER_MIN`    | `120`                        | Requests per minute per client address to every route except `/health*`; then 429 `rate_limited`                                                          |
 | `RATE_LIMIT_SEND_PER_MIN`       | `20`                         | Sends (`POST /sessions/:id/messages`, replays included) per minute per client address, on top of the general limit                                        |
 | `TRUST_PROXY`                   | (none)                       | Comma-separated IPs or CIDR ranges of proxies whose `X-Forwarded-For` is believed; no hop counts, `true`, `*`, or ranges shorter than IPv4 /8 or IPv6 /16 |
@@ -587,10 +587,13 @@ answered 404 for the key's account, timed out, or reason before answering were l
 (ADR 0008, V3).
 
 **Bring your own key.** Send your key in the `X-LLM-Api-Key` header of
-`POST /sessions/:id/messages`. For each new turn the server uses, in this order: the header;
-the server's own `<PROVIDER>_API_KEY` for the turn's provider; no key for a provider that
-needs none; otherwise **422 `llm_credential_missing`**, before anything is stored. A malformed
-header (not 1–512 visible ASCII characters) is a 400 that does not echo it.
+`POST /sessions/:id/messages`. A provider that needs no key (`requiresKey: false`, such as
+`demo` and `ollama`) never receives one: for its turns the header and any server key are
+ignored, so your key never reaches a service that has no use for it. For a provider that needs
+a key the server uses, for each new turn and in this order: the header; the server's own
+`<PROVIDER>_API_KEY` for the turn's provider; otherwise **422 `llm_credential_missing`**,
+before anything is stored. A malformed header (not 1–512 visible ASCII characters) is a 400
+that does not echo it, whatever the provider.
 
 **A server key is spent by anyone.** There is no authentication, so every enabled provider
 that has a `<PROVIDER>_API_KEY` is usable by any client, for any of its catalogued models: a
@@ -767,10 +770,7 @@ JSON requests are bounded only by the send budget, and an operator key (if one i
 spent by any client. `/health/ready` is not rate limited (so a platform health check is
 never throttled) and queries the database on every call. A client holding a large IPv6 prefix
 gets one budget per /64, and enough addresses can push other addresses' counters out of the
-store. The `X-LLM-Api-Key` header is also forwarded to providers that need no key, such as
-`ollama`, because the credential order takes the header first; the exposure is
-low (Ollama's address is server-defined and internal to compose), and changing it is left to
-the owner. See [What I would do next](#what-i-would-do-next).
+store. See [What I would do next](#what-i-would-do-next).
 
 **How authentication would be added.** First an API key per client (sent as a bearer token,
 stored hashed), later JWTs from an identity provider. Sessions get an `owner_id` column set at
@@ -965,8 +965,6 @@ A first version of this list; the final submission pass completes it.
 - A per-address cap on active generations, or a capacity check before the admission
   transaction: today one address can hold every generation slot within its send budget.
 - A per-model "caller must bring a key" flag, so an operator key cannot be spent by anyone.
-- Not forwarding `X-LLM-Api-Key` to keyless providers such as `ollama`; this changes the
-  documented credential order and is the owner's decision.
 - Looking a repeated send's id up before taking the session lock, so replays cost less.
 - A shared rate-limit store (e.g. Redis) once more than one instance runs.
 

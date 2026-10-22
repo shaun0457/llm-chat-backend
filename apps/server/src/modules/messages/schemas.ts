@@ -96,9 +96,11 @@ export const sendMessageHeaders = z.object({
     .regex(API_KEY_PATTERN, "must be 1-512 visible ASCII characters")
     .optional()
     .describe(
-      "Your own API key for this generation's provider. Used for this one generation, " +
-        "then dropped: never stored, logged or returned. Without it the server's own key " +
-        "for the provider is used, if it has one; providers with requiresKey: false need none.",
+      "Your own API key for this generation's provider, used only by providers that need a " +
+        "key (requiresKey: true): a provider with requiresKey: false never receives it (nor " +
+        "the server's key), though a malformed value is still rejected. Used for this one " +
+        "generation, then dropped: never stored, logged or returned. Without it the server's " +
+        "own key for the provider is used, if it has one.",
     ),
 });
 
