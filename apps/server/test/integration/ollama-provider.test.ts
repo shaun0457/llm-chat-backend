@@ -8,7 +8,7 @@ import { createRegistry } from "../../src/llm/registry.js";
 import { TEST_ENV, makeTestApp } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { createSession, send } from "../helpers/messages.js";
-import { UPSTREAM_BASE_URL, streamOf, useUpstream } from "../helpers/msw-openai.js";
+import { UPSTREAM_BASE_URL, errorOf, streamOf, useUpstream } from "../helpers/msw-openai.js";
 
 const testDb = useTestDatabase();
 const upstream = useUpstream();
@@ -82,5 +82,23 @@ describe("ollama provider", () => {
       stream_options: { include_usage: true },
       messages: [{ role: "user", content: "What is 2+2?" }],
     });
+  });
+
+  it("does not retry a failed request: a CPU model would redo the whole prompt", async () => {
+    start();
+    upstream.reply(
+      errorOf(500, { error: { message: "model runner crashed" } }),
+      streamOf([{ content: "4", finishReason: "stop" }]),
+    );
+    const session = await createSession(app, { provider: "ollama" });
+
+    const response = await send(app, session.id, { content: "What is 2+2?" });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json().assistantMessage).toMatchObject({
+      status: "failed",
+      errorCode: "llm_upstream_error",
+    });
+    expect(upstream.requests).toHaveLength(1);
   });
 });
