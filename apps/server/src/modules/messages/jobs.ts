@@ -9,7 +9,7 @@ import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
 import { remainingMs } from "./deadline.js";
-import { untilAbort, withTimeout } from "./race.js";
+import { TIMED_OUT, untilAbort, withTimeout } from "./race.js";
 import {
   completeAssistant,
   failAssistant,
@@ -192,11 +192,19 @@ export function createJobRegistry(deps: {
     /**
      * This attempt's final state when it is already stored: by an earlier try whose commit
      * reached the database although the job saw it fail, or by stale reclaim. Undefined when
-     * the row is gone, belongs to a newer attempt, or is still generating.
+     * the row is gone, belongs to a newer attempt, or is still generating, or when the read
+     * takes longer than one statement (a stalled database must not hold the job here).
      */
     const storedFinalState = async (): Promise<Message | undefined> => {
       try {
-        const row = await findMessage(db.drizzle, spec.sessionId, spec.assistantId);
+        const row = await withTimeout(
+          findMessage(db.drizzle, spec.sessionId, spec.assistantId),
+          timing.terminalStatementTimeoutMs,
+        );
+        if (row === TIMED_OUT) {
+          jobLog.warn("reading the final state back took too long");
+          return undefined;
+        }
         return row?.attempt === spec.attempt && row.status !== "generating" ? row : undefined;
       } catch (error) {
         jobLog.warn({ code: pgErrorCode(error) }, "could not read the final state back");
@@ -281,7 +289,11 @@ export function createJobRegistry(deps: {
     let generationFailed = false;
     let generationError: unknown;
     try {
-      const history = await historyBefore(db.drizzle, spec.sessionId, spec.userMessage.seq);
+      // A read stuck behind a lock must not outlast the deadline; abandoned, it ends on its own.
+      const history = await untilAbort(
+        historyBefore(db.drizzle, spec.sessionId, spec.userMessage.seq),
+        controller.signal,
+      );
       const request = {
         model: spec.model,
         maxOutputTokens: spec.maxOutputTokens,
