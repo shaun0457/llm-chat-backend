@@ -729,19 +729,21 @@ describe("idempotent send: client message ids", () => {
         // A boundary write: a trigger in this file's own database fails every insert of the id
         // as a concurrent send of it would, and counts the attempts (a sequence ignores
         // rollbacks).
-        await pool.query("CREATE SEQUENCE test_collisions");
-        await pool.query(
-          "CREATE FUNCTION test_collide() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN" +
-            ` IF NEW.id = '${id}' THEN PERFORM nextval('test_collisions');` +
-            " RAISE EXCEPTION 'forced collision'" +
-            ` USING ERRCODE = 'unique_violation', CONSTRAINT = '${constraint}'; END IF;` +
-            " RETURN NEW; END $$",
-        );
-        await pool.query(
-          "CREATE TRIGGER test_collide BEFORE INSERT ON messages" +
-            " FOR EACH ROW EXECUTE FUNCTION test_collide()",
-        );
         try {
+          // Inside the try, so that a failed setup is still cleaned up for the next case.
+          await pool.query("CREATE SEQUENCE test_collisions");
+          await pool.query(
+            "CREATE FUNCTION test_collide() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN" +
+              ` IF NEW.id = '${id}' THEN PERFORM nextval('test_collisions');` +
+              " RAISE EXCEPTION 'forced collision'" +
+              ` USING ERRCODE = 'unique_violation', CONSTRAINT = '${constraint}'; END IF;` +
+              " RETURN NEW; END $$",
+          );
+          await pool.query(
+            "CREATE TRIGGER test_collide BEFORE INSERT ON messages" +
+              " FOR EACH ROW EXECUTE FUNCTION test_collide()",
+          );
+
           const response = await send(app, session.id, { id, content: "Hi" });
 
           expect(response.statusCode).toBe(500);
@@ -757,9 +759,12 @@ describe("idempotent send: client message ids", () => {
           // Every run's reservation was released: the only slot is free.
           expect(await holdInFreshSessions(1)).toEqual([202]);
         } finally {
-          await pool.query("DROP TRIGGER IF EXISTS test_collide ON messages");
-          await pool.query("DROP FUNCTION IF EXISTS test_collide()");
-          await pool.query("DROP SEQUENCE IF EXISTS test_collisions");
+          // One statement list: each part tolerates a missing object, so none skips the rest.
+          await pool.query(
+            "DROP TRIGGER IF EXISTS test_collide ON messages;" +
+              " DROP FUNCTION IF EXISTS test_collide();" +
+              " DROP SEQUENCE IF EXISTS test_collisions",
+          );
         }
       },
     );
