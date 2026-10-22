@@ -230,7 +230,7 @@ flowchart LR
     subgraph api["api: dist/index.js, one process built by buildApp()"]
       routes["Fastify routes<br/>health · providers · sessions · messages<br/>zod schemas: validation and /openapi.json"]
       services["sessions service<br/>messages service: admission transaction<br/>stale reclaim on every session-scoped request"]
-      jobs["JobRegistry<br/>in-process jobs, one MessageBus each<br/>generation deadline, terminal-write budget"]
+      jobs["JobRegistry<br/>in-process jobs, one MessageBus each<br/>generation deadline, terminal-write budget<br/>process and provider capacity counters"]
       registry["ProviderRegistry<br/>ModelCatalog: config/models.json"]
       port{{"LlmProvider port"}}
       demo["DemoProvider<br/>no key"]
@@ -609,9 +609,6 @@ A first version of this list; the final submission pass completes it.
 
 **Still being built for v1**, each as its own ticket:
 
-- Admission rules: an input-size budget, per-message provider and model overrides, and
-  per-process and per-provider capacity limits with 503
-  ([#7](https://github.com/shaun0457/llm-chat-backend/issues/7))
 - Streaming (SSE) and re-attaching to a running answer
   ([#9](https://github.com/shaun0457/llm-chat-backend/issues/9))
 - Idempotent send with client-supplied message ids
@@ -647,9 +644,8 @@ A first version of this list; the final submission pass completes it.
   store, and more than one API instance with shared capacity limits. The database rules keep a
   brief deploy overlap correct; these pay off only with several instances.
 - Storing or registering API keys on the server: a key lives in memory for one generation only.
-- A waiting room for busy providers: once capacity limits land
-  ([#7](https://github.com/shaun0457/llm-chat-backend/issues/7)), a full provider answers 503 at
-  once instead of queueing.
+- A waiting room for busy providers: a full provider answers 503 at once instead of queueing
+  (see [Limits](#limits)).
 - `Last-Event-ID` resumption of streams, streaming the model's reasoning, and branching or
   editing messages (history is linear).
 - Metrics and tracing beyond structured logs, a frontend, and evaluating answer quality.

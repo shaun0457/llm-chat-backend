@@ -503,7 +503,7 @@
                     "type": "string"
                   },
                   "provider": {
-                    "description": "Alone: a different provider's default model; the current provider keeps the model",
+                    "description": "Alone: that provider's default model, including when it is already the current provider; omit provider to preserve the current model",
                     "minLength": 1,
                     "type": "string"
                   },
@@ -909,6 +909,16 @@
                   "content": {
                     "description": "1–16,000 characters, not only whitespace, no U+0000",
                     "maxLength": 16000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "model": {
+                    "description": "This turn only (the session keeps its own): a model in the catalog of the given provider, or of the session's provider when none is given",
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "provider": {
+                    "description": "This turn only (the session keeps its own): an enabled provider id (GET /providers). Alone: that provider's default model, including when it is the session's provider",
                     "minLength": 1,
                     "type": "string"
                   }
