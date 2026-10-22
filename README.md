@@ -19,15 +19,25 @@ exits 0), and only then starts the API. The defaults need no `.env`; copy `.env.
 `.env` to change the database credentials, the host port (`API_PORT`) or the server settings.
 PostgreSQL is not published to the host. `docker compose down -v` removes the data volume.
 
-Check it:
+Check it with a hosted model. Enable it in `.env` with `PROVIDERS_ENABLED=demo,nvidia`, and
+either set the server's key there (`NVIDIA_API_KEY=...`) or bring your own key per request in
+the `X-LLM-Api-Key` header (see [Providers and API keys](#providers-and-api-keys)):
 
 ```sh
 curl localhost:3000/health/ready
-curl -X POST localhost:3000/sessions -H 'content-type: application/json' -d '{"title":"Hello"}'
+curl -X POST localhost:3000/sessions -H 'content-type: application/json' \
+  -d '{"title":"Hello","provider":"nvidia"}'
 curl localhost:3000/sessions
+# with NVIDIA_API_KEY set on the server:
 curl -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
-  -d '{"content":"Hello"}'   # the demo provider answers without any API key
+  -d '{"content":"Hello"}'
+# or with your own key, used for this one answer and never stored:
+curl -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
+  -H "X-LLM-Api-Key: $MY_NVIDIA_KEY" -d '{"content":"Hello"}'
 ```
+
+Without any key, create the session without `provider`: the built-in demo provider answers at
+once with a fixed sentence.
 
 ## Run locally
 
@@ -300,10 +310,16 @@ pnpm test:unit   # unit and lint tests only; no Docker needed
 pnpm test        # everything; Docker must be running (testcontainers)
 ```
 
-The OpenAI-compatible adapter is tested against an [msw](https://mswjs.io/)-mocked upstream
-(chunk arrangements, reasoning fields, 401/403, 429 then success, persistent 5xx, context
-overflow, timeouts), so no test reaches a real provider. With `NVIDIA_API_KEY` set locally,
-`pnpm test:unit` also runs a live check of every catalogued NVIDIA model; it never runs in CI.
+No test reaches a real LLM provider; the boundary is faked at two levels. Service and
+integration tests inject `FakeLlmProvider` (`test/helpers/fake-llm.ts`), a scriptable
+implementation of the provider port: deltas, delays, gates, hangs, failures, a missing finish
+event, and usage, while it records the requests, abort signals and API keys it received. The
+OpenAI-compatible adapter itself is tested from the other side of the port, against an
+[msw](https://mswjs.io/)-mocked upstream HTTP API (`test/helpers/msw-openai.ts`): chunk
+arrangements, reasoning fields, 401/403, 429 then success, persistent 5xx, context overflow
+and timeouts. The sentinel tests combine the real adapter with msw. With `NVIDIA_API_KEY` set
+locally, `pnpm test:unit` also runs a live check of every catalogued NVIDIA model; it never
+runs in CI.
 
 Integration tests start one PostgreSQL 17 container per run, migrate a template database once,
 and give every test file its own copy, so files run in parallel without seeing each other's

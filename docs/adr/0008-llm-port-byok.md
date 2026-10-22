@@ -111,7 +111,16 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
 ## Consequences
 
 - A key is necessarily in process memory while its generation runs; a restart loses both, and
-  the answer is retried with the key sent again.
+  the answer is retried with the key sent again. Clearing the holder drops this service's
+  reference; the string itself (and the SDK client's copy) lives until garbage collection.
+- `errorDetail` shows the upstream's own error message, scrubbed of credentials and cut to 500
+  characters. An upstream may put other details there (for example parts of the request); the
+  hosted providers probed do not.
+- `NVIDIA_BASE_URL` also accepts `http://`, for a self-hosted endpoint on an internal network;
+  keys then travel in cleartext on that network, which is the operator's choice.
+- In the worst case the first token waits for three attempts of 60 s plus `Retry-After` pauses;
+  JSON clients are still answered within their wait (202), and the generation deadline bounds
+  the attempt.
 - Upstream error formats differ by provider: the mapping relies on the status first and
   best-effort message matching for context overflow. An upstream (server-configured, so
   trusted) could force a retry of a 401 with `x-should-retry: true`.
