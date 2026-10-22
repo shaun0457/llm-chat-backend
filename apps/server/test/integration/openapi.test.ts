@@ -145,9 +145,13 @@ describe("API documentation", () => {
     }
     const retryAfter = (path: string, method: string, status: string): unknown =>
       paths[path][method].responses[status].headers?.["Retry-After"];
-    expect(retryAfter("/sessions", "get", "429")).toBeDefined();
-    expect(retryAfter("/sessions/{id}/messages", "post", "429")).toBeDefined();
-    expect(retryAfter("/sessions/{id}/messages", "post", "503")).toBeDefined();
+    for (const [path, method, status] of [
+      ["/sessions", "get", "429"],
+      ["/sessions/{id}/messages", "post", "429"],
+      ["/sessions/{id}/messages", "post", "503"],
+    ] as const) {
+      expect(retryAfter(path, method, status)).toMatchObject({ schema: { type: "integer" } });
+    }
   });
 
   it("names every assistant error code in the errorCode description", async () => {
