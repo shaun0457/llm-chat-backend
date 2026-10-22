@@ -580,14 +580,16 @@ whether the server has a key of its own.
 
 **Live-verified.** Every catalogued NVIDIA model is checked against the real API by the
 `live-llm` workflow before it is listed. Its result line on 2026-10-22
-([run 39808368033](https://github.com/shaun0457/llm-chat-backend/actions/runs/39808368033)),
+([run 39812414213](https://github.com/shaun0457/llm-chat-backend/actions/runs/39812414213)),
 for "What is the capital of France?" with "Answer in one short sentence.":
 
 ```text
-LIVE_RESULT {"model":"nvidia/nemotron-3-ultra-550b-a55b","finishReason":"stop","usage":{"promptTokens":29,"completionTokens":34},"answer":"The capital of France is Paris."}
+LIVE_RESULT {"model":"nvidia/nemotron-3-ultra-550b-a55b","finishReason":"stop","usage":{"promptTokens":29,"completionTokens":44},"totalMs":38675,"answer":"The capital of France is Paris."}
 ```
 
-The completion tokens include the reasoning. In a benchmark of the five models the key could
+The completion tokens include the reasoning. NVIDIA's hosted API queues requests to busy
+models and sometimes answers "Service temporarily overloaded"; that call took 39 s, while the
+same question took about 2 s in other runs. In a benchmark of the five models the key could
 use (20 calls each), `nemotron-3-ultra` answered every time, with its first answer token after
 2.0 s (median) and the whole answer after 6.7 s (median) and 19.4 s (p95); the model it
 replaced answered 3 of 5 times. Models that answered 404 for the key's account were left out
