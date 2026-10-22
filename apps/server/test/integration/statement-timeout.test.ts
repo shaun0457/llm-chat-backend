@@ -5,7 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDb } from "../../src/db/client.js";
 import { pgErrorCode } from "../../src/db/errors.js";
+import { makeTestApp } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
+import { createSession } from "../helpers/messages.js";
 
 const testDb = useTestDatabase();
 
@@ -109,6 +111,67 @@ describe("terminal-write statement timeouts (V2)", () => {
       expect(pgErrorCode(await abandoned)).toBe(QUERY_CANCELED);
       expect(db.pool.idleCount).toBe(1);
       await expect(db.pool.query("SELECT 1")).resolves.toBeDefined();
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("request-path statement timeout", () => {
+  it("fails a request stuck behind a row lock after the pool's statement timeout instead of waiting", async () => {
+    const db = createDb({
+      connectionString: testDb.url,
+      statementTimeoutMs: 300,
+      onPoolError: () => {},
+    });
+    const app = makeTestApp({ db });
+    const holder = new pg.Client({ connectionString: testDb.url });
+    holder.on("error", () => {});
+    await holder.connect();
+    try {
+      const session = await createSession(app);
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM sessions WHERE id = $1 FOR UPDATE", [session.id]);
+
+      const startedAt = Date.now();
+      const blocked = await app.inject({
+        method: "PATCH",
+        url: `/sessions/${session.id}`,
+        payload: { title: "Renamed" },
+      });
+
+      expect(blocked.statusCode).toBe(500);
+      expect(blocked.json()).toMatchObject({ code: "internal_error" });
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+      await holder.query("ROLLBACK");
+      const after = await app.inject({
+        method: "PATCH",
+        url: `/sessions/${session.id}`,
+        payload: { title: "Renamed" },
+      });
+      expect(after.statusCode).toBe(200);
+    } finally {
+      await holder.end();
+      await app.close();
+      await db.close();
+    }
+  });
+
+  it("is the default of every pooled connection, which a job's SET LOCAL still overrides", async () => {
+    const db = createDb({
+      connectionString: testDb.url,
+      statementTimeoutMs: 1_500,
+      max: 1,
+      onPoolError: () => {},
+    });
+    try {
+      const shown = await db.pool.query<{ statement_timeout: string }>("SHOW statement_timeout");
+      expect(shown.rows[0]?.statement_timeout).toBe("1500ms");
+      const inside = await db.tx(async (tx) => {
+        await tx.execute(sql`SELECT set_config('statement_timeout', ${"200ms"}, true)`);
+        return tx.execute<{ statement_timeout: string }>(sql`SHOW statement_timeout`);
+      });
+      expect(inside.rows[0]?.statement_timeout).toBe("200ms");
     } finally {
       await db.close();
     }

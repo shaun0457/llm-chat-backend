@@ -71,6 +71,7 @@ export async function main(env: Record<string, string | undefined> = process.env
   // The pool connects lazily: the API starts even while the database is down (not ready).
   const db = createDb({
     connectionString: config.databaseUrl,
+    statementTimeoutMs: config.dbStatementTimeoutMs,
     onPoolError: (error) => {
       if (app === undefined) {
         process.stderr.write(`idle database connection failed: ${error.message}\n`);

@@ -219,3 +219,45 @@ describe("problem details", () => {
     expect(failed.headers["x-request-id"]).toBe("req-500");
   });
 });
+
+describe("request body limit", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  const url = "/sessions/0190a8f0-7c3e-7a1b-8c2d-3e4f5a6b7c8d/messages";
+
+  it("answers a body above 128 KiB with 413 before parsing it", async () => {
+    app = makeTestApp();
+
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ content: "x".repeat(131_072) }),
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.headers["content-type"]).toMatch(PROBLEM_JSON);
+    expect(response.json()).toMatchObject({ status: 413, code: "request_error" });
+  });
+
+  it("still parses the largest send, 16,000 characters each sent as a six-byte JSON escape", async () => {
+    app = makeTestApp();
+    // An invalid provider makes validation answer, without touching the database.
+    const payload = `{"content":"${"\\u0001".repeat(16_000)}","provider":1}`;
+    expect(payload.length).toBeGreaterThan(96_000);
+
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers: { "content-type": "application/json" },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "validation_error" });
+  });
+});

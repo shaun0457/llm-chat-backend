@@ -46,6 +46,14 @@ describe("loadConfig", () => {
       nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
       ollamaBaseUrl: "http://localhost:11434/v1",
       operatorKeys: {},
+      dbStatementTimeoutMs: 10_000,
+      requestTimeoutMs: 30_000,
+      retentionDays: undefined,
+      retentionIntervalMs: 3_600_000,
+      rateLimitGeneralPerMin: 120,
+      rateLimitSendPerMin: 20,
+      trustProxy: undefined,
+      corsOrigins: [],
     });
   });
 
@@ -76,6 +84,14 @@ describe("loadConfig", () => {
       NVIDIA_BASE_URL: "http://nim.internal:8000/v1",
       NVIDIA_API_KEY: "operator-key-1",
       OLLAMA_BASE_URL: "http://ollama:11434/v1",
+      DB_STATEMENT_TIMEOUT_MS: "5000",
+      REQUEST_TIMEOUT_MS: "15000",
+      RETENTION_DAYS: "7",
+      RETENTION_INTERVAL_MS: "60000",
+      RATE_LIMIT_GENERAL_PER_MIN: "300",
+      RATE_LIMIT_SEND_PER_MIN: "30",
+      TRUST_PROXY: "10.0.0.1, 172.16.0.0/12,fd00::/16",
+      CORS_ORIGINS: "https://a.example, http://localhost:5173",
     });
 
     expect(config).toEqual({
@@ -105,6 +121,14 @@ describe("loadConfig", () => {
       nvidiaBaseUrl: "http://nim.internal:8000/v1",
       ollamaBaseUrl: "http://ollama:11434/v1",
       operatorKeys: { nvidia: "operator-key-1" },
+      dbStatementTimeoutMs: 5_000,
+      requestTimeoutMs: 15_000,
+      retentionDays: 7,
+      retentionIntervalMs: 60_000,
+      rateLimitGeneralPerMin: 300,
+      rateLimitSendPerMin: 30,
+      trustProxy: ["10.0.0.1", "172.16.0.0/12", "fd00::/16"],
+      corsOrigins: ["https://a.example", "http://localhost:5173"],
     });
   });
 
@@ -132,7 +156,11 @@ describe("loadConfig", () => {
   it.each(["NVIDIA_BASE_URL", "OLLAMA_BASE_URL"])(
     "rejects a %s with credentials in it, without echoing them",
     (key) => {
-      const error = configError({ DATABASE_URL, [key]: "https://user:pw0rd@llm.internal/v1" });
+      const error = configError({
+        DATABASE_URL,
+        PROVIDERS_ENABLED: "demo,nvidia,ollama",
+        [key]: "https://user:pw0rd@llm.internal/v1",
+      });
 
       expect(error.message).toContain(key);
       expect(error.message).not.toContain("pw0rd");
@@ -145,7 +173,83 @@ describe("loadConfig", () => {
     ["OLLAMA_BASE_URL", "ftp://ollama/v1"],
     ["OLLAMA_BASE_URL", "not a url"],
   ])("rejects a %s that is not an http(s) URL: %s", (key, url) => {
-    expect(configError({ DATABASE_URL, [key]: url }).message).toContain(key);
+    expect(
+      configError({ DATABASE_URL, PROVIDERS_ENABLED: "demo,nvidia,ollama", [key]: url }).message,
+    ).toContain(key);
+  });
+
+  it.each([
+    ["NVIDIA_BASE_URL", "nvidiaBaseUrl", "https://integrate.api.nvidia.com/v1"],
+    ["OLLAMA_BASE_URL", "ollamaBaseUrl", "http://localhost:11434/v1"],
+  ])(
+    "ignores an invalid %s while its provider is not enabled, keeping the default",
+    (key, field, fallback) => {
+      expect(loadConfig({ DATABASE_URL, [key]: "not a url" })).toMatchObject({
+        [field]: fallback,
+      });
+    },
+  );
+
+  describe("TRUST_PROXY", () => {
+    it.each([
+      ["10.0.0.1", ["10.0.0.1"]],
+      ["10.0.0.0/8, 192.168.1.10", ["10.0.0.0/8", "192.168.1.10"]],
+      ["::1,2001:db8::/32", ["::1", "2001:db8::/32"]],
+      // The shortest prefixes allowed.
+      ["10.0.0.0/8,2001::/16", ["10.0.0.0/8", "2001::/16"]],
+      ["::ffff:10.0.0.0/104,::ffff:10.0.0.1", ["::ffff:10.0.0.0/104", "::ffff:10.0.0.1"]],
+    ])("accepts the IP/CIDR list %s", (value, expected) => {
+      expect(loadConfig({ DATABASE_URL, TRUST_PROXY: value }).trustProxy).toEqual(expected);
+    });
+
+    it.each([
+      "1",
+      "2",
+      "true",
+      "false",
+      "*",
+      "loopback",
+      "10.0.0.1, uniquelocal",
+      "10.0.0.0/33",
+      "::/129",
+      "10.0.0.0/8/8",
+      "10.0.0.0/",
+      "10.0.0.256",
+      "proxy.internal",
+      "fe80::1%eth0",
+      // Trusting every address is trustProxy=true again.
+      "0.0.0.0/0",
+      "::/0",
+      "10.0.0.0/08",
+      // So is a handful of short ranges: IPv4 below /8, IPv6 below /16, and IPv4-mapped
+      // IPv6 below /104 (an IPv4 /8).
+      "0.0.0.0/1,128.0.0.0/1",
+      "10.0.0.0/7",
+      "::/1,8000::/1",
+      "2000::/15",
+      "::ffff:0:0/96",
+      "::ffff:10.0.0.0/103",
+    ])("rejects %s: hop counts, true, wildcards, names and catch-all ranges", (value) => {
+      expect(configError({ DATABASE_URL, TRUST_PROXY: value }).message).toContain("TRUST_PROXY");
+    });
+  });
+
+  describe("CORS_ORIGINS", () => {
+    it("accepts * alone", () => {
+      expect(loadConfig({ DATABASE_URL, CORS_ORIGINS: "*" }).corsOrigins).toEqual(["*"]);
+    });
+
+    it.each([
+      "*, https://a.example",
+      "https://a.example/app",
+      "https://a.example/",
+      "a.example",
+      "ftp://a.example",
+      "https://user@a.example",
+      "https://a.example?x=1",
+    ])("rejects %s: only * alone or http(s) origins without a path", (value) => {
+      expect(configError({ DATABASE_URL, CORS_ORIGINS: value }).message).toContain("CORS_ORIGINS");
+    });
   });
 
   it("requires DATABASE_URL", () => {
@@ -195,6 +299,18 @@ describe("loadConfig", () => {
     ["SSE_PING_INTERVAL_MS", "99"],
     ["SSE_BUFFER_LIMIT_BYTES", "16383"],
     ["SSE_BUFFER_LIMIT_BYTES", "67108865"],
+    ["DB_STATEMENT_TIMEOUT_MS", "0"],
+    ["DB_STATEMENT_TIMEOUT_MS", "99"],
+    ["REQUEST_TIMEOUT_MS", "0"],
+    ["REQUEST_TIMEOUT_MS", "999"],
+    ["RETENTION_DAYS", "0"],
+    ["RETENTION_DAYS", "1.5"],
+    ["RETENTION_DAYS", "3651"],
+    ["RETENTION_INTERVAL_MS", "0"],
+    ["RETENTION_INTERVAL_MS", "86400001"],
+    ["RATE_LIMIT_GENERAL_PER_MIN", "0"],
+    ["RATE_LIMIT_SEND_PER_MIN", "0"],
+    ["RATE_LIMIT_SEND_PER_MIN", "2.5"],
   ])("rejects %s=%s", (key, value) => {
     expect(configError({ DATABASE_URL, [key]: value }).message).toContain(key);
   });

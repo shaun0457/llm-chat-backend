@@ -9,7 +9,7 @@ import { REDACTED } from "./credentials/scrub.js";
 import { serializeError } from "./credentials/serialize-error.js";
 import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
-import { registerApiDocs } from "./http/plugins.js";
+import { registerApiDocs, registerRateLimits, registerSecurityHeaders } from "./http/plugins.js";
 import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-details.js";
 import { capacityFor } from "./llm/capacity.js";
 import type { ModelCatalog } from "./llm/catalog.js";
@@ -21,9 +21,17 @@ import { findTurn } from "./modules/messages/repository.js";
 import { messagesRoutes } from "./modules/messages/routes.js";
 import { createMessagesService } from "./modules/messages/service.js";
 import { providersRoutes } from "./modules/providers/routes.js";
+import { type Retention, createRetention } from "./modules/sessions/retention.js";
 import { sessionsRoutes } from "./modules/sessions/routes.js";
 import { createSessionsService } from "./modules/sessions/service.js";
 import { MIGRATIONS_FOLDER } from "./paths.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Deletes inactive sessions; null unless RETENTION_DAYS is set. Tests call runOnce(). */
+    retention: Retention | null;
+  }
+}
 
 /** The app never closes `db`: its owner does (server.ts on shutdown, the test harness per file). */
 export type AppDeps = {
@@ -39,8 +47,12 @@ export type AppDeps = {
 };
 
 const REQUEST_ID_HEADER = "x-request-id";
+/** Request bodies above this answer 413 before they are parsed (Fastify's default: 1 MiB). */
+export const BODY_LIMIT_BYTES = 131_072;
 /** Time for providers to honour the abort before the job's terminal write starts. */
 const JOB_STOP_GRACE_MS = 1_000;
+/** On top of the terminal statement timeout, for a deleted session's aborted jobs to end. */
+const JOB_END_MARGIN_MS = 500;
 
 /**
  * How long closing the app waits for aborted generations to store their final state: a grace
@@ -79,6 +91,21 @@ function requestId(request: IncomingMessage): string {
   return typeof incoming === "string" && VALID_REQUEST_ID.test(incoming) ? incoming : randomUUID();
 }
 
+/**
+ * Node server options that make REQUEST_TIMEOUT_MS the bound for receiving a whole request.
+ * Node 22 checks open requests only every `connectionsCheckingInterval` (30 s by default), and
+ * a request whose headers have arrived but whose body stalls is ended only after
+ * `headersTimeout` (60 s by default), whatever `requestTimeout` says (measured). So both
+ * follow the timeout: a stalled request gets 408 within the timeout plus a tenth of it.
+ */
+export function requestTimeoutOptions(requestTimeoutMs: number) {
+  return {
+    requestTimeout: requestTimeoutMs,
+    headersTimeout: requestTimeoutMs,
+    connectionsCheckingInterval: Math.min(30_000, Math.max(100, Math.floor(requestTimeoutMs / 10))),
+  };
+}
+
 /** Returns a configured app that is not listening; only `server.ts` calls `listen`. */
 export function buildApp(deps: AppDeps): FastifyInstance {
   const { config, db, catalog, registry, logStream } = deps;
@@ -91,6 +118,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     },
     requestIdHeader: false,
     genReqId: requestId,
+    // request.ip: the socket's address, or, from a listed proxy, the nearest X-Forwarded-For
+    // address that is not itself a listed proxy (read right to left).
+    trustProxy: config.trustProxy === undefined ? false : [...config.trustProxy],
+    // Bounds receiving a request (slow headers or body end with 408), never a response: SSE
+    // streams and long JSON waits are unaffected (V3 of #2). The socket inactivity timeout
+    // stays 0.
+    requestTimeout: config.requestTimeoutMs,
+    http: requestTimeoutOptions(config.requestTimeoutMs),
+    // A send's 16,000 characters fit with room to spare, even if all escaped as \uXXXX.
+    bodyLimit: BODY_LIMIT_BYTES,
     // Errors raised before routing (e.g. an undecodable URL) bypass hooks and the error handler.
     frameworkErrors: (error, request, reply) => {
       void reply.header(REQUEST_ID_HEADER, request.id);
@@ -115,6 +152,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerProblemDetails(app);
+  registerSecurityHeaders(app, config.corsOrigins);
+  registerRateLimits(app, config.rateLimitGeneralPerMin);
   registerApiDocs(app);
 
   void app.register(healthRoutes, {
@@ -122,10 +161,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   void app.register(providersRoutes, { registry });
   const { staleThresholdMs } = config;
-  void app.register(sessionsRoutes, {
-    service: createSessionsService({ db, registry, staleThresholdMs }),
-  });
-
   const clock = deps.clock ?? systemClock;
   const jobs =
     deps.jobs ??
@@ -136,6 +171,34 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       log: app.log,
       capacity: capacityFor(config, catalog),
     });
+  const sessions = createSessionsService({
+    db,
+    registry,
+    staleThresholdMs,
+    jobs,
+    // An aborted job's in-flight flush gets one terminal statement timeout; a margin on top.
+    jobEndWaitMs: config.terminalStatementTimeoutMs + JOB_END_MARGIN_MS,
+  });
+  void app.register(sessionsRoutes, { service: sessions });
+
+  const retention =
+    config.retentionDays === undefined
+      ? null
+      : createRetention({
+          db,
+          sessions,
+          days: config.retentionDays,
+          intervalMs: config.retentionIntervalMs,
+          log: app.log,
+        });
+  app.decorate("retention", retention);
+  if (retention !== null) {
+    // Only a listening server runs it: tests and the OpenAPI script build apps that never do.
+    app.addHook("onListen", async () => {
+      retention.start();
+    });
+  }
+
   const messages = createMessagesService({
     db,
     registry,
@@ -154,11 +217,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     service: messages,
     jsonWait: { defaultMs: config.jsonDefaultWaitMs, maxMs: config.jsonMaxWaitMs },
     sse: config,
+    sendsPerMinute: config.rateLimitSendPerMin,
   });
   // Before the server stops accepting: running generations are aborted and store failed /
-  // cancelled, so waiting responses finish instead of holding the close open.
+  // cancelled, so waiting responses finish instead of holding the close open. Retention stops
+  // at the same time: a candidate waiting on a lock must not eat the jobs' shutdown budget.
   app.addHook("preClose", async () => {
-    await jobs.shutdown(jobShutdownWaitMs(config));
+    await Promise.all([jobs.shutdown(jobShutdownWaitMs(config)), retention?.stop()]);
   });
 
   return app;

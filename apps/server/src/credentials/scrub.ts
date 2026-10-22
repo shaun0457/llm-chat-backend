@@ -9,11 +9,19 @@ const BEARER = /\b(bearer)\s+(?=[a-z]*[\d.~+/=_-])[\w.~+/=-]+/gi;
 const KEY_PARAM = /([?&;\s]|^)(api[_-]?key|key)=[^&;\s"']+/gi;
 /** Key formats that are recognisable without knowing the key, also partially masked. */
 const KNOWN_KEY_FORMATS = /\b(?:nvapi-[\w-]{8,}|sk-[\w-]{16,}|(?:nvapi|sk)-[\w-]*\*[\w*-]*)/g;
+/**
+ * The quoted value after the word `account`, as in NVIDIA's 404 text `Function '<id>': Not
+ * found for account '<account id>'`. Not a credential, but sessions are unauthenticated, so
+ * anyone holding a session id could read the provider account it names. The quotes may be
+ * JSON-escaped (`\"`), as in a raw error body.
+ */
+const ACCOUNT_ID = /\b(account\s+)(\\?['"])[^'"\\\r\n]{0,256}\2/gi;
 
 /**
  * Removes credentials from text before it is stored, returned or logged: the literal `key`
- * (if any, also JSON-escaped or URL-encoded), bearer tokens, key query parameters and recognisable key formats. The literal key
- * goes first, so a pattern can never leave a fragment of it behind.
+ * (if any, also JSON-escaped or URL-encoded), bearer tokens, key query parameters,
+ * recognisable key formats and upstream account identifiers. The literal key goes first, so
+ * a pattern can never leave a fragment of it behind.
  */
 export function scrub(text: string, key: string | null): string {
   let withoutKey = text;
@@ -27,5 +35,6 @@ export function scrub(text: string, key: string | null): string {
   return withoutKey
     .replace(BEARER, `$1 ${REDACTED}`)
     .replace(KEY_PARAM, `$1$2=${REDACTED}`)
-    .replace(KNOWN_KEY_FORMATS, REDACTED);
+    .replace(KNOWN_KEY_FORMATS, REDACTED)
+    .replace(ACCOUNT_ID, `$1$2${REDACTED}$2`);
 }

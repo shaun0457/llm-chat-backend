@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 
 import { prefersEventStream } from "../../http/accept.js";
+import { rateLimitPolicy } from "../../http/plugins.js";
 import { ProblemError } from "../../http/problem-details.js";
 import { type SseOptions, openSseStream } from "../../http/sse.js";
 import { type WaitConfig, effectiveWaitMs, parsePrefer, preferenceApplied } from "./prefer.js";
@@ -44,15 +45,30 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
   service: MessagesService;
   jsonWait: WaitConfig;
   sse: SseOptions;
-}> = async (app, { service, jsonWait, sse }) => {
+  /** Per client address, on top of the general limit; replays count as sends. */
+  sendsPerMinute: number;
+}> = async (app, { service, jsonWait, sse, sendsPerMinute }) => {
+  // One policy object: a retry route (#13) shares this counter by using it too.
+  const sendLimit = rateLimitPolicy(app, sendsPerMinute);
+
   app.post(
     "/sessions/:id/messages",
     {
-      // Before validation, so every answer of this route says that Accept chose its form; an
-      // event stream keeps it, as headers set before the hijack are copied (sse.ts).
-      onRequest: async (_request, reply) => {
-        void reply.header("vary", "Accept");
-      },
+      onRequest: [
+        // Before validation, so every answer of this route says that Accept chose its form;
+        // an event stream keeps it, as headers set before the hijack are copied (sse.ts).
+        // Appended, not set: CORS has already put Origin there when it allows a list of origins.
+        async (_request, reply) => {
+          const current = reply.getHeader("vary");
+          const values = current === undefined ? [] : String(current).split(/\s*,\s*/);
+          if (!values.some((value) => value.toLowerCase() === "accept")) {
+            values.push("Accept");
+          }
+          void reply.header("vary", values.filter((value) => value !== "").join(", "));
+        },
+        // After the general limit, an app-wide hook, which runs first.
+        sendLimit,
+      ],
       schema: {
         summary: "Send a message; stream the answer or wait a bounded time for it",
         description:
@@ -84,7 +100,9 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           "X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed " +
           "X-LLM-Api-Key (its value is never echoed); 503 with Retry-After: 10, server_busy " +
           "when the server is at its limit of active answers or shutting down, provider_busy " +
-          "when the turn's provider is at its limit. Nothing is stored on any of these errors.",
+          "when the turn's provider is at its limit; 429 rate_limited with Retry-After when " +
+          "the client address has used up the send budget (repeated sends count too) or " +
+          "the general one. Nothing is stored on any of these errors.",
         tags: ["messages"],
         params: sessionIdParams,
         headers: sendMessageHeaders,

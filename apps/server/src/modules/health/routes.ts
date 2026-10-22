@@ -4,6 +4,9 @@ import { z } from "zod";
 import type { ReadinessCheck } from "../../db/readiness.js";
 import { ProblemError } from "../../http/problem-details.js";
 
+/** The probes' paths; the rate limits leave exactly these out. */
+export const HEALTH_PATHS = { live: "/health", ready: "/health/ready" } as const;
+
 const healthResponse = z.object({ status: z.literal("ok") });
 const readyResponse = z.object({ status: z.literal("ready") });
 
@@ -13,7 +16,7 @@ export const healthRoutes: FastifyPluginAsyncZod<{ checkReadiness: ReadinessChec
 ) => {
   /** Liveness only: answers while the process can serve HTTP, checks no dependencies. */
   app.get(
-    "/health",
+    HEALTH_PATHS.live,
     {
       schema: {
         summary: "Liveness probe",
@@ -25,7 +28,7 @@ export const healthRoutes: FastifyPluginAsyncZod<{ checkReadiness: ReadinessChec
   );
 
   app.get(
-    "/health/ready",
+    HEALTH_PATHS.ready,
     {
       schema: {
         summary: "Readiness probe",

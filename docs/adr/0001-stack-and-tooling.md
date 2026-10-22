@@ -37,6 +37,9 @@ and credential-header redaction. Versions are pinned exactly:
 | @fastify/swagger          | 9.9.2       | eslint                            | 8.57.1                       |
 | @fastify/swagger-ui       | 6.1.2       | eslint-import-resolver-typescript | 4.4.5                        |
 | tsup                      | 8.3.0 (dev) | node image                        | 22.23.3-slim (digest pinned) |
+| @fastify/rate-limit       | 11.2.1      |                                   |                              |
+| @fastify/helmet           | 13.1.2      |                                   |                              |
+| @fastify/cors             | 11.3.1      |                                   |                              |
 
 ## Verification findings
 

@@ -144,9 +144,11 @@ describe("smoke-local-llm script", () => {
       });
 
       // The other answer never ends on its own: only stopping it lets the script return.
+      // Either session may reach the provider first and get the failing script, so the
+      // failed answer's number is not fixed.
       await expect(
         runSmoke({ baseUrl, provider: "ollama", limitCheck: true, log: quiet }),
-      ).rejects.toThrow(/long answer 2 failed: llm_upstream_error/);
+      ).rejects.toThrow(/long answer [12] failed: llm_upstream_error/);
     });
 
     it("accepts one long answer that stops early when the other ends at the output limit", async () => {

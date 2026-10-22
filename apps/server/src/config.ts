@@ -1,3 +1,4 @@
+import { BlockList, isIP } from "node:net";
 import { z } from "zod";
 
 import { API_KEY_PATTERN } from "./credentials/api-key.js";
@@ -45,6 +46,63 @@ const providerBaseUrl = (fallback: string) =>
     }, "must not contain credentials")
     .default(fallback);
 
+/** One trusted proxy: an IPv4/IPv6 address, or one in CIDR notation (`10.0.0.0/8`). */
+function isIpOrCidr(value: string): boolean {
+  const [address = "", prefix, ...rest] = value.split("/");
+  const version = isIP(address);
+  // A zone id (fe80::1%eth0) is not something a proxy address can be matched against.
+  if (version === 0 || rest.length > 0 || address.includes("%")) {
+    return false;
+  }
+  if (prefix === undefined) {
+    return true;
+  }
+  // No leading zeros, and no huge range: trusting every address (a few short ranges suffice)
+  // trusts every client's X-Forwarded-For, which is what rejecting `true` is for.
+  const bits = Number(prefix);
+  if (!/^\d{1,3}$/.test(prefix) || prefix !== String(bits)) {
+    return false;
+  }
+  if (version === 4) {
+    return bits >= MIN_IPV4_PREFIX && bits <= 32;
+  }
+  const shortest = IPV4_MAPPED.check(address, "ipv6") ? 96 + MIN_IPV4_PREFIX : MIN_IPV6_PREFIX;
+  return bits >= shortest && bits <= 128;
+}
+
+/** The shortest trusted-proxy ranges: an IPv4 /8, an IPv6 /16. */
+const MIN_IPV4_PREFIX = 8;
+const MIN_IPV6_PREFIX = 16;
+/** IPv4-mapped IPv6 addresses (::ffff:a.b.c.d): their last 32 bits are an IPv4 address. */
+const IPV4_MAPPED = new BlockList();
+IPV4_MAPPED.addSubnet("::ffff:0:0", 96, "ipv6");
+
+/**
+ * Trusted proxies as addresses and CIDR ranges only. Fastify would also take a hop count
+ * (which makes it ignore forwarding headers), `true` (which makes the client-supplied leftmost
+ * X-Forwarded-For value the client address) and names such as `loopback`; all are rejected.
+ */
+const trustProxyList = commaList.refine(
+  (items) => items.every(isIpOrCidr),
+  "must be a comma-separated list of IP addresses or CIDR ranges",
+);
+
+/** `*` alone, or http(s) origins (scheme, host, optional port; no path, query or user). */
+const corsOriginList = commaList.refine(
+  (items) =>
+    (items.length === 1 && items[0] === "*") ||
+    items.every((item) => {
+      const url = URL.canParse(item) ? new URL(item) : undefined;
+      return /^https?:$/.test(url?.protocol ?? "") && url?.origin === item;
+    }),
+  "must be * alone or a comma-separated list of http(s) origins",
+);
+
+const MAX_RETENTION_INTERVAL_MS = 86_400_000;
+const DEFAULT_RETENTION_INTERVAL_MS = 3_600_000;
+const perMinuteLimit = (fallback: number) =>
+  z.coerce.number().int().min(1).max(1_000_000).default(fallback);
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -80,10 +138,57 @@ const envSchema = z.object({
   SSE_BUFFER_LIMIT_BYTES: z.coerce.number().int().min(16_384).max(67_108_864).default(262_144),
   MAX_ACTIVE_GENERATIONS: capacityLimit(8),
   MAX_ACTIVE_PER_PROVIDER: capacityLimit(4),
-  // Server configuration only: clients can never choose where a provider call goes.
-  NVIDIA_BASE_URL: providerBaseUrl(DEFAULT_NVIDIA_BASE_URL),
-  OLLAMA_BASE_URL: providerBaseUrl(DEFAULT_OLLAMA_BASE_URL),
+  // NVIDIA_BASE_URL and OLLAMA_BASE_URL are not here: readBaseUrls checks them, and only for
+  // enabled providers.
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(MAX_TIMING_MS).default(10_000),
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(MAX_JSON_WAIT_MS).default(30_000),
+  RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).optional(),
+  RETENTION_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10)
+    .max(MAX_RETENTION_INTERVAL_MS)
+    .default(DEFAULT_RETENTION_INTERVAL_MS),
+  RATE_LIMIT_GENERAL_PER_MIN: perMinuteLimit(120),
+  RATE_LIMIT_SEND_PER_MIN: perMinuteLimit(20),
+  TRUST_PROXY: trustProxyList.optional(),
+  CORS_ORIGINS: corsOriginList.optional(),
 });
+
+/**
+ * The provider base URLs; a provider's own is validated only when it is enabled. Server
+ * configuration only: clients can never choose where a provider call goes.
+ */
+const BASE_URLS = [
+  { provider: "nvidia", key: "NVIDIA_BASE_URL", fallback: DEFAULT_NVIDIA_BASE_URL },
+  { provider: "ollama", key: "OLLAMA_BASE_URL", fallback: DEFAULT_OLLAMA_BASE_URL },
+] as const;
+
+/** Throws (naming the key, never its value) when an enabled provider's base URL is invalid. */
+function readBaseUrls(
+  providers: readonly string[],
+  env: Record<string, string>,
+): Record<(typeof BASE_URLS)[number]["provider"], string> {
+  const urls = { nvidia: DEFAULT_NVIDIA_BASE_URL, ollama: DEFAULT_OLLAMA_BASE_URL };
+  const problems: Array<{ key: string; reason: string }> = [];
+  for (const { provider, key, fallback } of BASE_URLS) {
+    if (!providers.includes(provider)) {
+      continue;
+    }
+    const result = providerBaseUrl(fallback).safeParse(
+      Object.hasOwn(env, key) ? env[key] : undefined,
+    );
+    if (result.success) {
+      urls[provider] = result.data;
+    } else {
+      problems.push(...result.error.issues.map((issue) => ({ key, reason: issue.code })));
+    }
+  }
+  if (problems.length > 0) {
+    throw new ConfigError(problems);
+  }
+  return urls;
+}
 
 /** Holds the database password and operator API keys: never log it. */
 export type AppConfig = Readonly<{
@@ -143,6 +248,31 @@ export type AppConfig = Readonly<{
   ollamaBaseUrl: string;
   /** `<PROVIDER>_API_KEY` of each enabled provider that has one, by provider id. Secrets. */
   operatorKeys: Readonly<Record<string, string>>;
+  /**
+   * The pool's default limit of one statement (lock waits included), so a request stuck
+   * behind a lock fails instead of waiting forever. Jobs set their own, shorter limits.
+   */
+  dbStatementTimeoutMs: number;
+  /**
+   * How long a client may take to send a whole request (headers and body). It never limits
+   * a response, however long it streams or waits.
+   */
+  requestTimeoutMs: number;
+  /** Sessions inactive for longer are deleted by the retention interval; unset: never. */
+  retentionDays: number | undefined;
+  /** How often retention runs while it is enabled. */
+  retentionIntervalMs: number;
+  /** Requests per minute per client IP to every route except the health checks. */
+  rateLimitGeneralPerMin: number;
+  /** Sends per minute per client IP, on top of the general limit. */
+  rateLimitSendPerMin: number;
+  /**
+   * Proxies (IPs or CIDR ranges) whose X-Forwarded-For is believed; unset: the client IP is
+   * the socket's address.
+   */
+  trustProxy: readonly string[] | undefined;
+  /** Origins that receive CORS headers: `["*"]` for any; empty for none (no CORS headers). */
+  corsOrigins: readonly string[];
 }>;
 
 /** Names the invalid keys and why; never includes the values, which may be secrets. */
@@ -227,6 +357,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     ]);
   }
   const providersEnabled = Object.freeze([...new Set(parsed.PROVIDERS_ENABLED)]);
+  const baseUrls = readBaseUrls(providersEnabled, present);
   return Object.freeze({
     port: parsed.PORT,
     host: parsed.HOST,
@@ -252,8 +383,17 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     sseBufferLimitBytes: parsed.SSE_BUFFER_LIMIT_BYTES,
     maxActiveGenerations: parsed.MAX_ACTIVE_GENERATIONS,
     maxActivePerProvider: parsed.MAX_ACTIVE_PER_PROVIDER,
-    nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,
-    ollamaBaseUrl: parsed.OLLAMA_BASE_URL,
+    nvidiaBaseUrl: baseUrls.nvidia,
+    ollamaBaseUrl: baseUrls.ollama,
     operatorKeys: readOperatorKeys(providersEnabled, present),
+    dbStatementTimeoutMs: parsed.DB_STATEMENT_TIMEOUT_MS,
+    requestTimeoutMs: parsed.REQUEST_TIMEOUT_MS,
+    retentionDays: parsed.RETENTION_DAYS,
+    retentionIntervalMs: parsed.RETENTION_INTERVAL_MS,
+    rateLimitGeneralPerMin: parsed.RATE_LIMIT_GENERAL_PER_MIN,
+    rateLimitSendPerMin: parsed.RATE_LIMIT_SEND_PER_MIN,
+    trustProxy:
+      parsed.TRUST_PROXY === undefined ? undefined : Object.freeze([...parsed.TRUST_PROXY]),
+    corsOrigins: Object.freeze([...(parsed.CORS_ORIGINS ?? [])]),
   });
 }

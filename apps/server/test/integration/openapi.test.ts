@@ -108,10 +108,29 @@ describe("API documentation", () => {
       "server_busy",
       "Retry-After: 10",
       "message_id_conflict",
+      "429 rate_limited",
     ]) {
       expect(sendDescription).toContain(code);
     }
     expect(sendDescription).toContain("provider/model for this turn only");
+  });
+
+  it("states the rate limits, the 429 problem and the missing authentication in the document's description", async () => {
+    app = makeTestApp();
+
+    const { info } = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+
+    for (const text of [
+      "No authentication",
+      "429",
+      "rate_limited",
+      "Retry-After",
+      "RATE_LIMIT_GENERAL_PER_MIN",
+      "RATE_LIMIT_SEND_PER_MIN",
+      "/health",
+    ]) {
+      expect(info.description).toContain(text);
+    }
   });
 
   it("documents a send's id as a UUID in any case, except the nil and max UUID", async () => {

@@ -21,6 +21,11 @@ export type DbOptions = {
   onPoolError: (error: Error) => void;
   connectionTimeoutMillis?: number;
   max?: number;
+  /**
+   * The default limit of every statement on the pool's connections, lock waits included;
+   * `SET LOCAL statement_timeout` still overrides it inside one transaction. Unset: none.
+   */
+  statementTimeoutMs?: number;
 };
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 5_000;
@@ -30,6 +35,9 @@ export function createDb(options: DbOptions): Db {
     connectionString: options.connectionString,
     connectionTimeoutMillis: options.connectionTimeoutMillis ?? DEFAULT_CONNECTION_TIMEOUT_MS,
     ...(options.max === undefined ? {} : { max: options.max }),
+    ...(options.statementTimeoutMs === undefined
+      ? {}
+      : { statement_timeout: options.statementTimeoutMs }),
   });
   pool.on("error", options.onPoolError);
 
