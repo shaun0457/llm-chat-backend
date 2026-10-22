@@ -1,8 +1,10 @@
 name: Live LLM check
 
-# Calls the hosted NVIDIA API with the repository secret NVIDIA_API_KEY: one short streaming
-# request per catalogued model (ADR 0008, V2/V3). It never runs on ordinary PR pushes; label a
-# PR `live-llm`, run it by hand, or merge to main.
+# Calls the hosted NVIDIA API with the repository secret NVIDIA_API_KEY. `live` sends one short
+# streaming request per catalogued model straight through the adapter (ADR 0008, V2/V3);
+# `live-e2e` starts the built image with docker compose and asks one question through the
+# HTTP API. It never runs on ordinary PR pushes; label a PR `live-llm`, run it by hand, or
+# merge to main.
 on:
   workflow_dispatch:
   push:
@@ -91,3 +93,168 @@ jobs:
         if: always() && steps.scan.outcome == 'success'
         shell: bash
         run: grep -h 'LIVE_RESULT' "$RUNNER_TEMP/live-llm.log" || echo "No live results."
+
+  live-e2e:
+    name: Live hosted-LLM answer through the API
+    # The same guard as `live`: never for another label or a pull request from a fork. This job
+    # builds and runs the PR's Dockerfile, docker-compose.yml and apps/server/src with the key in
+    # the api container, so before labelling also read the diff of those files, not only
+    # .github/, test/ and package.json: any of them could send the key elsewhere unnoticed.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.label.name == 'live-llm' &&
+      github.event.pull_request.head.repo.full_name == github.repository)
+    concurrency:
+      group: live-llm-e2e-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    # Image build (~2 min) plus at most two sends of a 150 s wait and 60 s of polling each.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Prepare a CI-only catalog with short answers
+        shell: bash
+        run: |
+          # The shipped catalog stays unchanged. This copy caps the default NVIDIA model at 32
+          # output tokens, so the client request carries no max_tokens (the server sends the cap).
+          mkdir -p "$RUNNER_TEMP/live-e2e"
+          jq '.providers.nvidia.defaultModel as $model
+            | (.providers.nvidia.models[] | select(.id == $model) | .maxOutputTokens) = 32' \
+            apps/server/config/models.json > "$RUNNER_TEMP/models.live.json"
+          jq -e '.providers.nvidia.defaultModel as $model
+            | [.providers.nvidia.models[] | select(.id == $model and .maxOutputTokens == 32)]
+            | length == 1' "$RUNNER_TEMP/models.live.json" > /dev/null
+          printf '%s\n' \
+            'services:' \
+            '  api:' \
+            '    environment:' \
+            '      MODEL_CATALOG_PATH: /etc/llm-chat/models.json' \
+            '    volumes:' \
+            "      - \"$RUNNER_TEMP/models.live.json:/etc/llm-chat/models.json:ro\"" \
+            > "$RUNNER_TEMP/compose.live.yml"
+          {
+            echo "COMPOSE_PROJECT_NAME=live-e2e"
+            echo "COMPOSE_FILE=docker-compose.yml:$RUNNER_TEMP/compose.live.yml"
+          } >> "$GITHUB_ENV"
+      - name: Build the image
+        run: docker compose build
+      - name: Start postgres → migrate → api with the repository key
+        id: start
+        shell: bash
+        env:
+          # The only step that sees the key: compose passes it into the api container's env.
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          PROVIDERS_ENABLED: demo,nvidia
+        run: |
+          if [ -z "$NVIDIA_API_KEY" ]; then
+            echo "::notice::NVIDIA_API_KEY is not available to this run; the end-to-end check was skipped."
+            echo "started=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Before `up`: even a start that fails half-way gets its logs scanned for the key.
+          echo "started=true" >> "$GITHUB_OUTPUT"
+          docker compose up -d --no-build
+      - name: Wait for /health/ready (90 s)
+        if: steps.start.outputs.started == 'true'
+        shell: bash
+        run: |
+          for _ in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:3000/health/ready; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "::error::/health/ready did not answer 200 within 90 s"
+          exit 1
+      - name: Ask one question through the API
+        if: steps.start.outputs.started == 'true'
+        shell: bash
+        timeout-minutes: 9
+        run: |
+          set -euo pipefail
+          api=http://127.0.0.1:3000
+          out="$RUNNER_TEMP/live-e2e"
+          status=$(curl -sS -o "$out/session.json" -w '%{http_code}' -X POST "$api/sessions" \
+            -H 'content-type: application/json' -d '{"provider":"nvidia"}')
+          if [ "$status" != 201 ]; then
+            echo "::error::POST /sessions answered $status"
+            exit 1
+          fi
+          session=$(jq -er .id "$out/session.json")
+          # Model output must not be read as workflow commands; resume them on every exit path.
+          stop_token="live-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          resume() {
+            if [ -n "$stop_token" ]; then echo "::$stop_token::"; stop_token=""; fi
+          }
+          trap resume EXIT
+          echo "::stop-commands::$stop_token"
+          for attempt in 1 2; do
+            body="$out/send-$attempt.json"
+            message="$out/answer-$attempt.json"
+            # JSON mode with a long wait and no max_tokens: the CI catalog caps the answer.
+            status=$(curl -sS -o "$body" -w '%{http_code}' --max-time 200 \
+              -X POST "$api/sessions/$session/messages" \
+              -H 'content-type: application/json' -H 'Prefer: wait=150' \
+              -d '{"content":"What is the capital of France? Answer in one short sentence."}') \
+              || status=000
+            echo "attempt $attempt: the send answered HTTP $status"
+            case "$status" in
+              200 | 202 | 502) jq -e .assistantMessage "$body" > "$message" || echo '{}' > "$message" ;;
+              *) echo '{}' > "$message" ;;
+            esac
+            if [ "$status" = 202 ] && jq -e .id "$message" > /dev/null; then
+              # Still generating: poll the assistant message for up to 60 s.
+              mid=$(jq -er .id "$message")
+              for _ in $(seq 1 12); do
+                sleep 5
+                curl -sSf -o "$message" "$api/sessions/$session/messages/$mid"
+                if [ "$(jq -r .status "$message")" != generating ]; then break; fi
+              done
+              # A failure seen while polling counts like the 502 the send would have answered.
+              if [ "$(jq -r .status "$message")" = failed ]; then status=502; fi
+            fi
+            # The answer text and usage only; never request headers.
+            jq -c '{status, model, finishReason, usage, errorCode, answer: .content}' "$message"
+            if jq -e '.status == "completed" and (.content | length > 0)' "$message" > /dev/null; then
+              resume
+              echo "A completed answer came back through the API."
+              exit 0
+            fi
+            # One more attempt only after a 429 or 5xx that a new try could fix.
+            case "$status" in
+              429 | 5??)
+                if jq -e '.errorCode == "llm_auth_failed" or .errorCode == "llm_context_overflow"' \
+                  "$message" > /dev/null; then
+                  break
+                fi
+                ;;
+              *) break ;;
+            esac
+          done
+          resume
+          echo "::error::No completed, non-empty answer came back through the API."
+          exit 1
+      - name: Responses and logs hold no key
+        id: scan
+        if: always() && steps.start.outputs.started == 'true'
+        shell: bash
+        run: |
+          # NVIDIA keys start with nvapi-; GitHub additionally masks the exact secret value.
+          mkdir -p "$RUNNER_TEMP/live-e2e"
+          docker compose logs --no-color > "$RUNNER_TEMP/live-e2e/compose.log" 2>&1 || true
+          if grep -rq 'nvapi-' "$RUNNER_TEMP/live-e2e"; then
+            echo "::error::A response or the container logs contain a key-shaped string: rotate NVIDIA_API_KEY and delete this run's logs."
+            exit 1
+          fi
+      - name: Container logs
+        if: failure() && steps.scan.outcome == 'success'
+        shell: bash
+        run: |
+          stop_token="logs-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$stop_token"
+          tail -n 200 "$RUNNER_TEMP/live-e2e/compose.log"
+          echo "::$stop_token::"
+      - name: Tear down
+        if: always()
+        run: docker compose down -v || true
