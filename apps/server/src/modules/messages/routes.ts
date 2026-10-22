@@ -94,7 +94,9 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           "X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed " +
           "X-LLM-Api-Key (its value is never echoed); 503 with Retry-After: 10, server_busy " +
           "when the server is at its limit of active answers or shutting down, provider_busy " +
-          "when the turn's provider is at its limit. Nothing is stored on any of these errors.",
+          "when the turn's provider is at its limit; 429 rate_limited with Retry-After when " +
+          "the client address has used up the send budget (repeated sends count too) or " +
+          "the general one. Nothing is stored on any of these errors.",
         tags: ["messages"],
         params: sessionIdParams,
         headers: sendMessageHeaders,

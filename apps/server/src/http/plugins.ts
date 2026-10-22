@@ -136,7 +136,14 @@ export function registerApiDocs(app: FastifyInstance): void {
       openapi: "3.1.0",
       info: {
         title: "LLM Chat Backend",
-        description: "Multi-session chat API backed by large language models.",
+        description:
+          "Multi-session chat API backed by large language models. No authentication: " +
+          "anyone who can reach the API can read, change and delete any session. Every " +
+          "route except /health and /health/ready is rate limited per client address " +
+          "(RATE_LIMIT_GENERAL_PER_MIN, 120 a minute by default), and sends also have their " +
+          "own budget (RATE_LIMIT_SEND_PER_MIN, 20 a minute); over a budget the answer is " +
+          "429 problem details with code rate_limited and Retry-After (seconds). Request " +
+          "bodies above 128 KiB answer 413.",
         version: "0.1.0",
       },
     },
