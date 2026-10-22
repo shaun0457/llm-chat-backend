@@ -150,20 +150,20 @@ describe("loadConfig", () => {
   });
 
   it("rejects a reclaim grace that a live job could outlast after its deadline and budget", () => {
-    // A live job may wait one statement timeout for a flush and one more reading its final
-    // state back, on top of deadline and budget; reclaim must not fail it while it does.
+    // After its deadline a live job may still wait one statement timeout for a flush before
+    // its terminal budget (read-back included); reclaim must not fail it while it does.
     const load = (): AppConfig =>
-      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "6000" });
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "3000" });
 
     expect(load).toThrow(ConfigError);
     expect(load).toThrow(/RECLAIM_GRACE_MS/);
     expect(load).toThrow(/TERMINAL_STATEMENT_TIMEOUT_MS/);
   });
 
-  it("accepts a reclaim grace just above twice the statement timeout", () => {
+  it("accepts a reclaim grace just above the statement timeout", () => {
     expect(
-      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "6001" }),
-    ).toMatchObject({ reclaimGraceMs: 6_001 });
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "3001" }),
+    ).toMatchObject({ reclaimGraceMs: 3_001 });
   });
 
   it("lists every invalid key", () => {

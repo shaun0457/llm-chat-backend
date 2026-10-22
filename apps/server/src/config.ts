@@ -86,7 +86,7 @@ export type AppConfig = Readonly<{
   terminalWriteBudgetMs: number;
   /**
    * Margin on top of deadline and terminal budget before a generating row counts as dead;
-   * always more than twice the statement timeout.
+   * always more than the statement timeout.
    */
   reclaimGraceMs: number;
   /**
@@ -135,13 +135,14 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       },
     ]);
   }
-  // Past its deadline and terminal budget, a live job may still wait one statement timeout for
-  // a flush in flight and one more reading its final state back; reclaim must not beat it.
-  if (parsed.RECLAIM_GRACE_MS <= 2 * parsed.TERMINAL_STATEMENT_TIMEOUT_MS) {
+  // Past its deadline a live job may still wait one statement timeout for a flush in flight
+  // before its terminal budget (which includes reading its final state back) starts; reclaim
+  // must not beat it.
+  if (parsed.RECLAIM_GRACE_MS <= parsed.TERMINAL_STATEMENT_TIMEOUT_MS) {
     throw new ConfigError([
       {
         key: "RECLAIM_GRACE_MS",
-        reason: "must be greater than twice TERMINAL_STATEMENT_TIMEOUT_MS",
+        reason: "must be greater than TERMINAL_STATEMENT_TIMEOUT_MS",
       },
     ]);
   }
