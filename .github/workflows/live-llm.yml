@@ -279,11 +279,15 @@ jobs:
           trap resume EXIT
           echo "::stop-commands::$stop_token"
           # One send as an event stream; the server ends the stream after done or error.
+          # curl prints the status it got even when it fails (e.g. exit 28 at --max-time), so
+          # the status and curl's exit code are reported separately.
+          curl_exit=0
           status=$(curl -sS -N -o "$out/stream.txt" -w '%{http_code}' --max-time 200 \
             -X POST "$api/sessions/$session/messages" \
             -H 'content-type: application/json' -H 'Accept: text/event-stream' \
             -d '{"content":"What is the capital of France? Answer in one short sentence."}') \
-            || status=000
+            || curl_exit=$?
+          status=${status:-000}
           touch "$out/stream.txt"
           events=$(grep -c '^event: ' "$out/stream.txt" || true)
           deltas=$(grep -c '^event: delta$' "$out/stream.txt" || true)
@@ -291,7 +295,7 @@ jobs:
           # The final event's data line; the snapshot may already hold the whole answer, so
           # the number of deltas is reported but not required.
           (grep '^data: ' "$out/stream.txt" || true) | tail -n 1 | cut -c 7- > "$out/stream-last.json"
-          echo "the streaming send answered HTTP $status: $events events, $deltas deltas, last: ${last:-none}"
+          echo "the streaming send answered HTTP $status (curl exit $curl_exit): $events events, $deltas deltas, last: ${last:-none}"
           # The answer text and usage only; never request headers.
           jq -c '.assistantMessage | {status, model, finishReason, usage, errorCode, answer: .content}' \
             "$out/stream-last.json" 2> /dev/null || echo "the last event holds no message"
