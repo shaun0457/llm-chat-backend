@@ -71,10 +71,7 @@ no-store` (also on its 404), so no cache serves an old state of an answer that i
   promise.
 - A turn that is generating in another process (or whose process died) is reported as
   generating until stale reclaim fails it; polling shows that state honestly.
-- Until stale reclaim exists, two cases leave a row `generating` that nothing will finish, so
-  polling never reaches `completed` or `failed` and the session answers 409 `session_busy`:
-  a shutdown during generation, and a terminal write that fails. Such a failure within the
-  wait still answers 500 `internal_error` as before; after the wait the client already has
-  its 202. Stale reclaim turns both rows into failed/`interrupted`, and then a 202 is the
-  honest answer for the first case too.
+- Since ADR 0005, a shutdown during the wait stores failed / `cancelled` and the waiting client
+  gets that 502; a final state that cannot be stored answers 202 (not 500), and stale reclaim
+  fails the row as `interrupted` within four minutes, which ends the polling.
 - Retries and replays reuse the same parser and wait rule.

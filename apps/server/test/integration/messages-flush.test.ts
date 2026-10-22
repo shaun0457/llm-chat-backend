@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { makeTestApp } from "../helpers/app.js";
+import type { Job, JobRegistry } from "../../src/modules/messages/jobs.js";
+import { makeTestApp, testJobs } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import {
@@ -17,12 +17,10 @@ import { testProviders } from "../helpers/providers.js";
 
 const testDb = useTestDatabase();
 
-/** TEST_ENV flushes every 50 ms; waiting this long gives a stray writer many chances. */
-const SEVERAL_FLUSH_INTERVALS_MS = 400;
-
 describe("flush-fencing", () => {
   let app: FastifyInstance;
   let fake: FakeLlmProvider;
+  let jobs: JobRegistry;
 
   afterEach(async () => {
     await app.close();
@@ -30,7 +28,21 @@ describe("flush-fencing", () => {
 
   function start(): void {
     fake = new FakeLlmProvider();
-    app = makeTestApp({ db: testDb.db, ...testProviders({ llm: fake }) });
+    jobs = testJobs(testDb.db);
+    app = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
+  }
+
+  /**
+   * The running job of a message. Once its `finished` has settled, the job has stopped its
+   * timers and awaited its last write (a flush gets up to one statement timeout, far more than
+   * these need): nothing it does can change the row any more.
+   */
+  function jobOf(id: string): Job {
+    const job = jobs.get(id);
+    if (job === undefined) {
+      throw new Error("expected the generation to be running");
+    }
+    return job;
   }
 
   /** The generating assistant message, once the turn is visible through the list. */
@@ -92,14 +104,15 @@ describe("flush-fencing", () => {
       ({ body }) => body.content === "Hel",
     );
 
+    const job = jobOf(assistant.id);
     await testDb.db.pool.query("DELETE FROM messages WHERE id = $1", [assistant.id]);
     gate.release();
 
     await aborted();
+    expect(await job.finished).toBe("aborted");
     const response = await pending;
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ code: "message_not_found" });
-    await sleep(SEVERAL_FLUSH_INTERVALS_MS);
     expect((await read(session.id, assistant.id)).statusCode).toBe(404);
   });
 
@@ -115,16 +128,17 @@ describe("flush-fencing", () => {
       ({ body }) => body.content === "Old",
     );
 
+    const job = jobOf(assistant.id);
     await testDb.db.pool.query("UPDATE messages SET attempt = 2, content = 'Newer' WHERE id = $1", [
       assistant.id,
     ]);
     gate.release();
 
     await aborted();
+    expect(await job.finished).toBe("aborted");
     const response = await pending;
     // The stale job ended without a terminal state; the row belongs to the newer attempt.
     expect(response.statusCode).toBe(202);
-    await sleep(SEVERAL_FLUSH_INTERVALS_MS);
     expect((await read(session.id, assistant.id)).body).toMatchObject({
       attempt: 2,
       status: "generating",

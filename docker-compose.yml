@@ -47,6 +47,14 @@ services:
       JSON_MAX_WAIT_MS: ${JSON_MAX_WAIT_MS:-195000}
       NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      GENERATION_DEADLINE_MS: ${GENERATION_DEADLINE_MS:-180000}
+      TERMINAL_STATEMENT_TIMEOUT_MS: ${TERMINAL_STATEMENT_TIMEOUT_MS:-3000}
+      TERMINAL_WRITE_BUDGET_MS: ${TERMINAL_WRITE_BUDGET_MS:-10000}
+      RECLAIM_GRACE_MS: ${RECLAIM_GRACE_MS:-50000}
+    # Longer than the API's forced-exit timeout (statement timeout + terminal-write budget + 5 s,
+    # 18 s by default), so that generations stopped by a shutdown can store their cancelled state.
+    # Raising TERMINAL_STATEMENT_TIMEOUT_MS or TERMINAL_WRITE_BUDGET_MS means raising this too.
+    stop_grace_period: 20s
     # Loopback only: this file is a local stack with default credentials, not a deployment.
     ports:
       - "127.0.0.1:${API_PORT:-3000}:3000"
