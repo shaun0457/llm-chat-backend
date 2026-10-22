@@ -53,6 +53,8 @@ services:
       RECLAIM_GRACE_MS: ${RECLAIM_GRACE_MS:-50000}
       MAX_ACTIVE_GENERATIONS: ${MAX_ACTIVE_GENERATIONS:-8}
       MAX_ACTIVE_PER_PROVIDER: ${MAX_ACTIVE_PER_PROVIDER:-4}
+      SSE_PING_INTERVAL_MS: ${SSE_PING_INTERVAL_MS:-15000}
+      SSE_BUFFER_LIMIT_BYTES: ${SSE_BUFFER_LIMIT_BYTES:-262144}
     # Longer than the API's forced-exit timeout (statement timeout + terminal-write budget + 5 s,
     # 18 s by default), so that generations stopped by a shutdown can store their cancelled state.
     # Raising TERMINAL_STATEMENT_TIMEOUT_MS or TERMINAL_WRITE_BUDGET_MS means raising this too.

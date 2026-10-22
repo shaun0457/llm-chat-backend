@@ -39,6 +39,8 @@ describe("loadConfig", () => {
       terminalWriteBudgetMs: 10_000,
       reclaimGraceMs: 50_000,
       staleThresholdMs: 240_000,
+      ssePingIntervalMs: 15_000,
+      sseBufferLimitBytes: 262_144,
       maxActiveGenerations: 8,
       maxActivePerProvider: 4,
       nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
@@ -66,6 +68,8 @@ describe("loadConfig", () => {
       TERMINAL_STATEMENT_TIMEOUT_MS: "400",
       TERMINAL_WRITE_BUDGET_MS: "2000",
       RECLAIM_GRACE_MS: "1500",
+      SSE_PING_INTERVAL_MS: "5000",
+      SSE_BUFFER_LIMIT_BYTES: "65536",
       MAX_ACTIVE_GENERATIONS: "16",
       MAX_ACTIVE_PER_PROVIDER: "3",
       NVIDIA_BASE_URL: "http://nim.internal:8000/v1",
@@ -92,6 +96,8 @@ describe("loadConfig", () => {
       terminalWriteBudgetMs: 2_000,
       reclaimGraceMs: 1_500,
       staleThresholdMs: 63_500,
+      ssePingIntervalMs: 5_000,
+      sseBufferLimitBytes: 65_536,
       maxActiveGenerations: 16,
       maxActivePerProvider: 3,
       nvidiaBaseUrl: "http://nim.internal:8000/v1",
@@ -182,6 +188,10 @@ describe("loadConfig", () => {
     ["TERMINAL_WRITE_BUDGET_MS", "-1"],
     ["RECLAIM_GRACE_MS", "0"],
     ["RECLAIM_GRACE_MS", "-50000"],
+    ["SSE_PING_INTERVAL_MS", "0"],
+    ["SSE_PING_INTERVAL_MS", "9"],
+    ["SSE_BUFFER_LIMIT_BYTES", "16383"],
+    ["SSE_BUFFER_LIMIT_BYTES", "67108865"],
   ])("rejects %s=%s", (key, value) => {
     expect(configError({ DATABASE_URL, [key]: value }).message).toContain(key);
   });
