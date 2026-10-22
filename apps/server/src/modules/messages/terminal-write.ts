@@ -75,10 +75,15 @@ export async function writeWithinBudget<T>(
       break;
     }
     attempts += 1;
-    const statementMs = Math.min(limits.statementTimeoutMs, available);
     try {
       return await within(
         db.tx(async (tx) => {
+          // Measured again once the try has its connection: a try the race below abandoned
+          // while it waited for one must not write after the budget (it rolls back instead).
+          const statementMs = Math.min(limits.statementTimeoutMs, left());
+          if (statementMs === 0) {
+            throw new BudgetExhausted();
+          }
           await tx.execute(
             sql`SELECT set_config('statement_timeout', ${`${statementMs}ms`}, true)`,
           );
@@ -89,6 +94,8 @@ export async function writeWithinBudget<T>(
     } catch (error) {
       lastError = error;
     }
+    // Ends with the last error even if an immediate try might still fit: a backoff that
+    // cannot finish within the budget means the next try would have almost no time anyway.
     if (backoffMs >= left()) {
       break;
     }

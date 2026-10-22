@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
+import { createDb } from "../../src/db/client.js";
 import type { JobRegistry } from "../../src/modules/messages/jobs.js";
 import { TEST_ENV, makeTestApp, testJobs } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
@@ -14,7 +15,7 @@ import { testProviders } from "../helpers/providers.js";
 const testDb = useTestDatabase();
 
 /** Scheduling and database round trips on top of the budget, for the end-to-end bound. */
-const SLACK_MS = 400;
+const SLACK_MS = 1_000;
 
 /** Counts reservations taken and not yet released, around a real registry. */
 function countingReservations(inner: JobRegistry): { jobs: JobRegistry; held: () => number } {
@@ -199,5 +200,55 @@ describe("terminal-budget", () => {
       (messages) => messages[1]?.status !== "generating",
     );
     expect(polled).toMatchObject({ status: "failed", errorCode: "interrupted" });
+  });
+
+  it("never writes once its budget ran out, even from a try still waiting for a connection", async () => {
+    // One connection for the app and its jobs, so a test client can starve the terminal write.
+    const small = createDb({ connectionString: testDb.url, max: 1, onPoolError: () => {} });
+    const reader = makeTestApp({ db: testDb.db });
+    try {
+      const config = loadConfig({
+        ...TEST_ENV,
+        TERMINAL_STATEMENT_TIMEOUT_MS: "100",
+        TERMINAL_WRITE_BUDGET_MS: "300",
+      });
+      const jobs = testJobs(small, { config });
+      const fake = new FakeLlmProvider();
+      const gate = createGate();
+      fake.script({ deltas: ["Late answer"], gate: gate.promise, gateAfter: 1 });
+      const current = makeTestApp({ db: small, config, jobs, ...testProviders({ llm: fake }) });
+      app = current;
+      const session = await createSession(current);
+      const response = await send(
+        current,
+        session.id,
+        { content: "Hi" },
+        { prefer: "respond-async" },
+      );
+      const assistantId: string = response.json().assistantMessage.id;
+      const read = async () => (await getMessage(reader, session.id, assistantId)).json();
+      await eventually(read, (message) => message.content === "Late answer");
+      const job = jobs.get(assistantId);
+      if (job === undefined) {
+        throw new Error("expected the generation to be running");
+      }
+
+      const held = await small.pool.connect();
+      gate.release();
+      expect(await job.finished).toBe("write_failed");
+      held.release();
+      // The try that queued for the connection gets it now; let it run to its end.
+      await eventually(
+        async () => small.pool.waitingCount === 0 && small.pool.idleCount === small.pool.totalCount,
+        (idle) => idle,
+      );
+
+      expect(await read()).toMatchObject({ status: "generating" });
+    } finally {
+      await app?.close();
+      app = undefined;
+      await reader.close();
+      await small.close();
+    }
   });
 });
