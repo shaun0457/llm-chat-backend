@@ -45,7 +45,8 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
     context length or window → `llm_context_overflow`;
   - an SDK timeout → `llm_timeout`;
   - 429, 5xx, connection errors, error events inside the stream, malformed streams, a missing
-    finish reason → `llm_upstream_error`.
+    finish reason, and (since the amendment for issue #36) a stream that finishes without any
+    answer text → `llm_upstream_error`.
 
   The SDK keeps only an OpenAI-style `error` object from an error body, so the adapter passes
   the SDK a `fetch` that remembers the last failed response body of that call. This finds the
@@ -119,9 +120,9 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
   `google/gemma-3-12b-it` and `nvidia/llama-3.1-nemotron-70b-instruct`, answer 404 for the
   account, as did 12 other probed models. `meta/llama-3.2-11b-vision-instruct` passed and is
   the catalog. `openai/gpt-oss-20b` also passed (its reasoning arrives in a side field), but it
-  is a reasoning model, which this ticket excludes. `nvidia/nemotron-3.5-lightning-30b-a3b`
-  spent the whole output budget reasoning and returned no content. Three models did not
-  answer within 90 s.
+  is a reasoning model, which this ticket excluded (reversed by the amendment for issue #36).
+  `nvidia/nemotron-3.5-lightning-30b-a3b` spent the whole output budget reasoning and returned
+  no content. Three models did not answer within 90 s.
 - **V4 SDK retries and timeout** (openai 7.28.0 source, `client.js`): `shouldRetry` retries
   408, 409, 429 and every status ≥ 500, plus connection errors and timeouts; 401/403 are not
   retried, unless the server sends `x-should-retry: true`, which the SDK obeys. Retries honour
