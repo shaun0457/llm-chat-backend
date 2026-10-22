@@ -7,26 +7,39 @@ at [`8bf820d`](https://github.com/nhwang0/llm-chat-backend/tree/8bf820d).
 **Scope.** This goes beyond a typical 4–6 hour take-home: slow answers, client retries and
 users' own API keys make a naive chat backend lose answers, duplicate turns or leak keys, so
 every consistency rule here is enforced by PostgreSQL and proven by tests against a real
-database. The work lands as small test-first tickets, core requirements first, so the
-repository runs and is documented at every step; what is not built yet is listed under
-[What I would do next](#what-i-would-do-next).
+database. What was left out is listed under [What I would do next](#what-i-would-do-next).
 
-| Assignment item (paraphrased)                                   | README section                                                                         |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Manage many chat sessions: create, list, read, update, delete   | [Query support](#query-support)                                                        |
-| Send a message, get the model's answer, keep the history        | [Sending a message](#sending-a-message), [Database schema](#database-schema)           |
-| Cope with answers that take a long time                         | [Long-running answers](#long-running-answers-json-clients)                             |
-| Talk to a real LLM provider, with the user's own API key        | [Providers and API keys](#providers-and-api-keys)                                      |
-| Start everything with one command                               | [Run with Docker](#run-with-docker)                                                    |
-| An architecture diagram                                         | [Architecture](#architecture)                                                          |
-| The database schema                                             | [Database schema](#database-schema)                                                    |
-| What the API can query                                          | [Query support](#query-support)                                                        |
-| How to run the tests, and how the code is tested                | [Test](#test), [Testing approach](#testing-approach)                                   |
-| Two or three build-versus-reuse decisions with their trade-offs | [Build vs reuse](#build-vs-reuse)                                                      |
-| Where the API documentation is                                  | [API documentation](#api-documentation)                                                |
-| Why it was built this way                                       | [`docs/adr`](docs/adr)                                                                 |
-| Safe to expose publicly: abuse limits, no authentication        | [Security considerations](#security-considerations), [Data retention](#data-retention) |
-| Bonus items: streaming, a local model, a public deployment      | [Streaming](#streaming-sse), [Local model](#local-model-ollama); deployment: to follow |
+**Not publicly deployed.** Run it locally with one command ([Run with Docker](#run-with-docker));
+[How I would deploy it](#how-i-would-deploy-it) describes a deployment. **There is no
+authentication:** anyone who can reach the API can list, read, change and delete every session,
+so run it only where you trust everyone who can reach it
+([Security considerations](#security-considerations)).
+
+### Where the assignment's items are answered
+
+| Assignment item (paraphrased)                                        | Status   | README section                                                                                             |
+| -------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| Manage many chat sessions: create, list, read, update, delete        | done     | [Query support](#query-support)                                                                            |
+| Send a message, get the model's answer, keep the history             | done     | [Sending a message](#sending-a-message), [Database schema](#database-schema)                               |
+| Talk to a real LLM provider                                          | done     | [Providers and API keys](#providers-and-api-keys)                                                          |
+| Start everything with one command                                    | done     | [Run with Docker](#run-with-docker)                                                                        |
+| An architecture diagram                                              | done     | [Architecture](#architecture)                                                                              |
+| How to run it                                                        | done     | [Run with Docker](#run-with-docker), [Run locally](#run-locally), [Configuration](#configuration)          |
+| How to run the tests, and how the code is tested (LLM mocking too)   | done     | [Test](#test), [Testing approach](#testing-approach)                                                       |
+| The database schema, and how it supports session and message queries | done     | [Database schema](#database-schema), [How the schema serves each query](#how-the-schema-serves-each-query) |
+| Two or three build-versus-reuse decisions with their trade-offs      | done     | [Build vs reuse](#build-vs-reuse)                                                                          |
+| Where the API documentation is                                       | done     | [API documentation](#api-documentation)                                                                    |
+| Bonus: streaming answers                                             | done     | [Streaming (SSE)](#streaming-sse)                                                                          |
+| Bonus: a local model                                                 | done     | [Local model (Ollama)](#local-model-ollama)                                                                |
+| Bonus: a public deployment                                           | not done | [How I would deploy it](#how-i-would-deploy-it)                                                            |
+
+**Beyond the assignment:** answers that take minutes without holding a request open
+([Long-running answers](#long-running-answers-json-clients)), sends that are safe to repeat
+([Safe retries](#safe-retries)), the caller's own API key, never stored
+([Providers and API keys](#providers-and-api-keys)), crash recovery and abuse limits
+([Failure handling](#failure-handling), [Limits](#limits),
+[Security considerations](#security-considerations)), and decision records
+([`docs/adr`](docs/adr/README.md)).
 
 ## Prerequisites
 
@@ -116,7 +129,7 @@ be positive whole numbers of milliseconds, at most one hour. `NVIDIA_BASE_URL` a
 | `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000)                                           |
 | `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                                                            |
 | `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`                                              |
-| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII); never used for a provider with `requiresKey: false`            |
+| `<PROVIDER>_API_KEY`            | (none)                       | The server's key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII; a malformed one stops startup); unused if `requiresKey: false`      |
 | `RATE_LIMIT_GENERAL_PER_MIN`    | `120`                        | Requests per minute per client address to every route except `/health*`; then 429 `rate_limited`                                                          |
 | `RATE_LIMIT_SEND_PER_MIN`       | `20`                         | Sends (`POST /sessions/:id/messages`, replays included) per minute per client address, on top of the general limit                                        |
 | `TRUST_PROXY`                   | (none)                       | Comma-separated IPs or CIDR ranges of proxies whose `X-Forwarded-For` is believed; no hop counts, `true`, `*`, or ranges shorter than IPv4 /8 or IPv6 /16 |
@@ -193,6 +206,20 @@ Index `(last_activity_at DESC, id DESC)` serves the session list.
   per session.
 - Check constraints keep user rows `completed` with every assistant-only column null, and
   require assistant rows to carry `reply_to_id`, `started_at`, `provider` and `model`.
+
+### How the schema serves each query
+
+| Query                                    | Index or constraint                                                      | Access pattern                                                                                                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session list, most recent activity first | `sessions_last_activity_at_id_idx` on `(last_activity_at DESC, id DESC)` | Keyset: the opaque cursor holds both values of the page's last row; `WHERE (last_activity_at, id) < cursor ORDER BY … LIMIT n + 1`, never `OFFSET`                |
+| One session, or locking it for a write   | primary key `sessions.id`                                                | Reads by id; sends, changes and deletes take `SELECT … FOR UPDATE` first, which orders writes to one session                                                      |
+| Message history, newest page first       | unique `(session_id, seq)`                                               | `WHERE session_id = $1 AND seq < (seq of before) ORDER BY seq DESC LIMIT n + 1`, returned in ascending `seq`; `before` is looked up by primary key in the session |
+| One message (the poll target)            | primary key `messages.id`                                                | Looked up with `session_id = $1` as well, so another session's message is 404                                                                                     |
+| A turn's context                         | unique `(session_id, seq)`; primary key for the question                 | The session's completed assistant rows below the turn's `seq`, newest first and bounded, each joined to its question through `reply_to_id`                        |
+| One generating turn per session          | partial unique index `(session_id) WHERE status = 'generating'`          | The rule itself; also serves the busy check and stale reclaim                                                                                                     |
+| Replay lookup by client id               | primary key `messages.id`                                                | Ids are global, so one lookup finds the message in any session; the answer is then found through unique `reply_to_id`                                             |
+| Delete a session                         | `messages.session_id` foreign key, `ON DELETE CASCADE`                   | One `DELETE` of the session row removes its messages; the `(session_id, seq)` index covers the cascade by its leading column                                      |
+| Retention                                | `sessions.last_activity_at` (the list index's columns)                   | `WHERE last_activity_at < cutoff`, oldest first, keyset on `(last_activity_at, id)` in batches of 100; each session then goes through the locked delete           |
 
 ## Query support
 
@@ -427,16 +454,12 @@ curl -N localhost:3000/sessions/<id>/messages/<assistant id>/events   # re-attac
   event; following it again (`…/events`) then answers 404. A JSON send that was still waiting
   for the answer gets 404 `session_not_found`.
 - **Proxies.** A `: ping` comment every 15 s (`SSE_PING_INTERVAL_MS`) keeps idle connections
-  open; responses carry
-  `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`, and the API never
-  compresses them. Proxies that still buffer deliver the events late; JSON with polling works
+  open; responses carry `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`,
+  and the API never compresses them. Proxies that still buffer deliver the events late; JSON with polling works
   everywhere.
 - **Slow clients** that stop reading are disconnected once more than 256 KiB would be waiting
   for them (`SSE_BUFFER_LIMIT_BYTES`); the answer is still stored. A single event written while
   nothing is waiting always goes out, however large.
-- **Configurable.** The ping interval (`SSE_PING_INTERVAL_MS`, 15 s by default) and the buffer
-  limit (`SSE_BUFFER_LIMIT_BYTES`, 256 KiB by default) are set in the environment; see
-  [Configuration](#configuration).
 
 See [ADR 0006](docs/adr/0006-sse-reattach.md).
 
@@ -570,7 +593,8 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot hav
 `nvidia` talks to NVIDIA's hosted OpenAI-compatible API through the official `openai` SDK; any
 other OpenAI-compatible server can be added the same way. Only the answer content becomes text.
 `nemotron-3-ultra` reasons before it answers, and its reasoning (`reasoning_content` or
-`reasoning`) is never read: it is not stored, returned, streamed, logged or sent as history.
+`reasoning`) is never kept: the adapter only notes that it arrived, and it is not stored,
+returned, streamed, logged or sent as history.
 While the model reasons, an event stream shows only `message.created` and `: ping` comments,
 and a JSON client simply waits. An answer that has no text after reasoning, or that used up
 `maxOutputTokens` before any text, fails as `llm_upstream_error` instead of completing empty.
@@ -608,7 +632,8 @@ that does not echo it, whatever the provider.
 that has a `<PROVIDER>_API_KEY` is usable by any client, for any of its catalogued models: a
 session's settings and a message's `provider` / `model` override both pick from them. Enable a
 provider with a server key only where that is acceptable, and keep its catalog to models whose
-`maxOutputTokens` and cost you accept. The public demo runs without server keys.
+`maxOutputTokens` and cost you accept. A public deployment would hold no server key
+([How I would deploy it](#how-i-would-deploy-it)).
 
 ```sh
 curl -X POST localhost:3000/sessions -H 'content-type: application/json' \
@@ -725,10 +750,10 @@ example `node apps/server/scripts/smoke-local-llm.ts --base-url http://127.0.0.1
 
 ## Security considerations
 
-**There is no authentication.** Sessions are global: anyone who can reach the API, and on the
-public demo that is anyone, can list, read, change and delete every session and its messages.
-Do not put anything private into the demo. This is a deliberate trade-off for an evaluation
-service; the protections below limit abuse, not access.
+**There is no authentication.** Sessions are global: anyone who can reach the API can list,
+read, change and delete every session and its messages, so do not expose it to anyone you
+would not trust with all of them. This is a deliberate trade-off for an evaluation service;
+the protections below limit abuse, not access.
 
 What is in place:
 
@@ -745,12 +770,10 @@ What is in place:
   IPv6 /16 or, IPv4-mapped, a /104, so that no list can trust every address), a request from
   a listed proxy is keyed by the nearest `X-Forwarded-For` address that is not itself a listed
   proxy, read from the right; the leftmost value, which any client can write, never decides,
-  and a socket that is not listed cannot supply a chain. **The public deployment
-  ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14)) runs with `TRUST_PROXY` unset for now,
-  so every client behind the platform's proxy shares one budget** (the proxy's address): one
-  heavy user can rate-limit everyone. Setting it needs the platform's
-  documented ingress addresses; client-IP attribution on the deployment is not verified yet
-  ([#25](https://github.com/shaun0457/llm-chat-backend/issues/25)).
+  and a socket that is not listed cannot supply a chain. **Behind a proxy with `TRUST_PROXY`
+  unset, every client shares the proxy's budget**, so one heavy user can rate-limit everyone;
+  set it to the proxy's documented addresses
+  ([How I would deploy it](#how-i-would-deploy-it)).
 - **Capacity limits**: at most 8 answers at a time in the process and 4 per provider, each
   over its limit answered at once with 503 ([Limits](#limits)).
 - **Request bounds**: bodies up to 128 KiB, 30 s to send a whole request (stalled headers or
@@ -789,10 +812,9 @@ of the address, with per-owner quotas.
 
 ## Data retention
 
-With `RETENTION_DAYS` set (the public deployment,
-[#14](https://github.com/shaun0457/llm-chat-backend/issues/14), sets `7`), the API deletes every
-session whose last activity (`lastActivityAt`: creation or the last message) is older than that many days,
-with all its messages. Locally it is unset and nothing is ever deleted.
+With `RETENTION_DAYS` set, the API deletes every session whose last activity
+(`lastActivityAt`: creation or the last message) is older than that many days, with all its
+messages. Unset (the default, also in compose) nothing is ever deleted.
 
 - It runs inside the API process every `RETENTION_INTERVAL_MS` (one hour by default) once the
   server listens, and stops when the server shuts down. One run at a time; a failed run is
@@ -810,6 +832,28 @@ with all its messages. Locally it is unset and nothing is ever deleted.
   in flight), so its capacity slot is normally free when the delete returns. Streams
   following it end without a final event.
 - A deleted session cannot be recovered; there is no soft delete or backup in the API.
+
+## How I would deploy it
+
+The service is not deployed. A deployment would run the image CI builds, configured as
+follows:
+
+- **One API instance** behind the platform's proxy, never scaled out: capacity limits, rate
+  limits and live streams are per process ([ADR 0003](docs/adr/0003-single-process-db-truth.md)).
+- **Managed PostgreSQL 17**, with `node dist/migrate.js` as the platform's pre-deploy step and
+  `node dist/index.js` as the start command; the API never migrates.
+- **`TRUST_PROXY`** set to the proxy's documented address range, so that rate limits count
+  each client rather than the proxy.
+- **`CORS_ORIGINS`** set for a browser client, and **`RETENTION_DAYS=7`**, so that data left
+  by anonymous users does not accumulate.
+- **Health checks**: readiness on `/health/ready` (database reachable, migrations applied),
+  liveness on `/health`; a stop grace period of at least 20 s
+  ([Failure handling](#failure-handling)).
+- **No server key**: only providers that need no key (`demo`) or the caller's own
+  `X-LLM-Api-Key` (bring your own key), so no one can spend an operator's key.
+- **`JSON_MAX_WAIT_MS`** below the proxy's request timeout, so that long answers end in 202 and
+  polling instead of a cut connection; whether the proxy streams SSE live or buffers it must be
+  checked on the platform.
 
 ## Build vs reuse
 
@@ -944,17 +988,14 @@ settings (no database, no `.env`), so every machine writes the same bytes. Any p
 that changes a route schema regenerates and commits it; otherwise the CI job `openapi-drift`
 fails with "docs/openapi.json is stale".
 
-Decisions are recorded in [`docs/adr`](docs/adr).
+Decisions are recorded in [`docs/adr`](docs/adr/README.md), with an index.
 
 ## What I would do next
 
-A first version of this list; the final submission pass completes it.
+**From the assignment:** the bonus public deployment, as described in
+[How I would deploy it](#how-i-would-deploy-it).
 
-**Still being built for v1**, each as its own ticket:
-
-- A public deployment of the demo ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14))
-
-**Extras after v1:**
+**Planned extras**, each an open issue:
 
 - Retrying a failed answer, made repeatable with `expectedAttempt`
   ([#13](https://github.com/shaun0457/llm-chat-backend/issues/13))
@@ -968,6 +1009,25 @@ A first version of this list; the final submission pass completes it.
 - Submission extras: a response-conformance test against the OpenAPI document, more diagrams, a
   load script and property-based tests
   ([#26](https://github.com/shaun0457/llm-chat-backend/issues/26))
+- Keyless providers: a regression test for a keyed session that sends one turn to a keyless
+  provider, and no startup check (or a warning) for a keyless provider's `<PROVIDER>_API_KEY`
+  ([#35](https://github.com/shaun0457/llm-chat-backend/issues/35))
+
+**Hosted model, next steps:**
+
+- Print the stored `errorDetail` in the live check's output: one live run got 502
+  `llm_upstream_error` within half a second, and the output does not say why.
+- Retry an in-stream "Service temporarily overloaded" error that arrives before any text.
+- Keep the token usage of an answer that failed at the output limit while reasoning: up to
+  4,096 tokens of the caller's key are spent without being recorded.
+- Cap the history one send reads: the 262,144-token context window raises that bound about
+  eight times over the previous model's.
+- Measure reasoning length on long code or maths prompts before changing the 4,096-token
+  output limit; only short prompts were measured.
+- Filter inline `<think>` reasoning, should a model that writes it into the answer ever be
+  catalogued; whitespace streamed before a reasoning failure is still stored on the failed row.
+- A dedicated error code for a database failure while reading a turn's history, which is
+  stored as `llm_upstream_error` today; a new code changes the public API, so v1 keeps it.
 
 **Abuse protection, next steps** (see [Security considerations](#security-considerations)):
 
