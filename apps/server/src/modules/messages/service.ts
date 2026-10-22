@@ -7,12 +7,12 @@ import type { Db, Tx } from "../../db/client.js";
 import { pgConstraint, pgErrorCode } from "../../db/errors.js";
 import { ProblemError } from "../../http/problem-details.js";
 import type { SseStream } from "../../http/sse.js";
-import type { ModelCatalog } from "../../llm/catalog.js";
 import type { LlmProvider } from "../../llm/port.js";
 import type { ProviderRegistry } from "../../llm/registry.js";
 import { type LockedSession, lockSession } from "../sessions/repository.js";
 import { resolvedPair, sessionNotFound } from "../sessions/service.js";
 import type { Attach, JsonOutcome } from "./attach.js";
+import { historyBudget } from "./context.js";
 import type { JobRegistry, Reservation } from "./jobs.js";
 import { reclaimStale } from "./reclaim.js";
 import {
@@ -69,12 +69,22 @@ export const sessionBusy = () =>
     "An answer is still being generated in this session; wait for it to finish",
   );
 
-/** Capacity refused: today only because the server is shutting down. */
+/** Capacity refused: the process is at its limit, or the server is shutting down. */
 export const serverBusy = () =>
   new ProblemError(
     503,
     "server_busy",
     "The server cannot start another answer right now; try again later",
+    undefined,
+    { "retry-after": "10" },
+  );
+
+/** The turn's provider is at its limit; other providers may still have room. */
+export const providerBusy = (provider: string, limit: number) =>
+  new ProblemError(
+    503,
+    "provider_busy",
+    `The provider "${provider}" is at its limit of ${limit} active ${limit === 1 ? "answer" : "answers"}; try again later`,
     undefined,
     { "retry-after": "10" },
   );
@@ -106,6 +116,7 @@ type Admitted = {
   model: string;
   maxOutputTokens: number;
   systemPrompt: string | null;
+  historyBudget: number;
   startedAtMonotonic: number;
   apiKey: ApiKey;
 };
@@ -113,7 +124,6 @@ type Admitted = {
 export function createMessagesService(deps: {
   db: Db;
   registry: ProviderRegistry;
-  catalog: ModelCatalog;
   jobs: JobRegistry;
   attach: Attach;
   defaultSystemPrompt: string | undefined;
@@ -123,20 +133,11 @@ export function createMessagesService(deps: {
   /** Secrets: the server's own key per provider id. */
   operatorKeys: OperatorKeys;
 }): MessagesService {
-  const {
-    db,
-    registry,
-    catalog,
-    jobs,
-    attach,
-    defaultSystemPrompt,
-    clock,
-    staleThresholdMs,
-    operatorKeys,
-  } = deps;
+  const { db, registry, jobs, attach, defaultSystemPrompt, clock, staleThresholdMs, operatorKeys } =
+    deps;
 
-  // Admission steps, in the order the spec fixes. Later steps (replay, budget, credential,
-  // expected history, capacity limits) slot in between these.
+  // Admission steps, in the order the spec fixes: lock, reclaim, resolve, budget, credential,
+  // busy, capacity, insert. Replay (#10) and the expected-history check (#23) slot in later.
 
   async function lockStep(tx: Tx, sessionId: string): Promise<LockedSession> {
     const session = await lockSession(tx, sessionId);
@@ -151,19 +152,28 @@ export function createMessagesService(deps: {
     await reclaimStale(tx, sessionId, staleThresholdMs);
   }
 
-  function resolveStep(session: LockedSession): {
+  /**
+   * The turn's provider and model: the request's override resolved against the locked
+   * session's defaults by the same rule as session create and update. The session keeps its own.
+   */
+  function resolveStep(
+    session: LockedSession,
+    requested: { provider?: string; model?: string },
+  ): {
     adapter: LlmProvider;
     provider: string;
     requiresKey: boolean;
     model: string;
+    contextWindow: number;
     maxOutputTokens: number;
   } {
-    const pair = resolvedPair(registry.resolve({}, session));
+    const pair = resolvedPair(registry.resolve(requested, session));
+    const provider = registry.provider(pair.provider);
     const adapter = registry.adapter(pair.provider);
-    if (adapter === undefined) {
+    if (provider === undefined || adapter === undefined) {
       throw new ProblemError(422, "provider_unavailable", "The provider is unknown or not enabled");
     }
-    const entry = catalog.find(pair.provider, pair.model);
+    const entry = provider.models.find((candidate) => candidate.id === pair.model);
     if (entry === undefined) {
       throw new ProblemError(
         422,
@@ -174,10 +184,43 @@ export function createMessagesService(deps: {
     return {
       adapter,
       provider: pair.provider,
-      requiresKey: catalog.provider(pair.provider)?.requiresKey ?? true,
+      requiresKey: provider.requiresKey,
       model: pair.model,
+      contextWindow: entry.contextWindow,
       maxOutputTokens: entry.maxOutputTokens,
     };
+  }
+
+  /** The frozen system prompt of a new turn: the session's own, else the server's default. */
+  function systemPromptOf(session: LockedSession): string | null {
+    return (
+      session.systemPrompt ??
+      (defaultSystemPrompt !== undefined && defaultSystemPrompt.length > 0
+        ? defaultSystemPrompt
+        : null)
+    );
+  }
+
+  /** Tokens left for earlier turns; throws 422 input_too_long when the input cannot fit. */
+  function budgetStep(
+    resolved: ReturnType<typeof resolveStep>,
+    systemPrompt: string | null,
+    content: string,
+  ): number {
+    const budget = historyBudget({
+      contextWindow: resolved.contextWindow,
+      maxOutputTokens: resolved.maxOutputTokens,
+      systemPrompt,
+      message: content,
+    });
+    if (budget < 0) {
+      throw new ProblemError(
+        422,
+        "input_too_long",
+        "The message and the system prompt do not fit the model's context window with its output reservation",
+      );
+    }
+    return budget;
   }
 
   /** Decided once per new turn; the key goes only into the job. */
@@ -212,13 +255,10 @@ export function createMessagesService(deps: {
     session: LockedSession,
     content: string,
     resolved: ReturnType<typeof resolveStep>,
+    systemPrompt: string | null,
+    budget: number,
     apiKey: ApiKey,
   ): Promise<Admitted> {
-    const systemPrompt =
-      session.systemPrompt ??
-      (defaultSystemPrompt !== undefined && defaultSystemPrompt.length > 0
-        ? defaultSystemPrompt
-        : null);
     // Immediately before the insert that sets started_at: the deadline then never ends later
     // than started_at + deadline, without comparing this clock with the database's.
     const startedAtMonotonic = clock.monotonicNow();
@@ -241,14 +281,34 @@ export function createMessagesService(deps: {
       model: resolved.model,
       maxOutputTokens: resolved.maxOutputTokens,
       systemPrompt,
+      historyBudget: budget,
       startedAtMonotonic,
       apiKey,
     };
   }
 
+  /** Synchronous, right before the insert; 503 with Retry-After when there is no room. */
+  function capacityStep(provider: string): Reservation {
+    const reservation = jobs.reserve(provider);
+    if (!("rejected" in reservation)) {
+      return reservation;
+    }
+    switch (reservation.rejected) {
+      case "provider_busy":
+        throw providerBusy(provider, reservation.limit);
+      case "server_busy":
+      case "shutting_down":
+        throw serverBusy();
+      default: {
+        const unhandled: never = reservation;
+        throw new Error(`unhandled reservation refusal: ${JSON.stringify(unhandled)}`);
+      }
+    }
+  }
+
   async function admit(
     sessionId: string,
-    content: string,
+    input: SendMessageInput,
     headerKey: string | undefined,
   ): Promise<{ admitted: Admitted; attempt: number; reservation: Reservation }> {
     // Kept outside the callback only so a rollback (or a failed commit) can release it.
@@ -257,15 +317,24 @@ export function createMessagesService(deps: {
       return await db.tx(async (tx) => {
         const session = await lockStep(tx, sessionId);
         await reclaimStep(tx, sessionId);
-        const resolved = resolveStep(session);
+        const { content } = input;
+        const resolved = resolveStep(session, { provider: input.provider, model: input.model });
+        const systemPrompt = systemPromptOf(session);
+        const budget = budgetStep(resolved, systemPrompt, content);
         const apiKey = credentialStep(resolved, headerKey);
         await busyStep(tx, sessionId);
-        const reservation = jobs.reserve();
-        if (reservation === undefined) {
-          throw serverBusy();
-        }
+        const reservation = capacityStep(resolved.provider);
         held = reservation;
-        const admitted = await insertStep(tx, sessionId, session, content, resolved, apiKey);
+        const admitted = await insertStep(
+          tx,
+          sessionId,
+          session,
+          content,
+          resolved,
+          systemPrompt,
+          budget,
+          apiKey,
+        );
         const { attempt } = admitted.turn.assistantMessage;
         if (attempt === null) {
           // Thrown inside the transaction, so the turn is rolled back instead of left generating.
@@ -289,7 +358,7 @@ export function createMessagesService(deps: {
     input: SendMessageInput,
     apiKey: string | undefined,
   ): Promise<{ turn: Turn; attempt: number }> {
-    const { admitted, attempt, reservation } = await admit(sessionId, input.content, apiKey);
+    const { admitted, attempt, reservation } = await admit(sessionId, input, apiKey);
     const { userMessage, assistantMessage } = admitted.turn;
     jobs.start({
       assistantId: assistantMessage.id,
@@ -300,6 +369,7 @@ export function createMessagesService(deps: {
       model: admitted.model,
       maxOutputTokens: admitted.maxOutputTokens,
       systemPrompt: admitted.systemPrompt,
+      historyBudget: admitted.historyBudget,
       apiKey: admitted.apiKey,
       startedAtMonotonic: admitted.startedAtMonotonic,
       reservation,

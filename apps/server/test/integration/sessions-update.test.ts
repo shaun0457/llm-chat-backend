@@ -89,12 +89,20 @@ describe("PATCH /sessions/:id", () => {
     expect(response.json()).toMatchObject({ provider: "other", model: "o-large" });
   });
 
-  it("keeps the model when the request repeats the current provider", async () => {
+  it("takes the provider's default model even when the request repeats the current provider", async () => {
     const session = await createSession({ provider: "other", model: "o-small" });
 
     const response = await patch(session.id, { title: "x", provider: "other" });
 
     expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ provider: "other", model: "o-large" });
+  });
+
+  it("keeps the model when the request omits the provider", async () => {
+    const session = await createSession({ provider: "other", model: "o-small" });
+
+    const response = await patch(session.id, { title: "x" });
+
     expect(response.json()).toMatchObject({ provider: "other", model: "o-small" });
   });
 

@@ -4,6 +4,8 @@ import { type HistoryRow, assembleContext } from "../../src/modules/messages/con
 
 type Status = HistoryRow["status"];
 
+const UNLIMITED = Number.POSITIVE_INFINITY;
+
 /** A user row at `seq` and its assistant at `seq + 1`. */
 function turn(seq: number, status: Status, question: string, answer: string): HistoryRow[] {
   const userId = `u${seq}`;
@@ -26,6 +28,7 @@ describe("assembleContext", () => {
 
     expect(
       assembleContext({
+        historyBudget: UNLIMITED,
         systemPrompt: "Be brief.",
         history,
         userMessage: { seq: 5, content: "Q3" },
@@ -48,7 +51,12 @@ describe("assembleContext", () => {
     ];
 
     expect(
-      assembleContext({ systemPrompt: null, history, userMessage: { seq: 7, content: "Q4" } }),
+      assembleContext({
+        historyBudget: UNLIMITED,
+        systemPrompt: null,
+        history,
+        userMessage: { seq: 7, content: "Q4" },
+      }),
     ).toEqual([
       { role: "user", content: "Q2" },
       { role: "assistant", content: "A2" },
@@ -64,7 +72,12 @@ describe("assembleContext", () => {
     ];
 
     expect(
-      assembleContext({ systemPrompt: null, history, userMessage: { seq: 3, content: "Target" } }),
+      assembleContext({
+        historyBudget: UNLIMITED,
+        systemPrompt: null,
+        history,
+        userMessage: { seq: 3, content: "Target" },
+      }),
     ).toEqual([
       { role: "user", content: "Before" },
       { role: "assistant", content: "Answer before" },
@@ -75,7 +88,12 @@ describe("assembleContext", () => {
   it("sends no system message for a null or empty system prompt", () => {
     for (const systemPrompt of [null, ""]) {
       expect(
-        assembleContext({ systemPrompt, history: [], userMessage: { seq: 1, content: "Hi" } }),
+        assembleContext({
+          historyBudget: UNLIMITED,
+          systemPrompt,
+          history: [],
+          userMessage: { seq: 1, content: "Hi" },
+        }),
       ).toEqual([{ role: "user", content: "Hi" }]);
     }
   });
@@ -92,10 +110,52 @@ describe("assembleContext", () => {
 
     expect(
       assembleContext({
+        historyBudget: UNLIMITED,
         systemPrompt: null,
         history: [lonely],
         userMessage: { seq: 3, content: "Hi" },
       }),
     ).toEqual([{ role: "user", content: "Hi" }]);
+  });
+
+  it("context.trim: keeps the newest whole turns that fit the budget, oldest first", () => {
+    // Each turn: "Qn" and "An" are 1 token each, plus 8 overhead per message = 18.
+    const history = [
+      ...turn(1, "completed", "Q1", "A1"),
+      ...turn(3, "completed", "Q2", "A2"),
+      ...turn(5, "completed", "Q3", "A3"),
+    ];
+
+    expect(
+      assembleContext({
+        historyBudget: 36,
+        systemPrompt: "Be brief.",
+        history,
+        userMessage: { seq: 7, content: "Q4" },
+      }),
+    ).toEqual([
+      { role: "system", content: "Be brief." },
+      { role: "user", content: "Q2" },
+      { role: "assistant", content: "A2" },
+      { role: "user", content: "Q3" },
+      { role: "assistant", content: "A3" },
+      { role: "user", content: "Q4" },
+    ]);
+  });
+
+  it("never drops the system prompt or the new message, even with no room for history", () => {
+    const history = turn(1, "completed", "Q1", "A1");
+
+    expect(
+      assembleContext({
+        historyBudget: 0,
+        systemPrompt: "Be brief.",
+        history,
+        userMessage: { seq: 3, content: "Q2" },
+      }),
+    ).toEqual([
+      { role: "system", content: "Be brief." },
+      { role: "user", content: "Q2" },
+    ]);
   });
 });

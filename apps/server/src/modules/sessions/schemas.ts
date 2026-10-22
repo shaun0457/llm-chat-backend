@@ -60,7 +60,8 @@ export const updateSessionBody = z
     provider: provider
       .optional()
       .describe(
-        "Alone: a different provider's default model; the current provider keeps the model",
+        "Alone: that provider's default model, including when it is already the current " +
+          "provider; omit provider to preserve the current model",
       ),
     model: model.optional().describe("Alone: validated against the current provider"),
     systemPrompt: systemPrompt.nullable().optional().describe("null clears it"),

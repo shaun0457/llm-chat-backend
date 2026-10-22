@@ -27,6 +27,9 @@ const RECLAIM_SLACK_MS = 1_000;
 /** A positive whole number of milliseconds; zero or less would disable the safety net. */
 const timingMs = (fallback: number) =>
   z.coerce.number().int().min(1).max(MAX_TIMING_MS).default(fallback);
+/** At least one active generation; zero would refuse every send. */
+const capacityLimit = (fallback: number) =>
+  z.coerce.number().int().min(1).max(10_000).default(fallback);
 const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 const envSchema = z.object({
@@ -61,6 +64,8 @@ const envSchema = z.object({
   SSE_PING_INTERVAL_MS: z.coerce.number().int().min(10).max(MAX_TIMING_MS).default(15_000),
   // At least one large frame must fit; at most 64 MiB per connection.
   SSE_BUFFER_LIMIT_BYTES: z.coerce.number().int().min(16_384).max(67_108_864).default(262_144),
+  MAX_ACTIVE_GENERATIONS: capacityLimit(8),
+  MAX_ACTIVE_PER_PROVIDER: capacityLimit(4),
   // Server configuration only: clients can never choose where a provider call goes.
   NVIDIA_BASE_URL: z
     .url({ protocol: /^https?$/ })
@@ -117,6 +122,13 @@ export type AppConfig = Readonly<{
    * beyond closes that connection (a slow consumer), never the generation.
    */
   sseBufferLimitBytes: number;
+  /** Active generations in this process at most; further sends get 503 server_busy. */
+  maxActiveGenerations: number;
+  /**
+   * Active generations per provider at most, unless its catalog entry sets maxConcurrency;
+   * further sends to that provider get 503 provider_busy.
+   */
+  maxActivePerProvider: number;
   /** Where the nvidia provider's OpenAI-compatible API lives. */
   nvidiaBaseUrl: string;
   /** `<PROVIDER>_API_KEY` of each enabled provider that has one, by provider id. Secrets. */
@@ -228,6 +240,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       parsed.GENERATION_DEADLINE_MS + parsed.TERMINAL_WRITE_BUDGET_MS + parsed.RECLAIM_GRACE_MS,
     ssePingIntervalMs: parsed.SSE_PING_INTERVAL_MS,
     sseBufferLimitBytes: parsed.SSE_BUFFER_LIMIT_BYTES,
+    maxActiveGenerations: parsed.MAX_ACTIVE_GENERATIONS,
+    maxActivePerProvider: parsed.MAX_ACTIVE_PER_PROVIDER,
     nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,
     operatorKeys: readOperatorKeys(providersEnabled, present),
   });

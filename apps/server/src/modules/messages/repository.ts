@@ -1,4 +1,5 @@
-import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import type { Database, Tx } from "../../db/client.js";
 import { messages, sessions } from "../../db/schema.js";
@@ -197,24 +198,62 @@ export async function failAssistant(
   return row === undefined ? undefined : toMessage(row);
 }
 
-/** Every message of the session below `seq`, ascending: the raw material of a context. */
-export async function historyBefore(
+const question = alias(messages, "question");
+
+/**
+ * The newest `maxTurns` completed turns of the session below `seq` (user and assistant rows,
+ * ascending): the raw material of a context, bounded so a long session is never loaded whole.
+ * Turns whose answer failed or is generating are not returned and do not count.
+ */
+export async function completedTurnsBefore(
   db: Executor,
   sessionId: string,
   seq: number,
+  maxTurns: number,
 ): Promise<HistoryRow[]> {
-  return db
+  if (maxTurns <= 0) {
+    return [];
+  }
+  const answers = await db
     .select({
       id: messages.id,
       seq: messages.seq,
-      role: messages.role,
       content: messages.content,
-      status: messages.status,
-      replyToId: messages.replyToId,
+      questionId: question.id,
+      questionSeq: question.seq,
+      questionContent: question.content,
     })
     .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), lt(messages.seq, seq)))
-    .orderBy(asc(messages.seq));
+    .innerJoin(question, eq(question.id, messages.replyToId))
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, "assistant"),
+        eq(messages.status, "completed"),
+        lt(messages.seq, seq),
+        eq(question.sessionId, sessionId),
+      ),
+    )
+    .orderBy(desc(messages.seq))
+    .limit(maxTurns);
+  return answers.reverse().flatMap((answer): HistoryRow[] => [
+    {
+      id: answer.questionId,
+      seq: answer.questionSeq,
+      role: "user",
+      content: answer.questionContent,
+      status: "completed",
+      replyToId: null,
+    },
+    {
+      id: answer.id,
+      seq: answer.seq,
+      role: "assistant",
+      content: answer.content,
+      status: "completed",
+      replyToId: answer.questionId,
+    },
+  ]);
 }
 
 export async function findMessage(

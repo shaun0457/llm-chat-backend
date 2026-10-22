@@ -7,28 +7,31 @@ import type { ApiKey } from "../../credentials/api-key.js";
 import type { Db, Tx } from "../../db/client.js";
 import { pgErrorCode } from "../../db/errors.js";
 import { limitStatements } from "../../db/statement-timeout.js";
+import type { Capacity, CapacityRejection } from "../../llm/capacity.js";
 import { failureOf } from "../../llm/errors.js";
 import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
-import { assembleContext } from "./context.js";
+import { assembleContext, maxTurnsWithin } from "./context.js";
 import { remainingMs } from "./deadline.js";
 import { abortRace, untilAbort, withTimeout } from "./race.js";
 import {
   completeAssistant,
+  completedTurnsBefore,
   failAssistant,
   findMessage,
   flushContent,
-  historyBefore,
 } from "./repository.js";
 import type { Message } from "./schemas.js";
 import { TerminalWriteError, writeWithinBudget } from "./terminal-write.js";
 
 /**
- * A slot of generation capacity, held from admission to the end of the job and released
- * exactly once (on rollback, or in the job's `finally`). Only shutdown refuses one today; the
- * capacity limits fill in the counting behind the same call sites.
+ * A slot of generation capacity (process and provider), held from admission to the end of the
+ * job and released exactly once (on rollback, or in the job's `finally`).
  */
-export type Reservation = { release(): void };
+export type Reservation = Readonly<{ release: () => void }>;
+
+/** Why reserve() granted no slot: shutdown has begun, or a capacity limit is reached. */
+export type ReserveRefusal = Readonly<{ rejected: "shutting_down" }> | CapacityRejection;
 
 const TIMEOUT_DETAIL = "The answer was not finished within the time limit.";
 const CANCELLED_DETAIL = "The server shut down before the answer was finished.";
@@ -119,6 +122,8 @@ export type JobSpec = {
   model: string;
   maxOutputTokens: number;
   systemPrompt: string | null;
+  /** Tokens the earlier turns may use (see historyBudget); never negative. */
+  historyBudget: number;
   /** Decided at admission; never stored or logged, and cleared when the job ends. */
   apiKey: ApiKey;
   /** The clock's reading taken just before the admitting insert: the deadline's origin. */
@@ -143,8 +148,11 @@ export type Job = Readonly<{
 }>;
 
 export interface JobRegistry {
-  /** A capacity slot for a new generation; undefined once shutdown has begun. */
-  reserve(): Reservation | undefined;
+  /**
+   * A capacity slot for a new generation on `provider`, checked and taken synchronously;
+   * refused once shutdown has begun or when the process or the provider is at its limit.
+   */
+  reserve(provider: string): Reservation | ReserveRefusal;
   /** Starts generating in the background. Call only after the admitting transaction commits. */
   start(spec: JobSpec): Job;
   /** The job running for this assistant message in this process, if any. */
@@ -172,8 +180,9 @@ export function createJobRegistry(deps: {
   timing: JobTiming;
   clock: Clock;
   log: FastifyBaseLogger;
+  capacity: Capacity;
 }): JobRegistry {
-  const { db, timing, clock, log } = deps;
+  const { db, timing, clock, log, capacity } = deps;
   const jobs = new Map<string, RunningJob>();
   /** Set by shutdown(): jobs started afterwards are aborted immediately. */
   let closing = false;
@@ -305,7 +314,12 @@ export function createJobRegistry(deps: {
           );
           // At least 1 ms (0 would mean no limit): past the deadline the read fails at once.
           await limitStatements(tx, Math.max(1, readMs));
-          return historyBefore(tx, spec.sessionId, spec.userMessage.seq);
+          return completedTurnsBefore(
+            tx,
+            spec.sessionId,
+            spec.userMessage.seq,
+            maxTurnsWithin(spec.historyBudget),
+          );
         }),
         controller.signal,
       );
@@ -317,6 +331,7 @@ export function createJobRegistry(deps: {
           systemPrompt: spec.systemPrompt,
           history,
           userMessage: spec.userMessage,
+          historyBudget: spec.historyBudget,
         }),
       };
       // Stopped already (e.g. admitted while the server closes): do not call the provider.
@@ -411,17 +426,21 @@ export function createJobRegistry(deps: {
   }
 
   return {
-    reserve() {
+    reserve(provider) {
       if (closing) {
-        return undefined;
+        return { rejected: "shutting_down" };
       }
-      // Only outstanding reservations are counted so far; the capacity limits add theirs.
+      const slot = capacity.tryReserve(provider);
+      if ("rejected" in slot) {
+        return slot;
+      }
       outstanding += 1;
       let released = false;
       return {
         release: () => {
           if (!released) {
             released = true;
+            slot.release();
             outstanding -= 1;
             changed();
           }

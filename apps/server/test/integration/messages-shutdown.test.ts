@@ -138,8 +138,8 @@ describe("shutdown", () => {
     let jobEnded = false;
     const jobs: JobRegistry = {
       ...inner,
-      reserve() {
-        const reservation = inner.reserve();
+      reserve(provider) {
+        const reservation = inner.reserve(provider);
         // Shutdown begins while this admission still has to insert and commit its turn.
         closed = inner.shutdown(5_000);
         return reservation;

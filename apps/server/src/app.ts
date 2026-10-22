@@ -11,6 +11,7 @@ import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
 import { registerApiDocs } from "./http/plugins.js";
 import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-details.js";
+import { capacityFor } from "./llm/capacity.js";
 import type { ModelCatalog } from "./llm/catalog.js";
 import type { ProviderRegistry } from "./llm/registry.js";
 import { healthRoutes } from "./modules/health/routes.js";
@@ -126,11 +127,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   const clock = deps.clock ?? systemClock;
-  const jobs = deps.jobs ?? createJobRegistry({ db, timing: config, clock, log: app.log });
+  const jobs =
+    deps.jobs ??
+    createJobRegistry({
+      db,
+      timing: config,
+      clock,
+      log: app.log,
+      capacity: capacityFor(config, catalog),
+    });
   const messages = createMessagesService({
     db,
     registry,
-    catalog,
     jobs,
     attach: createAttach({
       jobs,
