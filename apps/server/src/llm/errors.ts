@@ -25,6 +25,17 @@ export class LlmError extends Error {
 }
 
 export const DEFAULT_UPSTREAM_DETAIL = "The model provider returned an error.";
+
+/**
+ * What a failed generation stores: an LlmError's code and safe detail; anything else (another
+ * provider's error, a stream without a finish event) is a generic upstream error whose text is
+ * never shown.
+ */
+export function failureOf(error: unknown): { errorCode: UpstreamErrorCode; errorDetail: string } {
+  return error instanceof LlmError
+    ? { errorCode: error.code, errorDetail: error.detail }
+    : { errorCode: "llm_upstream_error", errorDetail: DEFAULT_UPSTREAM_DETAIL };
+}
 const MAX_DETAIL_LENGTH = 500;
 /** How much of an upstream error body is looked at. */
 const MAX_BODY_LENGTH = 4096;

@@ -4,6 +4,18 @@
       "defaultModel": "demo",
       "requiresKey": false,
       "models": [{ "id": "demo", "contextWindow": 8192, "maxOutputTokens": 1024 }]
+    },
+    "nvidia": {
+      "defaultModel": "google/gemma-3-12b-it",
+      "requiresKey": true,
+      "models": [
+        { "id": "google/gemma-3-12b-it", "contextWindow": 32768, "maxOutputTokens": 2048 },
+        {
+          "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+          "contextWindow": 32768,
+          "maxOutputTokens": 2048
+        }
+      ]
     }
   }
 }

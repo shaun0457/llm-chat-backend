@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import type { ApiKey } from "../../credentials/api-key.js";
 import type { Db } from "../../db/client.js";
+import { failureOf } from "../../llm/errors.js";
 import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
@@ -17,7 +18,6 @@ import type { Message } from "./schemas.js";
  */
 export type Reservation = { release(): void };
 
-const UPSTREAM_ERROR_DETAIL = "The model provider returned an error.";
 const shuttingDown = () => new Error("the server is shutting down");
 
 /** Everything a job needs, frozen at admission. */
@@ -169,8 +169,7 @@ export function createJobRegistry(deps: {
       finish === undefined || generationFailed
         ? await failAssistant(db.drizzle, fence, {
             content: bus.snapshot(),
-            errorCode: "llm_upstream_error",
-            errorDetail: UPSTREAM_ERROR_DETAIL,
+            ...failureOf(generationError),
           })
         : await completeAssistant(db.drizzle, fence, {
             content: bus.snapshot(),
