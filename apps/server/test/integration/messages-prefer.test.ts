@@ -192,22 +192,19 @@ describe("JSON sends: Prefer, 202 and polling", () => {
       ",,;",
       "respond-async=",
       'respond-async="unterminated',
-    ])(
-      "ignores %j: the default wait applies, no 400, nothing applied",
-      async (prefer) => {
-        start();
-        holdGeneration();
-        const session = await createSession(app);
+    ])("ignores %j: the default wait applies, no 400, nothing applied", async (prefer) => {
+      start();
+      holdGeneration();
+      const session = await createSession(app);
 
-        const { value: response, elapsedMs } = await timed(() =>
-          send(app, session.id, { content: "Hi" }, { prefer }),
-        );
+      const { value: response, elapsedMs } = await timed(() =>
+        send(app, session.id, { content: "Hi" }, { prefer }),
+      );
 
-        expect(response.statusCode).toBe(202);
-        expect(elapsedMs).toBeGreaterThanOrEqual(190);
-        expect(response.headers["preference-applied"]).toBeUndefined();
-      },
-    );
+      expect(response.statusCode).toBe(202);
+      expect(elapsedMs).toBeGreaterThanOrEqual(190);
+      expect(response.headers["preference-applied"]).toBeUndefined();
+    });
   });
 
   describe("prefer.failure", () => {

@@ -45,13 +45,15 @@ describe("prefer.parse", () => {
     },
   );
 
-  it.each(["respond-async=", 'respond-async="unterminated', 'respond-async="a"b', "respond-async=a b"])(
-    "ignores a malformed respond-async: %s",
-    (value) => {
-      expect(parsePrefer([value])).toEqual(none);
-      expect(parsePrefer([`wait=5, ${value}`])).toEqual({ respondAsync: false, waitSeconds: 5 });
-    },
-  );
+  it.each([
+    "respond-async=",
+    'respond-async="unterminated',
+    'respond-async="a"b',
+    "respond-async=a b",
+  ])("ignores a malformed respond-async: %s", (value) => {
+    expect(parsePrefer([value])).toEqual(none);
+    expect(parsePrefer([`wait=5, ${value}`])).toEqual({ respondAsync: false, waitSeconds: 5 });
+  });
 
   it("still honours respond-async with a well-formed value (the value has no meaning)", () => {
     expect(parsePrefer(["respond-async=yes"]).respondAsync).toBe(true);

@@ -3,8 +3,8 @@ import pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
-import type { JobRegistry } from "../../src/modules/messages/jobs.js";
 import { TEST_ENV, makeTestApp } from "../helpers/app.js";
+import { insertCrashedTurn } from "../helpers/crash.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import { makeHostedTestApp } from "../helpers/hosted.js";
@@ -40,7 +40,7 @@ describe("idempotent send: client message ids", () => {
 
   function start(
     env: Record<string, string> = {},
-    options: { operatorKeys?: Record<string, string>; jobs?: JobRegistry } = {},
+    options: { operatorKeys?: Record<string, string> } = {},
   ): FastifyInstance {
     fake = new FakeLlmProvider();
     app = makeTestApp({
@@ -325,6 +325,49 @@ describe("idempotent send: client message ids", () => {
         assistantMessage: expect.objectContaining({ status: "completed", content: "Hello there" }),
       });
       expect(fake.requests).toHaveLength(1);
+    });
+  });
+
+  describe("replay.reclaimed", () => {
+    it("fails a crashed turn as interrupted first, then replays it as 502 or an error event", async () => {
+      start();
+      const session = await createSession(app);
+      // Older than the stale threshold (240 s by default): no job can still be behind it.
+      const { userId, assistantId } = await insertCrashedTurn(testDb.db, session.id, 600);
+      const payload = { id: userId, content: "Hi" };
+
+      const json = await send(app, session.id, payload, { prefer: "respond-async" });
+      const streamed = await send(app, session.id, payload, SSE);
+
+      expect(json.statusCode).toBe(502);
+      expect(json.json()).toMatchObject({
+        code: "interrupted",
+        assistantMessage: { id: assistantId, status: "failed", content: "Half an answer" },
+      });
+      const events = eventsOf(parseSse(streamed.body));
+      expect(events.map(({ event }) => event)).toEqual(["message.created", "error"]);
+      expect(events[1]?.data).toMatchObject({ code: "interrupted" });
+      expect(fake.requests).toHaveLength(0);
+    });
+
+    it("answers 202 or message.detached for a turn generating where this process cannot follow it", async () => {
+      start();
+      const session = await createSession(app);
+      // Younger than the stale threshold, and no job in this process.
+      const { userId, assistantId } = await insertCrashedTurn(testDb.db, session.id, 1);
+      const payload = { id: userId, content: "Hi" };
+
+      const json = await send(app, session.id, payload, { prefer: "respond-async" });
+      const streamed = await send(app, session.id, payload, SSE);
+
+      expect(json.statusCode).toBe(202);
+      expect((json.json() as TurnBody).assistantMessage).toMatchObject({
+        id: assistantId,
+        status: "generating",
+      });
+      const events = eventsOf(parseSse(streamed.body));
+      expect(events.map(({ event }) => event)).toEqual(["message.created", "message.detached"]);
+      expect(fake.requests).toHaveLength(0);
     });
   });
 
