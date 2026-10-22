@@ -13,6 +13,7 @@ import {
   streamOf,
   useUpstream,
 } from "../helpers/msw-openai.js";
+import { eventsOf, listen, parseSse } from "../helpers/sse-client.js";
 
 /** Obviously fake, and in no format the scrubber recognises: only its literal removal helps. */
 const SENTINEL = "sentinel-byok-7d1e2f90";
@@ -74,6 +75,46 @@ describe("the sentinel key appears nowhere", () => {
     await call({ method: "GET", url: `/sessions/${session.id}` });
     await call({ method: "GET", url: "/sessions" });
     return assistantMessage;
+  }
+
+  /**
+   * The same over a real socket as an event stream (Accept: text/event-stream): the raw stream
+   * text is scanned like every other response. Returns the stream's last event.
+   */
+  async function streamAndReadBack(
+    responder: Responder,
+  ): Promise<{ event: string; data: { assistantMessage: Message } }> {
+    logs = captureLogs();
+    app = makeHostedTestApp({ db: testDb.db, env: { LOG_LEVEL: "trace" }, logStream: logs.stream });
+    upstream.reply(responder);
+    const session = await createSession(app, { provider: "nvidia" });
+    const base = await listen(app);
+
+    const response = await fetch(`${base}/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: {
+        "accept": "text/event-stream",
+        "content-type": "application/json",
+        "x-llm-api-key": SENTINEL,
+      },
+      body: JSON.stringify({ content: "Tell me something" }),
+    });
+    const body = await response.text();
+    responses.push(
+      `${response.status} ${JSON.stringify(Object.fromEntries(response.headers))} ${body}`,
+    );
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+    const events = eventsOf(parseSse(body));
+    expect(events[0]?.event).toBe("message.created");
+    const last = events.at(-1) as { event: string; data: { assistantMessage: Message } };
+    const { assistantMessage } = last.data;
+    await call({ method: "GET", url: `/sessions/${session.id}/messages/${assistantMessage.id}` });
+    await call({
+      method: "GET",
+      url: `/sessions/${session.id}/messages/${assistantMessage.id}/events`,
+    });
+    await call({ method: "GET", url: `/sessions/${session.id}/messages` });
+    return last;
   }
 
   async function expectNoSentinel(): Promise<void> {
@@ -146,5 +187,45 @@ describe("the sentinel key appears nowhere", () => {
 
     expect(answer).toMatchObject({ status: "failed", errorCode: "llm_upstream_error" });
     await expectNoSentinel();
+  });
+
+  describe("sse.sentinel", () => {
+    it("over an event stream, on success", async () => {
+      const last = await streamAndReadBack(
+        streamOf([{ content: "Some" }, { content: "thing." }, { finishReason: "stop" }]),
+      );
+
+      expect(last.event).toBe("done");
+      expect(last.data.assistantMessage).toMatchObject({ status: "completed" });
+      await expectNoSentinel();
+    });
+
+    it("over an event stream, on an upstream 401 whose body echoes the key", async () => {
+      const last = await streamAndReadBack(
+        errorOf(401, {
+          error: { message: `Incorrect API key provided: ${SENTINEL}`, code: "invalid_api_key" },
+        }),
+      );
+
+      expect(last.event).toBe("error");
+      expect(last.data).toMatchObject({
+        code: "llm_auth_failed",
+        detail: expect.stringContaining("[REDACTED]"),
+      });
+      await expectNoSentinel();
+    });
+
+    it("over an event stream, on an error event inside the upstream stream that echoes the key", async () => {
+      const last = await streamAndReadBack(
+        rawStream(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "par" } }] })}\n\n` +
+            `data: ${JSON.stringify({ error: { message: `stream broke for ${SENTINEL}` } })}\n\n`,
+        ),
+      );
+
+      expect(last.event).toBe("error");
+      expect(last.data).toMatchObject({ code: "llm_upstream_error" });
+      await expectNoSentinel();
+    });
   });
 });
