@@ -1,8 +1,6 @@
-import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
-import { scrub } from "../../src/credentials/scrub.js";
 import { loadCatalog } from "../../src/llm/catalog.js";
 import { OpenAiCompatibleProvider } from "../../src/llm/openai-compatible.js";
 import type { LlmEvent, LlmRequest } from "../../src/llm/port.js";
@@ -42,6 +40,7 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
   async function streamOnce(model: string): Promise<LlmEvent[]> {
     const request: LlmRequest = {
       model,
+      // Room for a reasoning model's reasoning before the short answer (#36).
       maxOutputTokens: 1024,
       messages: [
         { role: "system", content: "Answer in one short sentence." },
@@ -74,7 +73,9 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
   it.concurrent.each(models.map((model) => [model.id]))(
     "%s streams an answer without inline reasoning, with one finish",
     async (model) => {
+      const started = performance.now();
       const events = await streamOnce(model);
+      const totalMs = Math.round(performance.now() - started);
 
       const text = events.map((event) => (event.type === "delta" ? event.text : "")).join("");
       const finishes = events.filter((event) => event.type === "finish");
@@ -84,6 +85,7 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
         model,
         finishReason: finish?.reason ?? null,
         usage: finish?.usage ?? null,
+        totalMs,
         answer: text.slice(0, 80),
       });
 
@@ -94,159 +96,4 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
       expect(finish?.usage).not.toBeNull();
     },
   );
-});
-
-// TEMPORARY verify-first probe for #36 (V1-V4); removed before the PR is ready.
-describe.skipIf(!live)("nvidia probe (#36 verify first)", { timeout: 15 * 60_000 }, () => {
-  const config = loadConfig({ DATABASE_URL: "postgres://unused@127.0.0.1:9/unused" });
-  const MODEL = "nvidia/nemotron-3-ultra-550b-a55b";
-  const PROBE_TIMEOUT_MS = 60_000;
-  type Msg = { role: "system" | "user"; content: string };
-  const prompts: Record<string, Msg[]> = {
-    capital: [
-      { role: "system", content: "Answer in one short sentence." },
-      { role: "user", content: "What is the capital of France?" },
-    ],
-    index150: [
-      { role: "user", content: "Explain in at most 150 characters what a database index is." },
-    ],
-    water3: [{ role: "user", content: "Describe the water cycle in three sentences." }],
-    batball: [
-      {
-        role: "user",
-        content:
-          "A bat and a ball cost 1.10 dollars in total. The bat costs 1.00 dollar more than the ball. How much does the ball cost? Answer briefly.",
-      },
-    ],
-  };
-  const variants: Array<[string, Record<string, unknown>, string[]]> = [
-    ["default", {}, ["capital", "index150", "water3", "batball"]],
-    [
-      "thinkingOn",
-      { chat_template_kwargs: { enable_thinking: true } },
-      ["capital", "index150", "water3", "batball"],
-    ],
-    ["thinkingOff", { chat_template_kwargs: { enable_thinking: false } }, ["capital", "water3"]],
-  ];
-
-  function probeReport(result: Record<string, unknown>): void {
-    // eslint-disable-next-line no-console -- the probe's report
-    console.log(`LIVE_PROBE ${JSON.stringify(result)}`);
-  }
-
-  it("V1: the served context window, from an oversized max_tokens", async () => {
-    const provider = new OpenAiCompatibleProvider({
-      id: "nvidia",
-      baseUrl: config.nvidiaBaseUrl,
-      maxRetries: 0,
-    });
-    try {
-      for await (const event of provider.stream(
-        { model: MODEL, maxOutputTokens: 4_000_000, messages: [{ role: "user", content: "Hi" }] },
-        { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), apiKey: key ?? null },
-      )) {
-        if (event.type === "finish") {
-          probeReport({ probe: "V1", accepted: true, usage: event.usage, reason: event.reason });
-        }
-      }
-    } catch (error) {
-      probeReport({
-        probe: "V1",
-        error: error instanceof Error ? `${error.name}: ${error.message}` : "?",
-      });
-    }
-  });
-
-  it("V2/V3/V4: reasoning field, size, usage and timings per variant", async () => {
-    const client = new OpenAI({
-      apiKey: key ?? "",
-      baseURL: config.nvidiaBaseUrl,
-      maxRetries: 0,
-      timeout: PROBE_TIMEOUT_MS,
-      logLevel: "off",
-    });
-    for (const [variant, extra, names] of variants) {
-      for (const name of names) {
-        const started = performance.now();
-        const at = (): number => Math.round(performance.now() - started);
-        let firstChunkMs: number | null = null;
-        let firstReasoningMs: number | null = null;
-        let firstContentMs: number | null = null;
-        const deltaKeys = new Set<string>();
-        const reasoningChars: Record<string, number> = {};
-        let content = "";
-        let finishReason: string | null = null;
-        let usage: unknown = null;
-        let chunks = 0;
-        try {
-          const stream = await client.chat.completions.create(
-            {
-              model: MODEL,
-              messages: prompts[name] ?? [],
-              max_tokens: 4096,
-              stream: true,
-              stream_options: { include_usage: true },
-              ...extra,
-            } as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-            { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) },
-          );
-          for await (const chunk of stream) {
-            chunks += 1;
-            firstChunkMs ??= at();
-            const choice = chunk.choices?.[0];
-            const delta = (choice?.delta ?? {}) as Record<string, unknown>;
-            for (const [field, value] of Object.entries(delta)) {
-              deltaKeys.add(`${field}:${value === null ? "null" : typeof value}`);
-              if (
-                field !== "content" &&
-                field !== "role" &&
-                typeof value === "string" &&
-                value.length > 0
-              ) {
-                reasoningChars[field] = (reasoningChars[field] ?? 0) + value.length;
-                firstReasoningMs ??= at();
-              }
-            }
-            if (typeof delta.content === "string" && delta.content.length > 0) {
-              firstContentMs ??= at();
-              content += delta.content;
-            }
-            if (typeof choice?.finish_reason === "string") {
-              finishReason = choice.finish_reason;
-            }
-            if (chunk.usage !== undefined && chunk.usage !== null) {
-              usage = chunk.usage;
-            }
-          }
-          probeReport({
-            probe: "V2",
-            variant,
-            prompt: name,
-            chunks,
-            deltaKeys: [...deltaKeys].sort(),
-            reasoningChars,
-            contentChars: content.length,
-            finishReason,
-            usage,
-            firstChunkMs,
-            firstReasoningMs,
-            firstContentMs,
-            totalMs: at(),
-            answer: content.slice(0, 120),
-          });
-        } catch (error) {
-          probeReport({
-            probe: "V2",
-            variant,
-            prompt: name,
-            totalMs: at(),
-            error: scrub(
-              error instanceof Error ? `${error.name}: ${error.message}` : "?",
-              key ?? null,
-            ),
-          });
-        }
-      }
-    }
-  });
 });
