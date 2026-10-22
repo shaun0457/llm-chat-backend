@@ -121,7 +121,10 @@ export interface JobRegistry {
   start(spec: JobSpec): Job;
   /** The job running for this assistant message in this process, if any. */
   get(assistantId: string): Job | undefined;
-  /** Aborts every job and waits (at most `waitMs`) for each to finish. */
+  /**
+   * Refuses new reservations, aborts every job (also those started meanwhile) and waits, at
+   * most `waitMs` in all, for each to finish.
+   */
   shutdown(waitMs: number): Promise<void>;
 }
 
@@ -146,6 +149,20 @@ export function createJobRegistry(deps: {
   const jobs = new Map<string, RunningJob>();
   /** Set by shutdown(): jobs started afterwards are aborted immediately. */
   let closing = false;
+  /**
+   * Reservations taken and not yet released: admissions in progress and running jobs. Shutdown
+   * waits for both, so a send that was committing when it began is cancelled and waited for.
+   */
+  let outstanding = 0;
+  /** Wakes whoever waits for the next release or job end (shutdown). */
+  let wake: Array<() => void> = [];
+  const changed = (): void => {
+    const waiting = wake;
+    wake = [];
+    for (const resolve of waiting) {
+      resolve();
+    }
+  };
 
   /** Resolves with the terminal message it wrote, or undefined when it wrote none. */
   async function run(spec: JobSpec, job: RunningJob): Promise<Message | undefined> {
@@ -339,8 +356,18 @@ export function createJobRegistry(deps: {
       if (closing) {
         return undefined;
       }
-      // Nothing is counted yet, so releasing has nothing to give back.
-      return { release: () => {} };
+      // Only outstanding reservations are counted so far; the capacity limits add theirs.
+      outstanding += 1;
+      let released = false;
+      return {
+        release: () => {
+          if (!released) {
+            released = true;
+            outstanding -= 1;
+            changed();
+          }
+        },
+      };
     },
 
     start(spec) {
@@ -404,6 +431,7 @@ export function createJobRegistry(deps: {
           });
           cleanup("close", () => bus.close(terminal));
           settle(end);
+          changed();
         });
       return job;
     },
@@ -412,16 +440,23 @@ export function createJobRegistry(deps: {
 
     async shutdown(waitMs) {
       closing = true;
-      const running = [...jobs.values()];
-      for (const job of running) {
-        job.controller.abort(new JobStopped("shutdown"));
+      const started = clock.monotonicNow();
+      for (;;) {
+        // Also jobs started meanwhile: an admission that was committing when shutdown began.
+        for (const job of jobs.values()) {
+          job.controller.abort(new JobStopped("shutdown"));
+        }
+        const leftMs = remainingMs(waitMs, started, clock.monotonicNow());
+        if ((jobs.size === 0 && outstanding === 0) || leftMs === 0) {
+          return;
+        }
+        const waiting = new AbortController();
+        await Promise.race([
+          new Promise<void>((resolve) => wake.push(resolve)),
+          sleep(leftMs, undefined, { signal: waiting.signal, ref: false }).catch(() => {}),
+        ]);
+        waiting.abort();
       }
-      const waiting = new AbortController();
-      await Promise.race([
-        Promise.all(running.map((job) => job.finished)),
-        sleep(waitMs, undefined, { signal: waiting.signal, ref: false }).catch(() => {}),
-      ]);
-      waiting.abort();
     },
   };
 }

@@ -131,4 +131,44 @@ describe("shutdown", () => {
     });
     expect(fake.requests).toEqual([]);
   });
+
+  it("waits for a send that was being admitted when shutdown began", async () => {
+    const inner = testJobs(testDb.db);
+    let closed: Promise<void> | undefined;
+    let jobEnded = false;
+    const jobs: JobRegistry = {
+      ...inner,
+      reserve() {
+        const reservation = inner.reserve();
+        // Shutdown begins while this admission still has to insert and commit its turn.
+        closed = inner.shutdown(5_000);
+        return reservation;
+      },
+      start(spec) {
+        const job = inner.start(spec);
+        void job.finished.then(() => {
+          jobEnded = true;
+        });
+        return job;
+      },
+    };
+    const current = makeTestApp({
+      db: testDb.db,
+      jobs,
+      ...testProviders({ llm: new FakeLlmProvider() }),
+    });
+    app = current;
+    const session = await createSession(current);
+    const pending = send(current, session.id, { content: "Hi" }, { prefer: "respond-async" });
+    // A boolean: returning the promise itself from the async reader would await it.
+    await eventually(
+      async () => closed !== undefined,
+      (started) => started,
+    );
+
+    await closed;
+
+    expect(jobEnded).toBe(true);
+    await pending;
+  });
 });
