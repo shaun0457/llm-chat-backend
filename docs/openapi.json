@@ -66,6 +66,49 @@
               }
             },
             "description": "Default Response"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "not_ready: the database is unreachable or its migrations do not match"
           }
         },
         "summary": "Readiness probe",
@@ -145,6 +188,100 @@
               }
             },
             "description": "Default Response"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "List enabled providers and their catalogued models",
@@ -258,6 +395,143 @@
               }
             },
             "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: a malformed limit or cursor"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "List sessions, most recent activity first",
@@ -366,6 +640,272 @@
               }
             },
             "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: a malformed or invalid body"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "request_error: the body is larger than 128 KiB"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "request_error: a body content type the API does not accept"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "provider_unavailable or model_not_supported: the provider/model pair does not resolve"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "Create a session",
@@ -392,6 +932,186 @@
         "responses": {
           "204": {
             "description": "No content"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: the id is not a UUID"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "session_not_found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "Delete a session",
@@ -471,6 +1191,186 @@
               }
             },
             "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: the id is not a UUID"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "session_not_found"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "Read a session",
@@ -600,6 +1500,315 @@
               }
             },
             "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: a malformed id or body, or an empty change"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "session_not_found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "request_error: the body is larger than 128 KiB"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "request_error: a body content type the API does not accept"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "provider_unavailable or model_not_supported: the provider/model pair does not resolve"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "Change a session's title, provider, model or system prompt",
@@ -860,6 +2069,186 @@
               }
             },
             "description": "Default Response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: a malformed id, limit or before"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "session_not_found, or message_not_found when before is not in this session"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "List a session's messages, newest page first",
@@ -1770,6 +3159,358 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: a malformed id, body or X-LLM-Api-Key (never echoed)"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "session_not_found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "session_busy: an earlier answer in this session is still being generated"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "request_error: the body is larger than 128 KiB"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "request_error: a body content type the API does not accept"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "message_id_conflict, provider_unavailable, model_not_supported, input_too_long or llm_credential_missing; nothing is stored"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
+          },
           "502": {
             "content": {
               "application/problem+json": {
@@ -2191,6 +3932,57 @@
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "server_busy (active-answer limit or shutting down) or provider_busy (the turn's provider is at its limit); nothing is stored",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "summary": "Send a message; stream the answer or wait a bounded time for it",
@@ -2422,6 +4214,186 @@
                 }
               }
             }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: an id is not a UUID"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "message_not_found: no such message in this session (or no such session)"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "Read one message",
@@ -2466,6 +4438,186 @@
               }
             },
             "description": "The answer as an event stream"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "validation_error: an id is not a UUID"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "session_not_found, or message_not_found unless it is an assistant message of this session"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "rate_limited: this client address has used up its request budget",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "additionalProperties": {},
+                  "description": "RFC 9457 problem details",
+                  "properties": {
+                    "code": {
+                      "description": "Stable, machine-readable error code",
+                      "type": "string"
+                    },
+                    "detail": {
+                      "description": "A safe, human-readable explanation",
+                      "type": "string"
+                    },
+                    "status": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "title": {
+                      "description": "The HTTP status text",
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "about:blank"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "code"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "internal_error: an unexpected failure, logged on the server"
           }
         },
         "summary": "Follow an answer as an event stream",

@@ -71,7 +71,20 @@ describe("API documentation", () => {
     expect(Object.keys(paths["/sessions/{id}/messages"]).sort()).toEqual(["get", "post"]);
     expect(Object.keys(paths["/sessions/{id}/messages/{mid}"])).toEqual(["get"]);
     const send = paths["/sessions/{id}/messages"].post;
-    expect(Object.keys(send.responses).sort()).toEqual(["200", "202", "502"]);
+    expect(Object.keys(send.responses).sort()).toEqual([
+      "200",
+      "202",
+      "400",
+      "404",
+      "409",
+      "413",
+      "415",
+      "422",
+      "429",
+      "500",
+      "502",
+      "503",
+    ]);
     const failed = send.responses["502"].content["application/problem+json"].schema;
     expect(failed.required).toEqual(
       expect.arrayContaining(["code", "detail", "userMessage", "assistantMessage"]),
@@ -83,6 +96,58 @@ describe("API documentation", () => {
       expect.arrayContaining([expect.objectContaining({ type: "null" })]),
     );
     expect(message.properties).not.toHaveProperty("systemPrompt");
+  });
+
+  it("documents every error status of each route as problem details", async () => {
+    app = makeTestApp();
+
+    const { paths } = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+
+    const errorStatuses: Record<string, string[]> = {
+      "get /health": [],
+      "get /health/ready": ["503"],
+      "get /providers": ["429", "500"],
+      "get /sessions": ["400", "429", "500"],
+      "post /sessions": ["400", "413", "415", "422", "429", "500"],
+      "get /sessions/{id}": ["400", "404", "429", "500"],
+      "patch /sessions/{id}": ["400", "404", "413", "415", "422", "429", "500"],
+      "delete /sessions/{id}": ["400", "404", "429", "500"],
+      "get /sessions/{id}/messages": ["400", "404", "429", "500"],
+      "post /sessions/{id}/messages": [
+        "400",
+        "404",
+        "409",
+        "413",
+        "415",
+        "422",
+        "429",
+        "500",
+        "502",
+        "503",
+      ],
+      "get /sessions/{id}/messages/{mid}": ["400", "404", "429", "500"],
+      "get /sessions/{id}/messages/{mid}/events": ["400", "404", "429", "500"],
+    };
+    for (const [operation, statuses] of Object.entries(errorStatuses)) {
+      const [method, path] = operation.split(" ") as [string, string];
+      const responses: Record<string, { content?: Record<string, { schema: unknown }> }> =
+        paths[path][method].responses;
+      const documented = Object.keys(responses).filter((status) => Number(status) >= 400);
+      expect({ operation, statuses: documented.sort() }).toEqual({ operation, statuses });
+      for (const status of statuses) {
+        const schema = responses[status]?.content?.["application/problem+json"]?.schema;
+        expect({ operation, status, schema }).toMatchObject({
+          operation,
+          status,
+          schema: { required: expect.arrayContaining(["type", "title", "status", "code"]) },
+        });
+      }
+    }
+    const retryAfter = (path: string, method: string, status: string): unknown =>
+      paths[path][method].responses[status].headers?.["Retry-After"];
+    expect(retryAfter("/sessions", "get", "429")).toBeDefined();
+    expect(retryAfter("/sessions/{id}/messages", "post", "429")).toBeDefined();
+    expect(retryAfter("/sessions/{id}/messages", "post", "503")).toBeDefined();
   });
 
   it("names every assistant error code in the errorCode description", async () => {

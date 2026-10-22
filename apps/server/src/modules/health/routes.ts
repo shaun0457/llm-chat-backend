@@ -2,7 +2,7 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 
 import type { ReadinessCheck } from "../../db/readiness.js";
-import { ProblemError } from "../../http/problem-details.js";
+import { ProblemError, problemResponses } from "../../http/problem-details.js";
 
 /** The probes' paths; the rate limits leave exactly these out. */
 export const HEALTH_PATHS = { live: "/health", ready: "/health/ready" } as const;
@@ -36,7 +36,12 @@ export const healthRoutes: FastifyPluginAsyncZod<{ checkReadiness: ReadinessChec
           "200 when the database answers and its applied migrations match this build's. " +
           "Otherwise 503 not_ready, detail database_unreachable or migrations_pending.",
         tags: ["health"],
-        response: { 200: readyResponse },
+        response: {
+          200: readyResponse,
+          ...problemResponses({
+            503: "not_ready: the database is unreachable or its migrations do not match",
+          }),
+        },
       },
     },
     async (request) => {
