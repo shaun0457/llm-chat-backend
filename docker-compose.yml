@@ -61,6 +61,16 @@ services:
       MAX_ACTIVE_PER_PROVIDER: ${MAX_ACTIVE_PER_PROVIDER:-4}
       SSE_PING_INTERVAL_MS: ${SSE_PING_INTERVAL_MS:-15000}
       SSE_BUFFER_LIMIT_BYTES: ${SSE_BUFFER_LIMIT_BYTES:-262144}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-10000}
+      REQUEST_TIMEOUT_MS: ${REQUEST_TIMEOUT_MS:-30000}
+      RATE_LIMIT_GENERAL_PER_MIN: ${RATE_LIMIT_GENERAL_PER_MIN:-120}
+      RATE_LIMIT_SEND_PER_MIN: ${RATE_LIMIT_SEND_PER_MIN:-20}
+      # Unset by default: the local stack has no proxy in front, no browser origins and no
+      # retention. See README "Security considerations" and "Data retention".
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      RETENTION_DAYS: ${RETENTION_DAYS:-}
+      RETENTION_INTERVAL_MS: ${RETENTION_INTERVAL_MS:-3600000}
     # Longer than the API's forced-exit timeout (statement timeout + terminal-write budget + 5 s,
     # 18 s by default), so that generations stopped by a shutdown can store their cancelled state.
     # Raising TERMINAL_STATEMENT_TIMEOUT_MS or TERMINAL_WRITE_BUDGET_MS means raising this too.
