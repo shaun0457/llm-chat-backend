@@ -835,8 +835,9 @@ messages. Unset (the default, also in compose) nothing is ever deleted.
 
 ## How I would deploy it
 
-The service is not deployed. A deployment would run the image CI builds, configured as
-follows:
+The service is not deployed. A deployment would run the image built from the `Dockerfile`
+(CI checks that build on every pull request; publishing it to a registry is a deploy step),
+configured as follows:
 
 - **One API instance** behind the platform's proxy, never scaled out: capacity limits, rate
   limits and live streams are per process ([ADR 0003](docs/adr/0003-single-process-db-truth.md)).
