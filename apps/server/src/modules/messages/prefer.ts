@@ -68,7 +68,8 @@ function wordValue(raw: string): string | undefined {
  * Parses every `Prefer` header line of a request (RFC 7240 §2): the lines are joined by commas;
  * each preference is `token [= value]` followed by `;` parameters, which are ignored. Names are
  * case-insensitive, only the first occurrence of a preference counts (even when its value is
- * invalid), and unknown or malformed preferences are ignored.
+ * invalid), and unknown or malformed preferences are ignored: `respond-async=` with an empty
+ * or broken value is not honoured, while a well-formed value (which it does not use) is.
  */
 export function parsePrefer(headerValues: readonly string[]): Preferences {
   const seen = new Set<string>();
@@ -84,6 +85,10 @@ export function parsePrefer(headerValues: readonly string[]): Preferences {
     }
     seen.add(name);
     const value = equals === -1 ? undefined : wordValue(preference.slice(equals + 1).trim());
+    if (equals !== -1 && value === undefined) {
+      // `name=` followed by neither a token nor a complete quoted string: malformed, ignored.
+      continue;
+    }
 
     if (name === "respond-async") {
       respondAsync = true;
