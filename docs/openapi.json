@@ -681,7 +681,7 @@
                             "type": "string"
                           },
                           "errorCode": {
-                            "description": "Failed assistant messages, e.g. llm_upstream_error",
+                            "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                             "type": [
                               "string",
                               "null"
@@ -868,7 +868,7 @@
         ]
       },
       "post": {
-        "description": "Stores the user message and a generating assistant message, then generates the answer with the session's provider and model. The response waits for the answer at most the effective wait (Prefer: wait=N, otherwise the server's default wait, always capped by its maximum; none with Prefer: respond-async): 200 with both messages when it completed, 502 problem details with both messages when it failed, 202 with both messages when it is still being generated. Generation continues unless the server shuts down; the wait only decides the response. 404 session_not_found; 409 session_busy while an earlier answer in the session is still being generated; 422 provider_unavailable or model_not_supported when the session's settings no longer resolve, llm_credential_missing when the provider needs a key and neither X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed X-LLM-Api-Key (its value is never echoed); 503 server_busy (Retry-After) while the server is shutting down.",
+        "description": "Stores the user message and a generating assistant message, then generates the answer with the session's provider and model. The response waits for the answer at most the effective wait (Prefer: wait=N, otherwise the server's default wait, always capped by its maximum; none with Prefer: respond-async): 200 with both messages when it completed, 502 problem details with both messages when it failed, 202 with both messages when it is still being generated. Generation continues unless the server shuts down (the answer then fails as cancelled); the wait only decides the response. 404 session_not_found; 409 session_busy while an earlier answer in the session is still being generated; 422 provider_unavailable or model_not_supported when the session's settings no longer resolve, llm_credential_missing when the provider needs a key and neither X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed X-LLM-Api-Key (its value is never echoed); 503 server_busy (Retry-After) while the server is shutting down.",
         "parameters": [
           {
             "in": "path",
@@ -955,7 +955,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages, e.g. llm_upstream_error",
+                          "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -1135,7 +1135,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages, e.g. llm_upstream_error",
+                          "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -1340,7 +1340,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages, e.g. llm_upstream_error",
+                          "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -1520,7 +1520,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages, e.g. llm_upstream_error",
+                          "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -1683,7 +1683,7 @@
                 }
               }
             },
-            "description": "Admitted; the answer is still being generated. Poll Location until its status is completed or failed. Also returned when the server shuts down during the wait; that generation is stopped and the message stays generating until the server marks it failed.",
+            "description": "Admitted; the answer is still being generated. Poll Location until its status is completed or failed. A message whose generation was lost (a crash, or a final state that could not be stored) is failed as interrupted within a few minutes.",
             "headers": {
               "Cache-Control": {
                 "description": "The state may change until the answer is completed or failed; never cache it",
@@ -1747,7 +1747,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages, e.g. llm_upstream_error",
+                          "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -1949,7 +1949,7 @@
                           "type": "string"
                         },
                         "errorCode": {
-                          "description": "Failed assistant messages, e.g. llm_upstream_error",
+                          "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                           "type": [
                             "string",
                             "null"
@@ -2189,7 +2189,7 @@
                       "type": "string"
                     },
                     "errorCode": {
-                      "description": "Failed assistant messages, e.g. llm_upstream_error",
+                      "description": "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline passed), cancelled (the server shut down), interrupted (the generation was lost, e.g. in a crash, and was failed later)",
                       "type": [
                         "string",
                         "null"
