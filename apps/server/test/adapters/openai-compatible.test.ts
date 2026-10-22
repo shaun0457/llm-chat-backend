@@ -111,6 +111,27 @@ describe("OpenAiCompatibleProvider", () => {
       expect(events.at(-1)).toEqual({ type: "finish", reason: "stop", usage: null });
     });
 
+    it("tolerates chunks without a delta or without choices", async () => {
+      upstream.reply(
+        rawStream(
+          [
+            { choices: [{ index: 0, delta: { content: "Hi" } }] },
+            { choices: [{ index: 0, finish_reason: "stop" }] },
+            { usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } },
+          ]
+            .map((data) => `data: ${JSON.stringify(data)}\n\n`)
+            .join("") + "data: [DONE]\n\n",
+        ),
+      );
+
+      const events = await collect(stream());
+
+      expect(events).toEqual([
+        { type: "delta", text: "Hi" },
+        { type: "finish", reason: "stop", usage: { promptTokens: 3, completionTokens: 1 } },
+      ]);
+    });
+
     it("maps any other finish reason to other", async () => {
       upstream.reply(streamOf([{ content: "Hi" }, { finishReason: "content_filter" }]));
 

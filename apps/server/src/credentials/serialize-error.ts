@@ -41,7 +41,11 @@ function serialize(error: unknown, seen: Set<unknown>, depth: number): Serialize
   const stack = rawStack.startsWith(header)
     ? `${error.name}: ${message}${safeText(rawStack.slice(header.length))}`
     : safeText(rawStack);
-  const result: SerializedError = { type: error.constructor.name, message, stack };
+  const type =
+    typeof error.constructor === "function" && error.constructor.name.length > 0
+      ? error.constructor.name
+      : "Error";
+  const result: SerializedError = { type, message, stack };
 
   const code = record.code;
   if (typeof code === "string" || typeof code === "number") {

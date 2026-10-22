@@ -85,6 +85,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     // holds the (bounded) body of this call's last failed response only.
     let errorBody: string | undefined;
     const recordingFetch: typeof fetch = async (input, init) => {
+      errorBody = undefined;
       const response = await fetch(input, init);
       if (response.ok) {
         return response;
@@ -127,9 +128,10 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       let reason: LlmFinishReason | undefined;
       let usage: LlmUsage | null = null;
       for await (const chunk of chunks) {
-        const choice = chunk.choices[0];
+        // Compatible servers do not always send every field the SDK's types promise.
+        const choice = chunk.choices?.[0];
         // Only answer content becomes text; reasoning side fields are ignored.
-        const text = choice?.delta.content;
+        const text = choice?.delta?.content;
         if (typeof text === "string" && text.length > 0) {
           yield { type: "delta", text };
         }
