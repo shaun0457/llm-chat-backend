@@ -9,7 +9,7 @@ import { REDACTED } from "./credentials/scrub.js";
 import { serializeError } from "./credentials/serialize-error.js";
 import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
-import { registerApiDocs, registerRateLimits } from "./http/plugins.js";
+import { registerApiDocs, registerRateLimits, registerSecurityHeaders } from "./http/plugins.js";
 import { registerProblemDetails, sendProblem, toProblem } from "./http/problem-details.js";
 import { capacityFor } from "./llm/capacity.js";
 import type { ModelCatalog } from "./llm/catalog.js";
@@ -126,6 +126,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerProblemDetails(app);
+  registerSecurityHeaders(app, config.corsOrigins);
   registerRateLimits(app, config.rateLimitGeneralPerMin);
   registerApiDocs(app);
 

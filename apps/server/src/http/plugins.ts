@@ -1,3 +1,5 @@
+import fastifyCors from "@fastify/cors";
+import fastifyHelmet from "@fastify/helmet";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifySwagger from "@fastify/swagger";
 import fastifySwaggerUi from "@fastify/swagger-ui";
@@ -41,6 +43,40 @@ export function rateLimitPolicy(app: FastifyInstance, perMinute: number): RateLi
       );
     }
   };
+}
+
+/** Response headers a browser script may read (the CORS safelisted ones need no listing). */
+const EXPOSED_HEADERS = ["Location", "Retry-After", "Preference-Applied", "x-request-id"];
+/** Request headers a browser script may send besides the safelisted ones. */
+const ALLOWED_HEADERS = ["Content-Type", "Accept", "Prefer", "X-LLM-Api-Key", "x-request-id"];
+const PREFLIGHT_MAX_AGE_SECONDS = 600;
+
+/**
+ * Security headers on every response, and CORS for the listed origins (`*` for any; none:
+ * no CORS headers at all). Both set headers in onRequest hooks, before any handler, so that
+ * problem details, rate-limited answers and hijacked event streams carry them too (sse.ts
+ * copies headers set before the hijack). Register before the rate limits.
+ *
+ * Helmet's default policy (V1 in #12): the API documentation at /docs loads only its own
+ * scripts and styles from /docs/static, which `'self'` allows. `upgrade-insecure-requests` is
+ * left out, since the API is also served over plain HTTP (locally and in compose), where it
+ * would send the page's assets to an HTTPS port that does not exist.
+ */
+export function registerSecurityHeaders(app: FastifyInstance, corsOrigins: readonly string[]): void {
+  if (corsOrigins.length > 0) {
+    void app.register(fastifyCors, {
+      origin: corsOrigins[0] === "*" ? "*" : [...corsOrigins],
+      methods: ["GET", "HEAD", "POST", "PATCH", "DELETE"],
+      allowedHeaders: ALLOWED_HEADERS,
+      exposedHeaders: EXPOSED_HEADERS,
+      // No cookies or other credentials are used: never allow them.
+      credentials: false,
+      maxAge: PREFLIGHT_MAX_AGE_SECONDS,
+    });
+  }
+  void app.register(fastifyHelmet, {
+    contentSecurityPolicy: { directives: { upgradeInsecureRequests: null } },
+  });
 }
 
 /** Health checks are never limited: the platform polls them. */
