@@ -437,7 +437,8 @@ curl -i -X POST localhost:3000/sessions/<id>/messages -H 'content-type: applicat
 - **A replay checks nothing else.** It is detected right after the session lock and stale
   reclaim, so it answers without `X-LLM-Api-Key`, after the session's provider or model
   changed, while the session is busy with that very turn, and when capacity is full. It writes
-  nothing, not even the session's activity time.
+  nothing of its own, not even the session's activity time; only stale reclaim, which every
+  request to the session runs first, may fail a dead answer as `interrupted`.
 - **Any other use of the id is 422 `message_id_conflict`**: the id belongs to a message in
   another session or to an assistant message, the content differs, or the request names a
   different provider or model. The `detail` says which, without showing the stored message.

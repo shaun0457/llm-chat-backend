@@ -100,20 +100,39 @@ describe("idempotent send: client message ids", () => {
       expect(assistantMessage).toMatchObject({ replyToId: id, status: "completed" });
     });
 
-    it.each([["not a uuid"], [""], [42], ["6f1c2b9e3d4a4c5b9e8f0a1b2c3d4e5f"]])(
-      "rejects the id %j with 400 validation_error and writes nothing",
-      async (id) => {
-        start();
-        const session = await createSession(app);
+    it("treats an id in upper case as the same id and returns it in lower case", async () => {
+      start();
+      const session = await createSession(app);
+      const id = "6F1C2B9E-3D4A-4C5B-9E8F-0A1B2C3D4E60";
 
-        const response = await send(app, session.id, { id, content: "Hi" });
+      const original = await send(app, session.id, { id, content: "Hi" });
+      const replay = await send(app, session.id, { id: id.toLowerCase(), content: "Hi" });
 
-        expect(response.statusCode).toBe(400);
-        expect(response.json()).toMatchObject({ code: "validation_error" });
-        expect(await allMessages(app, session.id)).toEqual([]);
-        expect(fake.requests).toHaveLength(0);
-      },
-    );
+      expect(original.statusCode).toBe(200);
+      expect((original.json() as TurnBody).userMessage.id).toBe(id.toLowerCase());
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual(original.json());
+      expect(fake.requests).toHaveLength(1);
+    });
+
+    it.each([
+      ["not a uuid"],
+      [""],
+      [42],
+      ["6f1c2b9e3d4a4c5b9e8f0a1b2c3d4e5f"],
+      ["00000000-0000-0000-0000-000000000000"],
+      ["ffffffff-ffff-ffff-ffff-ffffffffffff"],
+    ])("rejects the id %j with 400 validation_error and writes nothing", async (id) => {
+      start();
+      const session = await createSession(app);
+
+      const response = await send(app, session.id, { id, content: "Hi" });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "validation_error" });
+      expect(await allMessages(app, session.id)).toEqual([]);
+      expect(fake.requests).toHaveLength(0);
+    });
   });
 
   describe("replay.completed", () => {

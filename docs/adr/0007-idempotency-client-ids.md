@@ -71,6 +71,14 @@ server generates a UUIDv7, and identical sends are not deduplicated.
 - Ids are global: a client cannot reuse an id across sessions, and an id taken by another
   session reveals that it is taken. Sessions are readable by anyone anyway (there is no
   authentication; see the README's "What I would do next"), so this discloses nothing new.
+  Once sessions have owners, the conflict details that tell "another session" and "an
+  assistant message" apart should become one generic detail.
+- Provider and model are compared field by field with the stored turn, not resolved again:
+  a request naming only the provider the turn used replays it even if that provider's default
+  model differs from the turn's model. A replay never re-reads session defaults.
+- The id is a UUID, so case does not matter (PostgreSQL compares `uuid` values); responses
+  show it in lower case. The nil and max UUIDs are rejected (400), so a placeholder value
+  cannot be taken by its first user.
 - Content is compared exactly: a client that re-normalises text (a trailing newline, Unicode
   normalisation) gets 422 instead of a replay.
 - A replay of a turn that a crash left `generating` past the stale threshold is reclaimed first

@@ -35,17 +35,23 @@ const model = z
       "provider, or of the session's provider when none is given",
   );
 
+const NIL_OR_MAX_UUID = /^(0{8}-0{4}-0{4}-0{4}-0{12}|f{8}-f{4}-f{4}-f{4}-f{12})$/i;
+
 /** Strict: unknown fields are a 400, so later fields cannot be sent to a server ignoring them. */
 export const sendMessageBody = z.strictObject({
   id: z
     .uuid()
+    // Ids are global: a placeholder like the nil UUID would be taken by its first user.
+    .refine((value) => !NIL_OR_MAX_UUID.test(value), "must not be the nil or max UUID")
     .optional()
     .describe(
-      "Your own id for the user message (any UUID version), which makes the send safe to " +
-        "repeat: the same id with identical content (and, when given, the same provider and " +
-        "model) in the same session returns the stored turn instead of admitting a new one. " +
-        "Ids are global: one used by another message gives 422 message_id_conflict. Without " +
-        "it the server generates a UUIDv7 and identical sends are not deduplicated",
+      "Your own id for the user message (any UUID version, not the nil or max UUID; " +
+        "generate it at random), which makes the send safe to repeat: the same id with " +
+        "identical content (and, when given, the same provider and model) in the same " +
+        "session returns the stored turn instead of admitting a new one. Ids are global: one " +
+        "used by another message gives 422 message_id_conflict. Case does not matter; ids " +
+        "are returned in lower case. Without it the server generates a UUIDv7 and identical " +
+        "sends are not deduplicated",
     ),
   content,
   provider: provider.optional(),
