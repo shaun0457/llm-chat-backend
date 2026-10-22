@@ -1,4 +1,4 @@
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { z } from "zod";
 
 import { API_KEY_PATTERN } from "./credentials/api-key.js";
@@ -57,11 +57,25 @@ function isIpOrCidr(value: string): boolean {
   if (prefix === undefined) {
     return true;
   }
-  // No leading zeros, and never /0: a range holding every address trusts every client's
-  // X-Forwarded-For, which is what rejecting `true` is for.
+  // No leading zeros, and no huge range: trusting every address (a few short ranges suffice)
+  // trusts every client's X-Forwarded-For, which is what rejecting `true` is for.
   const bits = Number(prefix);
-  return /^[1-9]\d{0,2}$/.test(prefix) && bits <= (version === 4 ? 32 : 128);
+  if (!/^\d{1,3}$/.test(prefix) || prefix !== String(bits)) {
+    return false;
+  }
+  if (version === 4) {
+    return bits >= MIN_IPV4_PREFIX && bits <= 32;
+  }
+  const shortest = IPV4_MAPPED.check(address, "ipv6") ? 96 + MIN_IPV4_PREFIX : MIN_IPV6_PREFIX;
+  return bits >= shortest && bits <= 128;
 }
+
+/** The shortest trusted-proxy ranges: an IPv4 /8, an IPv6 /16. */
+const MIN_IPV4_PREFIX = 8;
+const MIN_IPV6_PREFIX = 16;
+/** IPv4-mapped IPv6 addresses (::ffff:a.b.c.d): their last 32 bits are an IPv4 address. */
+const IPV4_MAPPED = new BlockList();
+IPV4_MAPPED.addSubnet("::ffff:0:0", 96, "ipv6");
 
 /**
  * Trusted proxies as addresses and CIDR ranges only. Fastify would also take a hop count

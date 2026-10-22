@@ -90,7 +90,7 @@ describe("loadConfig", () => {
       RETENTION_INTERVAL_MS: "60000",
       RATE_LIMIT_GENERAL_PER_MIN: "300",
       RATE_LIMIT_SEND_PER_MIN: "30",
-      TRUST_PROXY: "10.0.0.1, 172.16.0.0/12,fd00::/8",
+      TRUST_PROXY: "10.0.0.1, 172.16.0.0/12,fd00::/16",
       CORS_ORIGINS: "https://a.example, http://localhost:5173",
     });
 
@@ -127,7 +127,7 @@ describe("loadConfig", () => {
       retentionIntervalMs: 60_000,
       rateLimitGeneralPerMin: 300,
       rateLimitSendPerMin: 30,
-      trustProxy: ["10.0.0.1", "172.16.0.0/12", "fd00::/8"],
+      trustProxy: ["10.0.0.1", "172.16.0.0/12", "fd00::/16"],
       corsOrigins: ["https://a.example", "http://localhost:5173"],
     });
   });
@@ -195,6 +195,9 @@ describe("loadConfig", () => {
       ["10.0.0.1", ["10.0.0.1"]],
       ["10.0.0.0/8, 192.168.1.10", ["10.0.0.0/8", "192.168.1.10"]],
       ["::1,2001:db8::/32", ["::1", "2001:db8::/32"]],
+      // The shortest prefixes allowed.
+      ["10.0.0.0/8,2001::/16", ["10.0.0.0/8", "2001::/16"]],
+      ["::ffff:10.0.0.0/104,::ffff:10.0.0.1", ["::ffff:10.0.0.0/104", "::ffff:10.0.0.1"]],
     ])("accepts the IP/CIDR list %s", (value, expected) => {
       expect(loadConfig({ DATABASE_URL, TRUST_PROXY: value }).trustProxy).toEqual(expected);
     });
@@ -218,6 +221,14 @@ describe("loadConfig", () => {
       "0.0.0.0/0",
       "::/0",
       "10.0.0.0/08",
+      // So is a handful of short ranges: IPv4 below /8, IPv6 below /16, and IPv4-mapped
+      // IPv6 below /104 (an IPv4 /8).
+      "0.0.0.0/1,128.0.0.0/1",
+      "10.0.0.0/7",
+      "::/1,8000::/1",
+      "2000::/15",
+      "::ffff:0:0/96",
+      "::ffff:10.0.0.0/103",
     ])("rejects %s: hop counts, true, wildcards, names and catch-all ranges", (value) => {
       expect(configError({ DATABASE_URL, TRUST_PROXY: value }).message).toContain("TRUST_PROXY");
     });
