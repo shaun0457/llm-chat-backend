@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { type Socket, connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +86,84 @@ describe("server entry (built dist/index.js)", () => {
     },
     20_000,
   );
+
+  describe("when closing cannot finish", () => {
+    let socket: Socket | undefined;
+
+    afterEach(() => {
+      socket?.destroy();
+      socket = undefined;
+    });
+
+    /**
+     * Starts the server with a short forced-exit timeout (1 s stop grace + 1 ms statement
+     * timeout + 1 ms terminal budget + 4 s margin) and holds one request open by never sending
+     * all of its body, so closing waits for it.
+     */
+    async function serverHeldOpen() {
+      const server = startServer({
+        NODE_ENV: "production",
+        TERMINAL_STATEMENT_TIMEOUT_MS: "1",
+        TERMINAL_WRITE_BUDGET_MS: "1",
+      });
+      running = server.child;
+      const url = new URL(await waitForUrl(server));
+      socket = connect(Number(url.port), url.hostname);
+      socket.write(
+        "POST /sessions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n" +
+          "Content-Length: 100\r\n\r\n{",
+      );
+      await waitForOutput(server, /incoming request/);
+      return server;
+    }
+
+    async function waitForOutput(
+      server: { output: () => { stdout: string; stderr: string } },
+      pattern: RegExp,
+    ): Promise<void> {
+      const deadline = Date.now() + 10_000;
+      while (!pattern.test(server.output().stdout)) {
+        if (Date.now() > deadline) {
+          throw new Error(`no output matching ${pattern}: ${server.output().stdout}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+
+    it.skipIf(process.platform === "win32")(
+      "forces exit 1 once the shutdown timeout passes",
+      async () => {
+        const server = await serverHeldOpen();
+
+        const started = Date.now();
+        server.child.kill("SIGTERM");
+        const exit = await server.exited;
+
+        expect(exit).toEqual({ code: 1, signal: null });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(4_500);
+        expect(server.output().stdout).toContain("graceful shutdown timed out");
+      },
+      30_000,
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "forces exit 1 at once on a second signal",
+      async () => {
+        const server = await serverHeldOpen();
+        server.child.kill("SIGTERM");
+        await waitForOutput(server, /shutting down/);
+
+        const started = Date.now();
+        server.child.kill("SIGTERM");
+        const exit = await server.exited;
+
+        expect(exit).toEqual({ code: 1, signal: null });
+        expect(Date.now() - started).toBeLessThan(4_000);
+        expect(server.output().stdout).toContain("second signal");
+      },
+      30_000,
+    );
+  });
 
   it("exits non-zero naming the invalid key, never its value", async () => {
     const server = startServer({ PORT: "abc" });

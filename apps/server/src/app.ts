@@ -3,6 +3,7 @@ import { serializerCompiler, validatorCompiler } from "fastify-type-provider-zod
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
+import { type Clock, systemClock } from "./clock.js";
 import type { AppConfig } from "./config.js";
 import { REDACTED } from "./credentials/scrub.js";
 import { serializeError } from "./credentials/serialize-error.js";
@@ -32,11 +33,25 @@ export type AppDeps = {
   logStream?: NodeJS.WritableStream;
   /** Replaces the app's own job registry, so a test can subscribe to a running generation. */
   jobs?: JobRegistry;
+  /** Monotonic time for deadlines and budgets; tests inject a controllable one. */
+  clock?: Clock;
 };
 
 const REQUEST_ID_HEADER = "x-request-id";
-/** How long closing the app waits for aborted generations; below server.ts's shutdown timeout. */
-const JOB_SHUTDOWN_WAIT_MS = 5_000;
+/** Time for providers to honour the abort before the job's terminal write starts. */
+const JOB_STOP_GRACE_MS = 1_000;
+
+/**
+ * How long closing the app waits for aborted generations to store their final state: a grace
+ * for providers to stop, one statement timeout for a flush still in flight, and the whole
+ * terminal-write budget. server.ts's forced-exit timeout is longer still. Rows not stored in
+ * time are left for stale reclaim.
+ */
+export function jobShutdownWaitMs(
+  config: Pick<AppConfig, "terminalStatementTimeoutMs" | "terminalWriteBudgetMs">,
+): number {
+  return JOB_STOP_GRACE_MS + config.terminalStatementTimeoutMs + config.terminalWriteBudgetMs;
+}
 const VALID_REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 
 /**
@@ -86,6 +101,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     void reply.header(REQUEST_ID_HEADER, request.id);
   });
 
+  // Valid (a platform proxy may require a short wait), but worth knowing when reading 202s.
+  const generationLimitMs = config.generationDeadlineMs + config.terminalWriteBudgetMs;
+  if (config.jsonMaxWaitMs < generationLimitMs) {
+    app.log.info(
+      { jsonMaxWaitMs: config.jsonMaxWaitMs, generationLimitMs },
+      "JSON_MAX_WAIT_MS is below the generation deadline plus the terminal-write budget; " +
+        "JSON clients may get 202 for long answers and should poll",
+    );
+  }
+
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerProblemDetails(app);
@@ -95,10 +120,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     checkReadiness: createReadinessCheck(db, MIGRATIONS_FOLDER),
   });
   void app.register(providersRoutes, { registry });
-  void app.register(sessionsRoutes, { service: createSessionsService({ db, registry }) });
+  const { staleThresholdMs } = config;
+  void app.register(sessionsRoutes, {
+    service: createSessionsService({ db, registry, staleThresholdMs }),
+  });
 
-  const jobs =
-    deps.jobs ?? createJobRegistry({ db, flushIntervalMs: config.flushIntervalMs, log: app.log });
+  const clock = deps.clock ?? systemClock;
+  const jobs = deps.jobs ?? createJobRegistry({ db, timing: config, clock, log: app.log });
   const messages = createMessagesService({
     db,
     registry,
@@ -106,16 +134,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     jobs,
     attach: createAttach({ jobs, readTurn: (assistantId) => findTurn(db.drizzle, assistantId) }),
     defaultSystemPrompt: config.defaultSystemPrompt,
+    clock,
+    staleThresholdMs,
     operatorKeys: config.operatorKeys,
   });
   void app.register(messagesRoutes, {
     service: messages,
     jsonWait: { defaultMs: config.jsonDefaultWaitMs, maxMs: config.jsonMaxWaitMs },
   });
-  // Before the server stops accepting: running generations end, so waiting responses finish
-  // instead of holding the close open. An aborted row stays generating for now.
+  // Before the server stops accepting: running generations are aborted and store failed /
+  // cancelled, so waiting responses finish instead of holding the close open.
   app.addHook("preClose", async () => {
-    await jobs.shutdown(JOB_SHUTDOWN_WAIT_MS);
+    await jobs.shutdown(jobShutdownWaitMs(config));
   });
 
   return app;

@@ -19,6 +19,14 @@ const commaList = z
 
 const MAX_JSON_WAIT_MS = 600_000;
 const DEFAULT_JSON_WAIT_MS = 30_000;
+/** Upper bound of the generation and reclaim timings: one hour, far below setTimeout's limit. */
+const MAX_TIMING_MS = 3_600_000;
+/** Slack that RECLAIM_GRACE_MS must keep on top of the statement timeout (late timers). */
+const RECLAIM_SLACK_MS = 1_000;
+
+/** A positive whole number of milliseconds; zero or less would disable the safety net. */
+const timingMs = (fallback: number) =>
+  z.coerce.number().int().min(1).max(MAX_TIMING_MS).default(fallback);
 const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 const envSchema = z.object({
@@ -46,6 +54,10 @@ const envSchema = z.object({
     .max(MAX_JSON_WAIT_MS)
     .default(DEFAULT_JSON_WAIT_MS),
   JSON_MAX_WAIT_MS: z.coerce.number().int().min(0).max(MAX_JSON_WAIT_MS).default(195_000),
+  GENERATION_DEADLINE_MS: timingMs(180_000),
+  TERMINAL_STATEMENT_TIMEOUT_MS: timingMs(3_000),
+  TERMINAL_WRITE_BUDGET_MS: timingMs(10_000),
+  RECLAIM_GRACE_MS: timingMs(50_000),
   // Server configuration only: clients can never choose where a provider call goes.
   NVIDIA_BASE_URL: z
     .url({ protocol: /^https?$/ })
@@ -79,6 +91,22 @@ export type AppConfig = Readonly<{
   jsonDefaultWaitMs: number;
   /** The longest a JSON send ever waits; keep it below the proxy's response timeout. */
   jsonMaxWaitMs: number;
+  /** Hard limit of one generation attempt, counted from just before its admitting insert. */
+  generationDeadlineMs: number;
+  /** Limit of each statement of a terminal write (completed, failed). */
+  terminalStatementTimeoutMs: number;
+  /** Limit of a whole terminal write, retries and backoff included. */
+  terminalWriteBudgetMs: number;
+  /**
+   * Margin on top of deadline and terminal budget before a generating row counts as dead;
+   * at least the statement timeout plus one second.
+   */
+  reclaimGraceMs: number;
+  /**
+   * deadline + terminal budget + grace: a row still generating this long after `started_at`
+   * (database clock) has no live job and is failed as `interrupted` by stale reclaim.
+   */
+  staleThresholdMs: number;
   /** Where the nvidia provider's OpenAI-compatible API lives. */
   nvidiaBaseUrl: string;
   /** `<PROVIDER>_API_KEY` of each enabled provider that has one, by provider id. Secrets. */
@@ -155,6 +183,17 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       },
     ]);
   }
+  // Past its deadline a live job may still wait one statement timeout for a flush in flight
+  // before its terminal budget (which includes reading its final state back) starts; reclaim
+  // must not beat it, with a second of slack for late timers and a busy event loop.
+  if (parsed.RECLAIM_GRACE_MS < parsed.TERMINAL_STATEMENT_TIMEOUT_MS + RECLAIM_SLACK_MS) {
+    throw new ConfigError([
+      {
+        key: "RECLAIM_GRACE_MS",
+        reason: `must be at least TERMINAL_STATEMENT_TIMEOUT_MS + ${RECLAIM_SLACK_MS}`,
+      },
+    ]);
+  }
   const providersEnabled = Object.freeze([...new Set(parsed.PROVIDERS_ENABLED)]);
   return Object.freeze({
     port: parsed.PORT,
@@ -171,6 +210,12 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     demoDelayMs: parsed.DEMO_DELAY_MS,
     jsonDefaultWaitMs: parsed.JSON_DEFAULT_WAIT_MS,
     jsonMaxWaitMs: parsed.JSON_MAX_WAIT_MS,
+    generationDeadlineMs: parsed.GENERATION_DEADLINE_MS,
+    terminalStatementTimeoutMs: parsed.TERMINAL_STATEMENT_TIMEOUT_MS,
+    terminalWriteBudgetMs: parsed.TERMINAL_WRITE_BUDGET_MS,
+    reclaimGraceMs: parsed.RECLAIM_GRACE_MS,
+    staleThresholdMs:
+      parsed.GENERATION_DEADLINE_MS + parsed.TERMINAL_WRITE_BUDGET_MS + parsed.RECLAIM_GRACE_MS,
     nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,
     operatorKeys: readOperatorKeys(providersEnabled, present),
   });
