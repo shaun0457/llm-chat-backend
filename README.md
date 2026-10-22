@@ -633,13 +633,24 @@ this runs and the stack is unchanged.
 
 The profile does not enable the provider by itself: `PROVIDERS_ENABLED`, on the command line as
 above or in `.env`, adds `ollama` to the enabled providers, and `demo` stays the default
-provider. `docker compose --profile local-llm down -v` also removes the model volume.
+provider. Enabled without the profile, `ollama` stays listed but every answer fails as
+`llm_upstream_error`, because nothing answers at its address. Ollama is on its own compose
+network with the api; PostgreSQL is not on it. `docker compose --profile local-llm down -v`
+also removes the model volume.
+
+The compose file repeats three catalog values: the model it pulls, `OLLAMA_NUM_PARALLEL`
+(the catalog's `maxConcurrency`) and the context (twice the `contextWindow`). A unit test
+keeps them in step with the shipped catalog; a different catalog (`MODEL_CATALOG_PATH`) needs
+the same changes in the compose file.
 
 - **Same adapter, different configuration.** `ollama` uses the OpenAI-compatible adapter that
   `nvidia` uses, pointed at `OLLAMA_BASE_URL` and called with the placeholder key `no-key`,
-  which Ollama ignores. There is no Ollama-specific code path.
+  which Ollama ignores. There is no Ollama-specific code path; only two adapter settings
+  differ. A request may take 120 s instead of 60 s to start and between chunks, since a CPU
+  model can need over a minute before its first token. A failed request is not retried, because
+  a retry would repeat the whole prompt evaluation inside the same 180 s deadline.
 - **Hardware.** CPU only; GPU configuration is out of scope. The model needs about 1 GB of
-  memory with two 4,096-token contexts. Any machine that runs Docker comfortably can run it,
+  memory with two 8,192-token contexts. Any machine that runs Docker comfortably can run it,
   but answers are slow.
 - **Speed.** Short answers take seconds on a laptop CPU; a 512-token answer takes far longer.
   The `local-llm` workflow measures the time to the first token and to the full answer on a
@@ -649,10 +660,13 @@ provider. `docker compose --profile local-llm down -v` also removes the model vo
   503 `provider_busy` with `Retry-After: 10` at once and writes nothing. Without the limit,
   Ollama would queue the third request while its 180 s generation deadline runs, and on a CPU
   every queued answer would risk ending as `llm_timeout`.
-- **Context window and output.** `OLLAMA_CONTEXT_LENGTH=4096` sets the context of each request,
-  and the catalog's `contextWindow` is the same 4,096 tokens, so the history budget matches what
-  Ollama applies (its OpenAI-compatible endpoint cannot set the context per request). Answers
-  stop at the catalog's `maxOutputTokens` of 512 (finish reason `length`).
+- **Context window and output.** The catalog's `contextWindow` is 4,096 tokens, and the
+  history budget keeps each prompt within it by an estimate. Ollama gives each request
+  `OLLAMA_CONTEXT_LENGTH=8192`, twice as much, because it does not reject a prompt longer than
+  its context: it silently drops the start. The headroom absorbs an estimate that is too low,
+  for example for digits, which this model reads one token each. (Ollama's OpenAI-compatible
+  endpoint cannot set the context per request.) Answers stop at the catalog's
+  `maxOutputTokens` of 512 (finish reason `length`).
 - **Why this model.** `qwen2.5:0.5b` is the instruction-tuned Qwen 2.5 with 0.5 billion
   parameters, 4-bit quantised. It answers simple questions coherently, and it is not a
   reasoning model: its answers carry no `<think>` blocks in the content.
