@@ -21,10 +21,14 @@ export interface ProviderRegistry {
   readonly defaults: ModelPair;
   /** Enabled providers, in PROVIDERS_ENABLED order. */
   list(): readonly ProviderInfo[];
+  /** An enabled provider; undefined when unknown or not enabled. */
+  provider(providerId: string): ProviderInfo | undefined;
   /**
-   * Fills in a requested provider/model against `base` and validates the result:
-   * both → as given; provider only → `base.model` if it is `base.provider`, else its default
-   * model; model only → `base.provider`; neither → `base`. Unknown or disabled provider → provider_unavailable; model not in that
+   * Fills in a requested provider/model against `base` and validates the result; session
+   * create, session update and every new turn use this one rule:
+   * both → as given; provider only → that provider's default model, also when it is
+   * `base.provider` (omit the provider to keep `base.model`); model only → `base.provider`;
+   * neither → `base`. Unknown or disabled provider → provider_unavailable; model not in that
    * provider's catalog → model_not_supported.
    */
   resolve(requested: { provider?: string; model?: string }, base: ModelPair): PairResolution;
@@ -79,15 +83,16 @@ export function createRegistry(
   return {
     defaults: Object.freeze({ provider: defaultProvider.id, model: defaultModel }),
     list: () => providers,
+    provider: (providerId) => enabled.get(providerId),
     resolve: (requested, base) => {
       const providerId = requested.provider ?? base.provider;
       const provider = enabled.get(providerId);
       if (provider === undefined) {
         return { ok: false, reason: "provider_unavailable" };
       }
-      // Without a model, the base model stays unless the provider actually changes.
+      // A provider given alone means its default model, whatever the base model is.
       const model =
-        requested.model ?? (providerId === base.provider ? base.model : provider.defaultModel);
+        requested.model ?? (requested.provider === undefined ? base.model : provider.defaultModel);
       if (catalog.find(providerId, model) === undefined) {
         return { ok: false, reason: "model_not_supported" };
       }

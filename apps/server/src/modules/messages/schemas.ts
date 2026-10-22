@@ -19,8 +19,28 @@ const timestamp = z
 export const sessionIdParams = z.object({ id: z.uuid() });
 export const messageParams = z.object({ id: z.uuid(), mid: z.uuid() });
 
+// No length limit: an id that is not catalogued is a 422, whatever its length.
+const provider = z
+  .string()
+  .min(1)
+  .describe(
+    "This turn only (the session keeps its own): an enabled provider id (GET /providers). " +
+      "Alone: that provider's default model, including when it is the session's provider",
+  );
+const model = z
+  .string()
+  .min(1)
+  .describe(
+    "This turn only (the session keeps its own): a model in the catalog of the given " +
+      "provider, or of the session's provider when none is given",
+  );
+
 /** Strict: unknown fields are a 400, so later fields cannot be sent to a server ignoring them. */
-export const sendMessageBody = z.strictObject({ content });
+export const sendMessageBody = z.strictObject({
+  content,
+  provider: provider.optional(),
+  model: model.optional(),
+});
 
 /** Fastify merges the validated headers over the raw ones, so the other headers stay as sent. */
 export const sendMessageHeaders = z.object({

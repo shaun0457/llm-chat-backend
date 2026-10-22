@@ -85,6 +85,24 @@ describe("API documentation", () => {
     expect(message.properties).not.toHaveProperty("systemPrompt");
   });
 
+  it("states the provider-only rule for PATCH /sessions/:id and for a send", async () => {
+    app = makeTestApp();
+
+    const { paths } = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+
+    const patch = paths["/sessions/{id}"].patch.requestBody.content["application/json"].schema;
+    expect(patch.properties.provider.description).toBe(
+      "Alone: that provider's default model, including when it is already the current " +
+        "provider; omit provider to preserve the current model",
+    );
+    const send =
+      paths["/sessions/{id}/messages"].post.requestBody.content["application/json"].schema;
+    expect(Object.keys(send.properties).sort()).toEqual(["content", "model", "provider"]);
+    expect(send.properties.provider.description).toContain(
+      "Alone: that provider's default model, including when it is the session's provider",
+    );
+  });
+
   it("documents Prefer, the three send outcomes and their headers, and the uncached poll target", async () => {
     app = makeTestApp();
 

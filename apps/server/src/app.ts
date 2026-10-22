@@ -80,7 +80,7 @@ function requestId(request: IncomingMessage): string {
 
 /** Returns a configured app that is not listening; only `server.ts` calls `listen`. */
 export function buildApp(deps: AppDeps): FastifyInstance {
-  const { config, db, catalog, registry, logStream } = deps;
+  const { config, db, registry, logStream } = deps;
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -130,7 +130,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const messages = createMessagesService({
     db,
     registry,
-    catalog,
     jobs,
     attach: createAttach({ jobs, readTurn: (assistantId) => findTurn(db.drizzle, assistantId) }),
     defaultSystemPrompt: config.defaultSystemPrompt,

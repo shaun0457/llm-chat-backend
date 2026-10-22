@@ -6,7 +6,6 @@ import { type OperatorKeys, decideCredential } from "../../credentials/decide.js
 import type { Db, Tx } from "../../db/client.js";
 import { pgConstraint, pgErrorCode } from "../../db/errors.js";
 import { ProblemError } from "../../http/problem-details.js";
-import type { ModelCatalog } from "../../llm/catalog.js";
 import type { LlmProvider } from "../../llm/port.js";
 import type { ProviderRegistry } from "../../llm/registry.js";
 import { type LockedSession, lockSession } from "../sessions/repository.js";
@@ -97,7 +96,6 @@ type Admitted = {
 export function createMessagesService(deps: {
   db: Db;
   registry: ProviderRegistry;
-  catalog: ModelCatalog;
   jobs: JobRegistry;
   attach: Attach;
   defaultSystemPrompt: string | undefined;
@@ -107,17 +105,8 @@ export function createMessagesService(deps: {
   /** Secrets: the server's own key per provider id. */
   operatorKeys: OperatorKeys;
 }): MessagesService {
-  const {
-    db,
-    registry,
-    catalog,
-    jobs,
-    attach,
-    defaultSystemPrompt,
-    clock,
-    staleThresholdMs,
-    operatorKeys,
-  } = deps;
+  const { db, registry, jobs, attach, defaultSystemPrompt, clock, staleThresholdMs, operatorKeys } =
+    deps;
 
   // Admission steps, in the order the spec fixes. Later steps (replay, budget, credential,
   // expected history, capacity limits) slot in between these.
@@ -135,7 +124,14 @@ export function createMessagesService(deps: {
     await reclaimStale(tx, sessionId, staleThresholdMs);
   }
 
-  function resolveStep(session: LockedSession): {
+  /**
+   * The turn's provider and model: the request's override resolved against the locked
+   * session's defaults by the same rule as session create and update. The session keeps its own.
+   */
+  function resolveStep(
+    session: LockedSession,
+    requested: { provider?: string; model?: string },
+  ): {
     adapter: LlmProvider;
     provider: string;
     requiresKey: boolean;
@@ -143,12 +139,13 @@ export function createMessagesService(deps: {
     contextWindow: number;
     maxOutputTokens: number;
   } {
-    const pair = resolvedPair(registry.resolve({}, session));
+    const pair = resolvedPair(registry.resolve(requested, session));
+    const provider = registry.provider(pair.provider);
     const adapter = registry.adapter(pair.provider);
-    if (adapter === undefined) {
+    if (provider === undefined || adapter === undefined) {
       throw new ProblemError(422, "provider_unavailable", "The provider is unknown or not enabled");
     }
-    const entry = catalog.find(pair.provider, pair.model);
+    const entry = provider.models.find((candidate) => candidate.id === pair.model);
     if (entry === undefined) {
       throw new ProblemError(
         422,
@@ -159,7 +156,7 @@ export function createMessagesService(deps: {
     return {
       adapter,
       provider: pair.provider,
-      requiresKey: catalog.provider(pair.provider)?.requiresKey ?? true,
+      requiresKey: provider.requiresKey,
       model: pair.model,
       contextWindow: entry.contextWindow,
       maxOutputTokens: entry.maxOutputTokens,
@@ -264,7 +261,7 @@ export function createMessagesService(deps: {
 
   async function admit(
     sessionId: string,
-    content: string,
+    input: SendMessageInput,
     headerKey: string | undefined,
   ): Promise<{ admitted: Admitted; attempt: number; reservation: Reservation }> {
     // Kept outside the callback only so a rollback (or a failed commit) can release it.
@@ -273,7 +270,8 @@ export function createMessagesService(deps: {
       return await db.tx(async (tx) => {
         const session = await lockStep(tx, sessionId);
         await reclaimStep(tx, sessionId);
-        const resolved = resolveStep(session);
+        const { content } = input;
+        const resolved = resolveStep(session, input);
         const systemPrompt = systemPromptOf(session);
         const budget = budgetStep(resolved, systemPrompt, content);
         const apiKey = credentialStep(resolved, headerKey);
@@ -312,7 +310,7 @@ export function createMessagesService(deps: {
 
   return {
     async send(sessionId, input, { waitMs, apiKey }) {
-      const { admitted, attempt, reservation } = await admit(sessionId, input.content, apiKey);
+      const { admitted, attempt, reservation } = await admit(sessionId, input, apiKey);
       const { userMessage, assistantMessage } = admitted.turn;
       jobs.start({
         assistantId: assistantMessage.id,
