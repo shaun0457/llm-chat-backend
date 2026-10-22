@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   type HistoryTurn,
   historyBudget,
+  maxTurnsWithin,
   selectHistory,
 } from "../../src/modules/messages/context.js";
 
@@ -98,5 +99,16 @@ describe("selectHistory", () => {
   it("selects nothing for a zero budget or no turns", () => {
     expect(selectHistory(turns, 0)).toEqual([]);
     expect(selectHistory([], 1000)).toEqual([]);
+  });
+});
+
+describe("maxTurnsWithin", () => {
+  it("bounds how many turns can fit: the cheapest turn is 17 tokens", () => {
+    // A non-blank question is at least 1 token, an answer may be empty; plus 2 × 8 overhead.
+    expect(maxTurnsWithin(0)).toBe(0);
+    expect(maxTurnsWithin(16)).toBe(0);
+    expect(maxTurnsWithin(17)).toBe(1);
+    expect(maxTurnsWithin(34)).toBe(2);
+    expect(selectHistory(Array(3).fill({ question: "Q", answer: "" }), 34)).toHaveLength(2);
   });
 });

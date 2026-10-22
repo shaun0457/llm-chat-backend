@@ -10,15 +10,15 @@ import { limitStatements } from "../../db/statement-timeout.js";
 import { failureOf } from "../../llm/errors.js";
 import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
-import { assembleContext } from "./context.js";
+import { assembleContext, maxTurnsWithin } from "./context.js";
 import { remainingMs } from "./deadline.js";
 import { untilAbort, withTimeout } from "./race.js";
 import {
   completeAssistant,
+  completedTurnsBefore,
   failAssistant,
   findMessage,
   flushContent,
-  historyBefore,
 } from "./repository.js";
 import type { Message } from "./schemas.js";
 import { TerminalWriteError, writeWithinBudget } from "./terminal-write.js";
@@ -304,7 +304,12 @@ export function createJobRegistry(deps: {
           );
           // At least 1 ms (0 would mean no limit): past the deadline the read fails at once.
           await limitStatements(tx, Math.max(1, readMs));
-          return historyBefore(tx, spec.sessionId, spec.userMessage.seq);
+          return completedTurnsBefore(
+            tx,
+            spec.sessionId,
+            spec.userMessage.seq,
+            maxTurnsWithin(spec.historyBudget),
+          );
         }),
         controller.signal,
       );
