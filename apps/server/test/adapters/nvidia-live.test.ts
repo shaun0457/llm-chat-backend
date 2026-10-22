@@ -19,7 +19,15 @@ const live = liveCheckEnabled(process.env);
 /** Inline reasoning some models emit in their content (V3). */
 const INLINE_REASONING = /<\/?(think|thinking|reasoning|thought)>/i;
 
-describe.skipIf(!live)("nvidia live", { timeout: 120_000 }, () => {
+/** NVIDIA queues requests when a model is busy, so one call may wait this long. */
+const CALL_TIMEOUT_MS = 90_000;
+
+function report(result: Record<string, unknown>): void {
+  // eslint-disable-next-line no-console -- the result line is this check's report
+  console.log(`LIVE_RESULT ${JSON.stringify(result)}`);
+}
+
+describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 }, () => {
   const config = loadConfig({ DATABASE_URL: "postgres://unused@127.0.0.1:9/unused" });
   const models = loadCatalog(config.modelCatalogPath).provider("nvidia")?.models ?? [];
   const provider = new OpenAiCompatibleProvider({ id: "nvidia", baseUrl: config.nvidiaBaseUrl });
@@ -42,7 +50,7 @@ describe.skipIf(!live)("nvidia live", { timeout: 120_000 }, () => {
       const events: LlmEvent[] = [];
       try {
         for await (const event of provider.stream(request, {
-          signal: AbortSignal.timeout(60_000),
+          signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
           apiKey: key ?? null,
         })) {
           events.push(event);
@@ -50,13 +58,18 @@ describe.skipIf(!live)("nvidia live", { timeout: 120_000 }, () => {
         return events;
       } catch (error) {
         if (attempt >= 2 || !isTransientUpstreamFailure(error)) {
+          // Adapter errors are already scrubbed; a timeout carries no upstream text.
+          report({
+            model,
+            error: error instanceof Error ? `${error.name}: ${error.message}` : "?",
+          });
           throw error;
         }
       }
     }
   }
 
-  it.each(models.map((model) => [model.id]))(
+  it.concurrent.each(models.map((model) => [model.id]))(
     "%s streams an answer without inline reasoning, with one finish",
     async (model) => {
       const events = await streamOnce(model);
@@ -65,15 +78,12 @@ describe.skipIf(!live)("nvidia live", { timeout: 120_000 }, () => {
       const finishes = events.filter((event) => event.type === "finish");
       const finish = finishes[0];
       // V2: usage is reported only if the provider honours stream_options.include_usage.
-      // eslint-disable-next-line no-console -- the result line is this check's report
-      console.log(
-        `LIVE_RESULT ${JSON.stringify({
-          model,
-          finishReason: finish?.reason ?? null,
-          usage: finish?.usage ?? null,
-          answer: text.slice(0, 80),
-        })}`,
-      );
+      report({
+        model,
+        finishReason: finish?.reason ?? null,
+        usage: finish?.usage ?? null,
+        answer: text.slice(0, 80),
+      });
 
       expect(text.trim().length).toBeGreaterThan(0);
       expect(text).not.toMatch(INLINE_REASONING);

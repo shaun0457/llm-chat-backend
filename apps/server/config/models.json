@@ -12,11 +12,36 @@
       ]
     },
     "nvidia": {
-      "defaultModel": "google/gemma-3-4b-it",
+      "defaultModel": "nvidia/nemotron-3.5-lightning-30b-a3b",
       "requiresKey": true,
       "models": [
         {
-          "id": "google/gemma-3-4b-it",
+          "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+          "contextWindow": 8192,
+          "maxOutputTokens": 1024
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b",
+          "contextWindow": 8192,
+          "maxOutputTokens": 1024
+        },
+        {
+          "id": "z-ai/glm-5.3-flash",
+          "contextWindow": 8192,
+          "maxOutputTokens": 1024
+        },
+        {
+          "id": "deepseek-ai/deepseek-v4.1-flash",
+          "contextWindow": 8192,
+          "maxOutputTokens": 1024
+        },
+        {
+          "id": "openai/gpt-oss-20b",
+          "contextWindow": 8192,
+          "maxOutputTokens": 1024
+        },
+        {
+          "id": "moonshotai/kimi-k2.6",
           "contextWindow": 8192,
           "maxOutputTokens": 1024
         },
@@ -31,42 +56,7 @@
           "maxOutputTokens": 1024
         },
         {
-          "id": "mistralai/mistral-7b-instruct-v0.3",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "nv-mistralai/mistral-nemo-12b-instruct",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "nvidia/llama-3.1-nemotron-51b-instruct",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "ibm/granite-3.0-8b-instruct",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "mistralai/mistral-large-2-instruct",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "microsoft/phi-3.5-moe-instruct",
-          "contextWindow": 8192,
-          "maxOutputTokens": 1024
-        },
-        {
-          "id": "nvidia/nemotron-nano-3-30b-a3b",
+          "id": "mistralai/mistral-large",
           "contextWindow": 8192,
           "maxOutputTokens": 1024
         }
