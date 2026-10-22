@@ -686,5 +686,52 @@ describe("idempotent send: client message ids", () => {
         await concurrent.end().catch(() => {});
       }
     });
+
+    // Either constraint can report a taken client id, depending on the order of the inserted
+    // rows: the user row's primary key, or the assistant row's reply_to_id.
+    it.each(["messages_pkey", "messages_reply_to_id_unique"])(
+      "re-runs admission at most twice while every insert of the id collides on %s, then answers 500 and leaks nothing",
+      async (constraint) => {
+        start({ MAX_ACTIVE_GENERATIONS: "1" });
+        const session = await createSession(app);
+        const id = crypto.randomUUID();
+        const { pool } = testDb.db;
+        // A boundary write: a trigger in this file's own database fails every insert of the id
+        // as a concurrent send of it would, and counts the attempts (a sequence ignores
+        // rollbacks).
+        await pool.query("CREATE SEQUENCE test_collisions");
+        await pool.query(
+          "CREATE FUNCTION test_collide() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN" +
+            ` IF NEW.id = '${id}' THEN PERFORM nextval('test_collisions');` +
+            " RAISE EXCEPTION 'forced collision'" +
+            ` USING ERRCODE = 'unique_violation', CONSTRAINT = '${constraint}'; END IF;` +
+            " RETURN NEW; END $$",
+        );
+        await pool.query(
+          "CREATE TRIGGER test_collide BEFORE INSERT ON messages" +
+            " FOR EACH ROW EXECUTE FUNCTION test_collide()",
+        );
+        try {
+          const response = await send(app, session.id, { id, content: "Hi" });
+
+          expect(response.statusCode).toBe(500);
+          expect(response.json()).toMatchObject({ code: "internal_error" });
+          const { rows } = await pool.query<{ n: number }>(
+            "SELECT (CASE WHEN is_called THEN last_value ELSE 0 END)::int AS n FROM test_collisions",
+          );
+          // The first run and two re-runs.
+          expect(rows[0]?.n).toBe(3);
+          expect(await allMessages(app, session.id)).toEqual([]);
+          expect(await getSession(app, session.id)).toEqual(session);
+          expect(fake.requests).toHaveLength(0);
+          // Every run's reservation was released: the only slot is free.
+          expect(await holdInFreshSessions(1)).toEqual([202]);
+        } finally {
+          await pool.query("DROP TRIGGER IF EXISTS test_collide ON messages");
+          await pool.query("DROP FUNCTION IF EXISTS test_collide()");
+          await pool.query("DROP SEQUENCE IF EXISTS test_collisions");
+        }
+      },
+    );
   });
 });

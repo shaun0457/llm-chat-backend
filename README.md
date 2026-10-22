@@ -656,6 +656,10 @@ records the requests it receives (to check what context a turn sent), read-only 
 queries check that no column holds an API key, the crash-recovery tests insert the
 `generating` row a crashed process would have left behind, and one idempotency test inserts,
 in a transaction it holds open, the turn a concurrent send to another session would insert.
+Another adds a trigger to its own test database that fails every insert of one id as a
+unique violation, as a send that keeps colliding would, to check the bound on re-runs. One
+replay test lets an answer finish only once the job registry was asked for its job, the
+moment a JSON send starts waiting for it; it observes that lookup but asserts nothing on it.
 
 | Layer            | Where                    | What it covers                                                                                                                                                                                                                  |
 | ---------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

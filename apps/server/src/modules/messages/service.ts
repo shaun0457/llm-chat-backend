@@ -31,7 +31,14 @@ import type { ListMessagesInput, Message, MessagePage, SendMessageInput, Turn } 
 
 const UNIQUE_VIOLATION = "23505";
 const ONE_GENERATING_INDEX = "messages_one_generating_per_session";
-const MESSAGES_PRIMARY_KEY = "messages_pkey";
+/**
+ * The constraints a client id taken by a concurrent send violates: the user row's primary key,
+ * or the assistant row's reply_to_id, whichever row of the turn's insert is checked first.
+ */
+const CLIENT_ID_CONSTRAINTS: ReadonlySet<string> = new Set([
+  "messages_pkey",
+  "messages_reply_to_id_unique",
+]);
 /** Re-runs after a message id collision; the first re-run already resolves it. */
 const MAX_ADMISSION_RERUNS = 2;
 const TITLE_MAX_CODE_POINTS = 60;
@@ -423,7 +430,8 @@ export function createMessagesService(deps: {
 
   /**
    * Admission, re-run when the client's id was inserted by a concurrent send to another
-   * session: the session lock does not serialise those, so the insert hits the primary key.
+   * session: the session lock does not serialise those, so the insert hits the primary key
+   * (or reply_to_id).
    * The next run sees the committed row and answers 422 message_id_conflict (or a replay).
    */
   async function admit(
@@ -439,7 +447,7 @@ export function createMessagesService(deps: {
         const clientIdTaken =
           input.id !== undefined &&
           pgErrorCode(error) === UNIQUE_VIOLATION &&
-          pgConstraint(error) === MESSAGES_PRIMARY_KEY;
+          CLIENT_ID_CONSTRAINTS.has(pgConstraint(error) ?? "");
         if (!clientIdTaken) {
           throw error;
         }

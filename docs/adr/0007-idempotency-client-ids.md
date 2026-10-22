@@ -48,7 +48,8 @@ server generates a UUIDv7, and identical sends are not deduplicated.
   So a replay of a finished turn looks exactly like a re-attach to it.
 - **Concurrent first sends.** Within one session the row lock serialises them: the second sees
   the first's committed rows and replays. Across sessions nothing is locked in common: the
-  second insert hits the primary key (`messages_pkey`). That transaction rolls back, its
+  second insert hits the primary key (`messages_pkey`), or `messages_reply_to_id_unique` if
+  the assistant row of the turn happens to be checked first. That transaction rolls back, its
   capacity reservation is released, and admission runs again from the start; the re-run sees
   the committed row and answers 422. After two re-runs that still collide the request fails as
   500 `internal_error` (logged) rather than loop.
@@ -60,6 +61,9 @@ server generates a UUIDv7, and identical sends are not deduplicated.
   waits on the key, and after the commit the send answers 422 with no rows written and its
   reservation released (`messages-replay` › `replay.race`). With the re-run disabled the same
   test gets a 500, so it does test the re-run.
+- The bound is exercised with a trigger that fails every insert of one id as a unique
+  violation on either constraint: the send runs admission three times (counted by the
+  trigger), answers 500 `internal_error`, writes nothing and releases its reservation.
 - Constraint name: the primary key of `messages` is PostgreSQL's default `messages_pkey`
   (migration `0001_create_messages.sql` declares it inline without a name), confirmed by that
   test.
