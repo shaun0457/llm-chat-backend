@@ -116,26 +116,53 @@ describe("retention.run", () => {
 
     const result = await app.retention?.runOnce();
 
-    expect(result).toEqual({ deleted: 3, skipped: 0 });
+    expect(result).toEqual({ deleted: 3, skipped: 0, failed: 0 });
     for (const session of old) {
       expect(await exists(app, session.id)).toBe(false);
     }
     expect(await exists(app, recent.id)).toBe(true);
     expect(await exists(app, fresh.id)).toBe(true);
     expect(retentionLogs(logs)).toEqual([
-      expect.objectContaining({ deleted: 3, skipped: 0, level: 30 }),
+      expect.objectContaining({ deleted: 3, skipped: 0, failed: 0, level: 30 }),
     ]);
   });
 
-  it("works through more candidates than one batch holds", async () => {
-    start({});
-    const old = [await createSession(app), await createSession(app), await createSession(app)];
-    for (const session of old) {
-      await age(session.id, 30);
+  /** Three sessions inactive for 38 to 40 days, oldest first. */
+  async function threeOld(): Promise<string[]> {
+    const ids: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const session = await createSession(app);
+      await age(session.id, 40 - index);
+      ids.push(session.id);
     }
+    return ids;
+  }
+
+  /** The real delete path, recording every call; `override` may answer for an id instead. */
+  function recordingSessions(
+    override: (id: string) => Promise<"deleted" | "skipped" | "not_found"> | undefined = () =>
+      undefined,
+  ) {
+    const real = sessionsService();
+    const calls: string[] = [];
+    return {
+      calls,
+      sessions: {
+        deleteSession: (id: string, options?: { inactiveBefore?: string }) => {
+          calls.push(id);
+          return override(id) ?? real.deleteSession(id, options);
+        },
+      },
+    };
+  }
+
+  it("works through more candidates than one batch holds, oldest first", async () => {
+    start({});
+    const old = await threeOld();
+    const { calls, sessions } = recordingSessions();
     const retention = createRetention({
       db: testDb.db,
-      sessions: sessionsService(),
+      sessions,
       days: 7,
       intervalMs: 3_600_000,
       log: app.log,
@@ -144,9 +171,75 @@ describe("retention.run", () => {
 
     const result = await retention.runOnce();
 
-    expect(result.deleted).toBeGreaterThanOrEqual(3);
-    for (const session of old) {
-      expect(await exists(app, session.id)).toBe(false);
+    expect(result).toEqual({ deleted: 3, skipped: 0, failed: 0 });
+    expect(calls).toEqual(old);
+    for (const id of old) {
+      expect(await exists(app, id)).toBe(false);
+    }
+  });
+
+  it("goes on past a candidate whose delete fails, and counts it", async () => {
+    start({ LOG_LEVEL: "info" });
+    const [stuck, ...others] = await threeOld();
+    const { sessions } = recordingSessions((id) =>
+      id === stuck
+        ? Promise.reject(new Error("canceling statement due to lock timeout"))
+        : undefined,
+    );
+    const retention = createRetention({
+      db: testDb.db,
+      sessions,
+      days: 7,
+      intervalMs: 3_600_000,
+      log: app.log,
+      batchSize: 1,
+    });
+
+    const result = await retention.runOnce();
+
+    expect(result).toEqual({ deleted: 2, skipped: 0, failed: 1 });
+    expect(await exists(app, stuck ?? "")).toBe(true);
+    for (const id of others) {
+      expect(await exists(app, id)).toBe(false);
+    }
+    expect(
+      logs.entries().filter((entry) => entry.msg === "retention could not delete a session"),
+    ).toEqual([expect.objectContaining({ sessionId: stuck, level: 40 })]);
+    await age(stuck ?? "", 1);
+  });
+
+  it("stops between candidates when it is stopped during a run", async () => {
+    start({});
+    const old = await threeOld();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { calls, sessions } = recordingSessions((id) =>
+      id === old[0] ? gate.then(() => "deleted" as const) : undefined,
+    );
+    const retention = createRetention({
+      db: testDb.db,
+      sessions,
+      days: 7,
+      intervalMs: 3_600_000,
+      log: app.log,
+    });
+
+    const run = retention.runOnce();
+    await eventually(
+      async () => calls.length,
+      (count) => count > 0,
+    );
+    const stopped = retention.stop();
+    release();
+    await stopped;
+
+    expect(calls).toEqual([old[0]]);
+    expect(await run).toEqual({ deleted: 1, skipped: 0, failed: 0 });
+    // Not old any more, so that later tests' runs leave them alone.
+    for (const id of old) {
+      await age(id, 1);
     }
   });
 
