@@ -82,7 +82,13 @@ describe("session defaults with DEFAULT_PROVIDER=other and DEFAULT_MODEL=o-small
 
   it.each([
     ["an empty body", {}, "other", "o-small"],
-    ["only the default provider", { provider: "other" }, "other", "o-small"],
+    [
+      "only the default provider: its catalog default, not DEFAULT_MODEL",
+      { provider: "other" },
+      "other",
+      "o-large",
+    ],
+    ["only a model: the default provider", { model: "o-large" }, "other", "o-large"],
     ["only another provider: its catalog default", { provider: "demo" }, "demo", "demo"],
   ])("creates from %s", async (_name, payload, provider, model) => {
     const response = await app.inject({ method: "POST", url: "/sessions", payload });

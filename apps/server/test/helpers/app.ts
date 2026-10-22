@@ -4,7 +4,8 @@ import { type AppDeps, buildApp } from "../../src/app.js";
 import { type Clock, systemClock } from "../../src/clock.js";
 import { type AppConfig, loadConfig } from "../../src/config.js";
 import { type Db, createDb } from "../../src/db/client.js";
-import { loadCatalog } from "../../src/llm/catalog.js";
+import { capacityFor } from "../../src/llm/capacity.js";
+import { type ModelCatalog, loadCatalog } from "../../src/llm/catalog.js";
 import { DemoProvider } from "../../src/llm/demo.js";
 import { createRegistry } from "../../src/llm/registry.js";
 import { type JobRegistry, createJobRegistry } from "../../src/modules/messages/jobs.js";
@@ -66,16 +67,24 @@ export function makeTestApp(
 
 /**
  * A job registry a test holds on to (pass it as `jobs` to makeTestApp), to reach a running
- * generation or shut the registry down itself. Timing comes from `config` (TEST_ENV by default).
+ * generation or shut the registry down itself. Timing and capacity limits come from `config`
+ * (TEST_ENV by default), provider limits also from the shipped catalog.
  */
 export function testJobs(
   db: Db,
-  options: { config?: AppConfig; clock?: Clock; log?: FastifyInstance["log"] } = {},
+  options: {
+    config?: AppConfig;
+    catalog?: ModelCatalog;
+    clock?: Clock;
+    log?: FastifyInstance["log"];
+  } = {},
 ): JobRegistry {
+  const config = options.config ?? loadConfig(TEST_ENV);
   return createJobRegistry({
     db,
-    timing: options.config ?? loadConfig(TEST_ENV),
+    timing: config,
     clock: options.clock ?? systemClock,
     log: options.log ?? Fastify({ logger: false }).log,
+    capacity: capacityFor(config, options.catalog ?? loadCatalog(config.modelCatalogPath)),
   });
 }

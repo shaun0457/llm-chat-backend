@@ -22,10 +22,10 @@ function countingReservations(inner: JobRegistry): { jobs: JobRegistry; held: ()
   let held = 0;
   const jobs: JobRegistry = {
     ...inner,
-    reserve() {
-      const reservation = inner.reserve();
-      if (reservation === undefined) {
-        return undefined;
+    reserve(provider) {
+      const reservation = inner.reserve(provider);
+      if ("rejected" in reservation) {
+        return reservation;
       }
       held += 1;
       let released = false;

@@ -39,6 +39,8 @@ describe("loadConfig", () => {
       terminalWriteBudgetMs: 10_000,
       reclaimGraceMs: 50_000,
       staleThresholdMs: 240_000,
+      maxActiveGenerations: 8,
+      maxActivePerProvider: 4,
       nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
       operatorKeys: {},
     });
@@ -64,6 +66,8 @@ describe("loadConfig", () => {
       TERMINAL_STATEMENT_TIMEOUT_MS: "400",
       TERMINAL_WRITE_BUDGET_MS: "2000",
       RECLAIM_GRACE_MS: "1500",
+      MAX_ACTIVE_GENERATIONS: "16",
+      MAX_ACTIVE_PER_PROVIDER: "3",
       NVIDIA_BASE_URL: "http://nim.internal:8000/v1",
       NVIDIA_API_KEY: "operator-key-1",
     });
@@ -88,6 +92,8 @@ describe("loadConfig", () => {
       terminalWriteBudgetMs: 2_000,
       reclaimGraceMs: 1_500,
       staleThresholdMs: 63_500,
+      maxActiveGenerations: 16,
+      maxActivePerProvider: 3,
       nvidiaBaseUrl: "http://nim.internal:8000/v1",
       operatorKeys: { nvidia: "operator-key-1" },
     });
@@ -211,6 +217,15 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "4000" }),
     ).toMatchObject({ reclaimGraceMs: 4_000 });
+  });
+
+  it.each([
+    ["MAX_ACTIVE_GENERATIONS", "0"],
+    ["MAX_ACTIVE_GENERATIONS", "1.5"],
+    ["MAX_ACTIVE_PER_PROVIDER", "0"],
+    ["MAX_ACTIVE_PER_PROVIDER", "-1"],
+  ])("rejects %s=%s: a capacity limit is a positive whole number", (key, value) => {
+    expect(() => loadConfig({ DATABASE_URL, [key]: value })).toThrow(key);
   });
 
   it("lists every invalid key", () => {

@@ -170,11 +170,11 @@ describe("deadline", () => {
     let ended: Promise<{ end: JobEnd; afterMs: number }> | undefined;
     const jobs: JobRegistry = {
       ...inner,
-      reserve() {
+      reserve(provider) {
         // Requested while the admitting transaction holds its lock on messages, so it is
         // granted at that commit and queues ahead of the job's history read.
         locked = locker.query("BEGIN; LOCK TABLE messages IN ACCESS EXCLUSIVE MODE");
-        return inner.reserve();
+        return inner.reserve(provider);
       },
       start(spec) {
         const startedAt = performance.now();
@@ -236,10 +236,10 @@ it("shutdown also gets a history read stuck behind a lock cancelled in the datab
   let started: true | undefined;
   const jobs: JobRegistry = {
     ...inner,
-    reserve() {
+    reserve(provider) {
       // As above: granted at the admission's commit, ahead of the job's history read.
       locked = locker.query("BEGIN; LOCK TABLE messages IN ACCESS EXCLUSIVE MODE");
-      return inner.reserve();
+      return inner.reserve(provider);
     },
     start(spec) {
       const job = inner.start(spec);
@@ -276,8 +276,7 @@ it("shutdown also gets a history read stuck behind a lock cancelled in the datab
           )
         ).rows[0],
       (row) =>
-        row !== undefined &&
-        (row.state === "idle" || !(row.query ?? "").startsWith('select "id", "seq", "role"')),
+        row !== undefined && (row.state === "idle" || !(row.query ?? "").startsWith(HISTORY_READ)),
       5_000,
     );
     expect(await waitingHistoryRead()).toBeUndefined();
@@ -292,19 +291,23 @@ it("shutdown also gets a history read stuck behind a lock cancelled in the datab
   }
 }, 15_000);
 
-/** The backend of a history read (the job's select of id, seq, role …) waiting for a lock. */
+/** How the job's read of completed turns (completedTurnsBefore) starts in pg_stat_activity. */
+const HISTORY_READ =
+  'select "messages"."id", "messages"."seq", "messages"."content", "question"."id"';
+
+/** The backend of a history read (HISTORY_READ) waiting for a lock. */
 async function waitingHistoryRead(): Promise<number | undefined> {
   const { rows } = await testDb.db.pool.query<{ pid: number }>(
     "SELECT pid FROM pg_stat_activity" +
       " WHERE wait_event_type = 'Lock' AND datname = current_database()" +
-      ` AND query LIKE 'select "id", "seq", "role"%'`,
+      ` AND query LIKE '${HISTORY_READ}%'`,
   );
   return rows[0]?.pid;
 }
 
 /**
- * History reads (the job's select of id, seq, role …) waiting for a lock, polled until none are
- * left or `ms` pass. The request's own read of the turn waits too; request-path timeouts are
+ * History reads (HISTORY_READ) waiting for a lock, polled until none are left or `ms` pass.
+ * The request's own read of the turn waits too; request-path timeouts are
  * not part of this ticket.
  */
 async function historyReadsWaitingAfter(ms: number): Promise<number> {
@@ -313,7 +316,7 @@ async function historyReadsWaitingAfter(ms: number): Promise<number> {
     const { rows } = await testDb.db.pool.query<{ n: number }>(
       "SELECT count(*)::int AS n FROM pg_stat_activity" +
         " WHERE wait_event_type = 'Lock' AND datname = current_database()" +
-        ` AND query LIKE 'select "id", "seq", "role"%'`,
+        ` AND query LIKE '${HISTORY_READ}%'`,
     );
     const waiting = rows[0]?.n ?? 0;
     if (waiting === 0 || performance.now() >= until) {
