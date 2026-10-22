@@ -102,13 +102,21 @@ export function createAttach(deps: {
         stream.end();
       }
     });
-    stream.onClose(unsubscribe);
+    let closed!: () => void;
+    const clientGone = new Promise<void>((resolve) => {
+      closed = resolve;
+    });
+    stream.onClose(() => {
+      unsubscribe();
+      closed();
+    });
     stream.send("message.created", {
       userMessage: turn.userMessage,
       assistantMessage: { ...turn.assistantMessage, content },
     });
 
-    await job.finished;
+    // A client that left needs nothing more: do not hold on until the generation ends.
+    await Promise.race([job.finished, clientGone]);
     if (ended || stream.closed) {
       return;
     }
