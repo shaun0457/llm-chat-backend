@@ -11,6 +11,8 @@ export async function withTimeout<T>(
   ms: number,
 ): Promise<T | typeof TIMED_OUT> {
   if (ms <= 0) {
+    // Not raced, so nothing else observes a later rejection of the promise left behind.
+    promise.catch(() => {});
     return TIMED_OUT;
   }
   let timer: NodeJS.Timeout | undefined;

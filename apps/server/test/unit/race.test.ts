@@ -28,6 +28,28 @@ describe("withTimeout", () => {
     await expect(withTimeout(new Promise<never>(() => {}), 0)).resolves.toBe(TIMED_OUT);
   });
 
+  it("leaves no unhandled rejection behind when no time is left", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let rejectWork: (error: Error) => void = () => {};
+      const work = new Promise<never>((_resolve, reject) => {
+        rejectWork = reject;
+      });
+
+      await expect(withTimeout(work, 0)).resolves.toBe(TIMED_OUT);
+      rejectWork(new Error("late"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("propagates a rejection that arrives in time", async () => {
     await expect(withTimeout(Promise.reject(new Error("boom")), 1_000)).rejects.toThrow("boom");
   });
