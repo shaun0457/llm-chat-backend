@@ -47,3 +47,50 @@ export async function untilAbort<T>(promise: Promise<T>, signal: AbortSignal): P
     }
   }
 }
+
+/**
+ * untilAbort for a series of promises with one abort listener between them all: `race()` is
+ * `promise`'s outcome or a rejection with `signal.reason` once the signal aborts (at once when
+ * it already has); `dispose()` removes the listener. Only races still pending are remembered,
+ * so a long series holds nothing of the settled ones. A promise left behind keeps running, and
+ * its later rejection is swallowed.
+ */
+export function abortRace(signal: AbortSignal): {
+  race<T>(promise: Promise<T>): Promise<T>;
+  dispose(): void;
+} {
+  const pending = new Set<(reason: unknown) => void>();
+  const onAbort = (): void => {
+    for (const reject of pending) {
+      reject(signal.reason);
+    }
+    pending.clear();
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  return {
+    race<T>(promise: Promise<T>): Promise<T> {
+      promise.catch(() => {});
+      // Checked first: once aborted, even an already settled promise does not win.
+      if (signal.aborted) {
+        return Promise.reject(signal.reason);
+      }
+      return new Promise<T>((resolve, reject) => {
+        pending.add(reject);
+        promise.then(
+          (value) => {
+            pending.delete(reject);
+            resolve(value);
+          },
+          (error: unknown) => {
+            pending.delete(reject);
+            reject(error);
+          },
+        );
+      });
+    },
+    dispose() {
+      signal.removeEventListener("abort", onAbort);
+      pending.clear();
+    },
+  };
+}

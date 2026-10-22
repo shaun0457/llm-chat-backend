@@ -61,6 +61,10 @@ const envSchema = z.object({
   TERMINAL_STATEMENT_TIMEOUT_MS: timingMs(3_000),
   TERMINAL_WRITE_BUDGET_MS: timingMs(10_000),
   RECLAIM_GRACE_MS: timingMs(50_000),
+  SSE_PING_INTERVAL_MS: z.coerce.number().int().min(100).max(MAX_TIMING_MS).default(15_000),
+  // Bytes waiting for a slow client before its stream is closed, 16 KiB to 64 MiB. A frame
+  // written to an empty buffer always goes out, so a single large event never trips it.
+  SSE_BUFFER_LIMIT_BYTES: z.coerce.number().int().min(16_384).max(67_108_864).default(262_144),
   MAX_ACTIVE_GENERATIONS: capacityLimit(8),
   MAX_ACTIVE_PER_PROVIDER: capacityLimit(4),
   // Server configuration only: clients can never choose where a provider call goes.
@@ -112,6 +116,13 @@ export type AppConfig = Readonly<{
    * (database clock) has no live job and is failed as `interrupted` by stale reclaim.
    */
   staleThresholdMs: number;
+  /** How often a quiet event stream gets a `: ping` comment. */
+  ssePingIntervalMs: number;
+  /**
+   * Bytes an event stream may have waiting to be sent to its client; a frame that would go
+   * beyond closes that connection (a slow consumer), never the generation.
+   */
+  sseBufferLimitBytes: number;
   /** Active generations in this process at most; further sends get 503 server_busy. */
   maxActiveGenerations: number;
   /**
@@ -228,6 +239,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     reclaimGraceMs: parsed.RECLAIM_GRACE_MS,
     staleThresholdMs:
       parsed.GENERATION_DEADLINE_MS + parsed.TERMINAL_WRITE_BUDGET_MS + parsed.RECLAIM_GRACE_MS,
+    ssePingIntervalMs: parsed.SSE_PING_INTERVAL_MS,
+    sseBufferLimitBytes: parsed.SSE_BUFFER_LIMIT_BYTES,
     maxActiveGenerations: parsed.MAX_ACTIVE_GENERATIONS,
     maxActivePerProvider: parsed.MAX_ACTIVE_PER_PROVIDER,
     nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,

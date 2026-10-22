@@ -6,6 +6,7 @@ import { type OperatorKeys, decideCredential } from "../../credentials/decide.js
 import type { Db, Tx } from "../../db/client.js";
 import { pgConstraint, pgErrorCode } from "../../db/errors.js";
 import { ProblemError } from "../../http/problem-details.js";
+import type { SseStream } from "../../http/sse.js";
 import type { LlmProvider } from "../../llm/port.js";
 import type { ProviderRegistry } from "../../llm/registry.js";
 import { type LockedSession, lockSession } from "../sessions/repository.js";
@@ -17,6 +18,7 @@ import { reclaimStale } from "./reclaim.js";
 import {
   findMessage,
   findSeq,
+  findTurn,
   hasGeneratingTurn,
   insertTurn,
   newestMessages,
@@ -31,14 +33,30 @@ const TITLE_MAX_CODE_POINTS = 60;
 
 export type MessagesService = {
   /**
-   * Admits a turn, starts its generation and waits for it at most `waitMs`: completed, failed,
-   * or pending when the answer is still being generated (also when the server shuts down).
+   * Admits a turn, starts its generation and waits for it at most `waitMs`, or until
+   * `clientGone` aborts: completed, failed, or pending when the answer is still being
+   * generated (also when the server shuts down).
    */
   send(
     sessionId: string,
     input: SendMessageInput,
-    options: { waitMs: number; apiKey: string | undefined },
+    options: { waitMs: number; apiKey: string | undefined; clientGone?: AbortSignal },
   ): Promise<JsonOutcome>;
+  /**
+   * Admits a turn like `send`, then opens the event stream with `open` (only once admission
+   * succeeded, so a refusal is still an ordinary problem response) and streams the turn.
+   */
+  sendStreaming(
+    sessionId: string,
+    input: SendMessageInput,
+    options: { apiKey: string | undefined },
+    open: () => SseStream,
+  ): Promise<void>;
+  /**
+   * Re-attaches to an assistant message's current attempt: 404 session_not_found or
+   * message_not_found (also for a user message) before `open` is called, then the stream.
+   */
+  events(sessionId: string, messageId: string, open: () => SseStream): Promise<void>;
   list(sessionId: string, page: ListMessagesInput): Promise<MessagePage>;
   /** Throws 404 message_not_found unless the message belongs to this session. */
   get(sessionId: string, messageId: string): Promise<Message>;
@@ -334,31 +352,64 @@ export function createMessagesService(deps: {
     }
   }
 
-  return {
-    async send(sessionId, input, { waitMs, apiKey }) {
-      const { admitted, attempt, reservation } = await admit(sessionId, input, apiKey);
-      const { userMessage, assistantMessage } = admitted.turn;
-      jobs.start({
-        assistantId: assistantMessage.id,
-        attempt,
-        sessionId,
-        userMessage: { seq: userMessage.seq, content: userMessage.content },
-        provider: admitted.adapter,
-        model: admitted.model,
-        maxOutputTokens: admitted.maxOutputTokens,
-        systemPrompt: admitted.systemPrompt,
-        historyBudget: admitted.historyBudget,
-        apiKey: admitted.apiKey,
-        startedAtMonotonic: admitted.startedAtMonotonic,
-        reservation,
-      });
+  /** Admits a new turn and starts its job; returns the turn as admitted. */
+  async function start(
+    sessionId: string,
+    input: SendMessageInput,
+    apiKey: string | undefined,
+  ): Promise<{ turn: Turn; attempt: number }> {
+    const { admitted, attempt, reservation } = await admit(sessionId, input, apiKey);
+    const { userMessage, assistantMessage } = admitted.turn;
+    jobs.start({
+      assistantId: assistantMessage.id,
+      attempt,
+      sessionId,
+      userMessage: { seq: userMessage.seq, content: userMessage.content },
+      provider: admitted.adapter,
+      model: admitted.model,
+      maxOutputTokens: admitted.maxOutputTokens,
+      systemPrompt: admitted.systemPrompt,
+      historyBudget: admitted.historyBudget,
+      apiKey: admitted.apiKey,
+      startedAtMonotonic: admitted.startedAtMonotonic,
+      reservation,
+    });
+    return { turn: admitted.turn, attempt };
+  }
 
-      const outcome = await attach.json(assistantMessage.id, attempt, waitMs);
+  return {
+    async send(sessionId, input, { waitMs, apiKey, clientGone }) {
+      const { turn, attempt } = await start(sessionId, input, apiKey);
+      const { assistantMessage } = turn;
+      const outcome = await attach.json(assistantMessage.id, attempt, waitMs, clientGone);
       if (outcome === undefined) {
         // Deleted while generating, normally together with its session.
         throw (await sessionExists(db.drizzle, sessionId)) ? messageNotFound() : sessionNotFound();
       }
       return outcome;
+    },
+
+    async sendStreaming(sessionId, input, { apiKey }, open) {
+      const { turn, attempt } = await start(sessionId, input, apiKey);
+      await attach.sse(open(), turn.assistantMessage.id, attempt, turn);
+    },
+
+    async events(sessionId, messageId, open) {
+      // Stale reclaim first: a dead generating row is then reported as failed, not detached.
+      await reclaimStale(db.drizzle, sessionId, staleThresholdMs);
+      if (!(await sessionExists(db.drizzle, sessionId))) {
+        throw sessionNotFound();
+      }
+      // Undefined for a user message too: only assistant messages reply to another.
+      const turn = await findTurn(db.drizzle, messageId);
+      if (turn === undefined || turn.assistantMessage.sessionId !== sessionId) {
+        throw messageNotFound();
+      }
+      const { attempt } = turn.assistantMessage;
+      if (attempt === null) {
+        throw messageNotFound();
+      }
+      await attach.sse(open(), messageId, attempt, turn);
     },
 
     async list(sessionId, { limit, before }) {

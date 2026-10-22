@@ -11,21 +11,21 @@ database. The work lands as small test-first tickets, core requirements first, s
 repository runs and is documented at every step; what is not built yet is listed under
 [What I would do next](#what-i-would-do-next).
 
-| Assignment item (paraphrased)                                   | README section                                                               |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Manage many chat sessions: create, list, read, update, delete   | [Query support](#query-support)                                              |
-| Send a message, get the model's answer, keep the history        | [Sending a message](#sending-a-message), [Database schema](#database-schema) |
-| Cope with answers that take a long time                         | [Long-running answers](#long-running-answers-json-clients)                   |
-| Talk to a real LLM provider, with the user's own API key        | [Providers and API keys](#providers-and-api-keys)                            |
-| Start everything with one command                               | [Run with Docker](#run-with-docker)                                          |
-| An architecture diagram                                         | [Architecture](#architecture)                                                |
-| The database schema                                             | [Database schema](#database-schema)                                          |
-| What the API can query                                          | [Query support](#query-support)                                              |
-| How to run the tests, and how the code is tested                | [Test](#test), [Testing approach](#testing-approach)                         |
-| Two or three build-versus-reuse decisions with their trade-offs | [Build vs reuse](#build-vs-reuse)                                            |
-| Where the API documentation is                                  | [API documentation](#api-documentation)                                      |
-| Why it was built this way                                       | [`docs/adr`](docs/adr)                                                       |
-| Bonus items: streaming, a local model, a public deployment      | Not built yet, see [What I would do next](#what-i-would-do-next)             |
+| Assignment item (paraphrased)                                   | README section                                                                         |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Manage many chat sessions: create, list, read, update, delete   | [Query support](#query-support)                                                        |
+| Send a message, get the model's answer, keep the history        | [Sending a message](#sending-a-message), [Database schema](#database-schema)           |
+| Cope with answers that take a long time                         | [Long-running answers](#long-running-answers-json-clients)                             |
+| Talk to a real LLM provider, with the user's own API key        | [Providers and API keys](#providers-and-api-keys)                                      |
+| Start everything with one command                               | [Run with Docker](#run-with-docker)                                                    |
+| An architecture diagram                                         | [Architecture](#architecture)                                                          |
+| The database schema                                             | [Database schema](#database-schema)                                                    |
+| What the API can query                                          | [Query support](#query-support)                                                        |
+| How to run the tests, and how the code is tested                | [Test](#test), [Testing approach](#testing-approach)                                   |
+| Two or three build-versus-reuse decisions with their trade-offs | [Build vs reuse](#build-vs-reuse)                                                      |
+| Where the API documentation is                                  | [API documentation](#api-documentation)                                                |
+| Why it was built this way                                       | [`docs/adr`](docs/adr)                                                                 |
+| Bonus items: streaming, a local model, a public deployment      | [Streaming](#streaming-sse); the others: [What I would do next](#what-i-would-do-next) |
 
 ## Prerequisites
 
@@ -107,6 +107,8 @@ be positive whole numbers of milliseconds, at most one hour.
 | `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                     |
 | `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                               |
 | `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                       |
+| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                     |
+| `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                    |
 | `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                       |
 | `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000) |
 | `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                  |
@@ -182,19 +184,20 @@ Index `(last_activity_at DESC, id DESC)` serves the session list.
 
 ## Query support
 
-| Endpoint                          | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /sessions`                  | 201 + `Location`. Provider/model default to the configuration                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `GET /sessions`                   | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `GET /sessions/:id`               | 404 `session_not_found` if missing, 400 for a malformed id                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `PATCH /sessions/:id`             | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `DELETE /sessions/:id`            | 204, then 404                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `POST /sessions/:id/messages`     | `{ "content", "provider"?, "model"? }` (content 1–16,000 characters, not blank; unknown fields are a 400). `provider`/`model` override the session's pair for this turn only. Waits a bounded time (see below): 200 `{ userMessage, assistantMessage }`, 502 problem details with both messages when it failed (`code` is the answer's `errorCode`), 202 with both messages while it is still generating. 422 `provider_unavailable` / `model_not_supported` for a pair that does not resolve, 422 `input_too_long` when the message cannot fit the model (see [Limits](#limits)), 409 `session_busy` while the session's previous answer is generating, 503 `server_busy` / `provider_busy` with `Retry-After: 10` at a capacity limit or while the server shuts down |
-| `GET /sessions/:id/messages`      | `?limit=` 1–200 (default 50), `?before=` a message id of this session; newest page first, ascending `seq` within a page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `GET /sessions/:id/messages/:mid` | One message, including the partial text of an answer being generated; `Cache-Control: no-store`; 404 `message_not_found` outside this session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `GET /providers`                  | Enabled providers, whether they need a key, their catalogued models                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `GET /health`                     | Liveness, no dependencies                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `GET /health/ready`               | 200 when the database answers and its migrations match this build                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Endpoint                                 | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /sessions`                         | 201 + `Location`. Provider/model default to the configuration                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `GET /sessions`                          | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `GET /sessions/:id`                      | 404 `session_not_found` if missing, 400 for a malformed id                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `PATCH /sessions/:id`                    | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `DELETE /sessions/:id`                   | 204, then 404                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `POST /sessions/:id/messages`            | `{ "content", "provider"?, "model"? }` (content 1–16,000 characters, not blank; unknown fields are a 400). `provider`/`model` override the session's pair for this turn only. With `Accept: text/event-stream` an event stream ([Streaming](#streaming-sse)); otherwise waits a bounded time (see below): 200 `{ userMessage, assistantMessage }`, 502 problem details with both messages when it failed (`code` is the answer's `errorCode`), 202 with both messages while it is still generating. 422 `provider_unavailable` / `model_not_supported` for a pair that does not resolve, 422 `input_too_long` when the message cannot fit the model (see [Limits](#limits)), 409 `session_busy` while the session's previous answer is generating, 503 `server_busy` / `provider_busy` with `Retry-After: 10` at a capacity limit or while the server shuts down |
+| `GET /sessions/:id/messages`             | `?limit=` 1–200 (default 50), `?before=` a message id of this session; newest page first, ascending `seq` within a page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `GET /sessions/:id/messages/:mid`        | One message, including the partial text of an answer being generated; `Cache-Control: no-store`; 404 `message_not_found` outside this session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `GET /sessions/:id/messages/:mid/events` | Event stream of an assistant message: the text so far, then the rest live ([Streaming](#streaming-sse)); 404 `message_not_found` unless it is an assistant message of this session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `GET /providers`                         | Enabled providers, whether they need a key, their catalogued models                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `GET /health`                            | Liveness, no dependencies                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `GET /health/ready`                      | 200 when the database answers and its migrations match this build                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 A message list page holds the newest `limit` messages below `before` (or the newest overall),
 in ascending `seq`. `nextBefore` is the id of the page's first item when older messages exist,
@@ -238,7 +241,7 @@ flowchart LR
     end
   end
 
-  client -- "HTTP, JSON" --> routes
+  client -- "HTTP: JSON or SSE" --> routes
   routes --> services
   services --> jobs
   services --> registry
@@ -296,6 +299,7 @@ job (in process) ── no time left of GENERATION_DEADLINE_MS since t0? → fai
   ▼ finally: drop the key, release capacity, leave the job map, close the bus
 JSON response ── waits for the job's end or the effective wait, whichever is first,
                  then reads both rows: 200, 502 problem details, or 202 + Location
+SSE response  ── message.created (snapshot), then the bus's deltas, then done or error
 ```
 
 Every rule that must survive a restart or a second process lives in PostgreSQL: the row lock,
@@ -348,6 +352,67 @@ shorter than `GENERATION_DEADLINE_MS + TERMINAL_WRITE_BUDGET_MS` is allowed; the
 notice at startup that long answers will then end in 202.
 `Preference-Applied` reports which preferences were honoured; it promises neither completion
 nor an exact wait. See [ADR 0004](docs/adr/0004-async-request-reply.md).
+
+## Streaming (SSE)
+
+Send with `Accept: text/event-stream` and the answer arrives as server-sent events while it is
+generated. Refusals found before the stream starts (400, 404, 409, 422, 503) are ordinary
+problem details; once the stream has started the status is 200 and a failed answer is the
+`error` event.
+
+The server compares q-values. It streams only when `text/event-stream` is listed by name with
+a q above 0 and above the q of `application/json`, which `application/*` and `*/*` also match.
+A tie, a wildcard alone, or no `Accept` answers JSON:
+
+- `text/event-stream` and `text/event-stream, application/json;q=0.9` stream;
+- `application/json, text/event-stream;q=0.5`, `text/event-stream, */*` and
+  `text/event-stream;q=0` answer JSON.
+
+Every response of the send route carries `Vary: Accept`.
+
+```sh
+curl -N -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
+  -H 'Accept: text/event-stream' -d '{"content":"Hello"}'
+# event: message.created
+# data: {"userMessage":{...},"assistantMessage":{"id":"<assistant id>","status":"generating","content":"",...}}
+#
+# event: delta
+# data: {"id":"<assistant id>","attempt":1,"text":"Hel"}
+#
+# event: done
+# data: {"assistantMessage":{"id":"<assistant id>","status":"completed","content":"Hello…","usage":{...},...}}
+curl -N localhost:3000/sessions/<id>/messages/<assistant id>/events   # re-attach at any time
+```
+
+| Event              | Data                                 | Meaning                                                                        |
+| ------------------ | ------------------------------------ | ------------------------------------------------------------------------------ |
+| `message.created`  | `{ userMessage, assistantMessage }`  | Always first: both messages as they are now; the content may already have text |
+| `delta`            | `{ id, attempt, text }`              | Text after the snapshot, each piece exactly once                               |
+| `done`             | `{ assistantMessage }`               | Completed, with usage; the stream ends                                         |
+| `error`            | `{ code, detail, assistantMessage }` | Failed (the `errorCode` table below); the stream ends                          |
+| `message.detached` | `{ assistantMessage }`               | Being generated where this server cannot follow it: poll the message instead   |
+
+- **Closing the connection never stops the answer.** It is generated and stored as usual; read
+  it with `GET /sessions/:id/messages/:mid` or follow it again with `…/events`. A JSON client
+  that got a 202 can follow the same answer there too.
+- **Re-attaching** sends the text so far in `message.created` and then only the rest, with no
+  gap and no duplicate. A finished message gets `message.created` and `done` or `error`; a
+  message left `generating` by a crashed process gets `message.detached` until stale reclaim
+  fails it as `interrupted` (after that, `error`). There is no `Last-Event-ID`: a reconnect
+  always starts from a fresh snapshot.
+- **Proxies.** A `: ping` comment every 15 s (`SSE_PING_INTERVAL_MS`) keeps idle connections
+  open; responses carry
+  `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`, and the API never
+  compresses them. Proxies that still buffer deliver the events late; JSON with polling works
+  everywhere.
+- **Slow clients** that stop reading are disconnected once more than 256 KiB would be waiting
+  for them (`SSE_BUFFER_LIMIT_BYTES`); the answer is still stored. A single event written while
+  nothing is waiting always goes out, however large.
+- **Configurable.** The ping interval (`SSE_PING_INTERVAL_MS`, 15 s by default) and the buffer
+  limit (`SSE_BUFFER_LIMIT_BYTES`, 256 KiB by default) are set in the environment; see
+  [Configuration](#configuration).
+
+See [ADR 0006](docs/adr/0006-sse-reattach.md).
 
 ## Failure handling
 
@@ -536,8 +601,8 @@ pnpm test:unit   # unit and lint tests only; no Docker needed
 pnpm test        # everything; Docker must be running (testcontainers)
 ```
 
-Integration tests need Docker; `pnpm test` runs at most two test files at a time to keep memory
-low on a laptop.
+Integration tests need Docker; `pnpm test` runs at most two integration test files at a time
+to keep memory low on a laptop (unit tests run first, unrestricted).
 
 ### Testing approach
 
@@ -552,7 +617,7 @@ queries check that no column holds an API key, and the crash-recovery tests inse
 | ---------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Unit             | `test/unit`, `test/lint` | Pure pieces: configuration, catalog, `Prefer` parsing, context assembly, cursors, the scrubber, deadline arithmetic, timeout races, the terminal-write budget, shutdown timing, the OpenAPI file; the dependency-direction rule |
 | Adapter contract | `test/adapters`          | `OpenAiCompatibleProvider` against an msw-mocked upstream API                                                                                                                                                                   |
-| Integration      | `test/integration`       | Nearly every behaviour, through HTTP: `buildApp()` and `inject()` against a real PostgreSQL 17, with a fake LLM provider                                                                                                        |
+| Integration      | `test/integration`       | Nearly every behaviour, through HTTP: `buildApp()` and `inject()` against a real PostgreSQL 17, with a fake LLM provider; event streams over a real socket (`test/helpers/sse-client.ts`) where timing matters                  |
 | Process          | `test/process`           | The built server and migration entries as child processes (startup errors, signals, a shutdown that cannot finish), and Node's server timeouts on a real listening socket                                                       |
 | CI only          | `.github/workflows`      | The container image, the `docker compose` stack, migration and OpenAPI drift, and the live hosted-model checks                                                                                                                  |
 
@@ -580,9 +645,13 @@ only the `live-llm` workflow runs it, with the repository secret: on pushes to `
 or on a pull request from this repository labelled `live-llm`. A second job of that workflow
 starts the built image with `docker compose`, the server's key and a CI-only catalog copy that
 caps answers at 32 tokens, creates an `nvidia` session and asks one question through
-`POST /sessions/:id/messages` (JSON, `Prefer: wait=150`). It passes only with a completed,
-non-empty answer, prints just the answer and its usage, and fails if a response or the
-container logs contain a key-shaped string. Neither job is a required check.
+`POST /sessions/:id/messages` (JSON, `Prefer: wait=150`), then once more as an event stream
+(`Accept: text/event-stream`), which must end with `done`. It passes only with a completed,
+non-empty answer each way. In a second session it sends "My name is Ada" and then asks for the
+name, and the second answer must contain "Ada", which shows the first turn reached the model
+as history. It prints just the answers and their usage, and fails if a response or
+the container logs (which must not be empty) contain a key-shaped string. It runs after the
+adapter job, so the two never call NVIDIA at the same time. Neither job is a required check.
 
 **Not tested on purpose.** The quality of real model answers (the live checks prove the path,
 not the content); mutation testing; load and performance; running more than one API process,
@@ -617,8 +686,6 @@ A first version of this list; the final submission pass completes it.
 
 **Still being built for v1**, each as its own ticket:
 
-- Streaming (SSE) and re-attaching to a running answer
-  ([#9](https://github.com/shaun0457/llm-chat-backend/issues/9))
 - Idempotent send with client-supplied message ids
   ([#10](https://github.com/shaun0457/llm-chat-backend/issues/10))
 - A local model via Ollama as an optional compose profile

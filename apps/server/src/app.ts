@@ -140,7 +140,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     db,
     registry,
     jobs,
-    attach: createAttach({ jobs, readTurn: (assistantId) => findTurn(db.drizzle, assistantId) }),
+    attach: createAttach({
+      jobs,
+      readTurn: (assistantId) => findTurn(db.drizzle, assistantId),
+      log: app.log,
+    }),
     defaultSystemPrompt: config.defaultSystemPrompt,
     clock,
     staleThresholdMs,
@@ -149,6 +153,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   void app.register(messagesRoutes, {
     service: messages,
     jsonWait: { defaultMs: config.jsonDefaultWaitMs, maxMs: config.jsonMaxWaitMs },
+    sse: config,
   });
   // Before the server stops accepting: running generations are aborted and store failed /
   // cancelled, so waiting responses finish instead of holding the close open.

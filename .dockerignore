@@ -2,6 +2,7 @@
 **/dist
 **/.turbo
 **/coverage
+**/.openapi-build
 .git
 .github
 .husky

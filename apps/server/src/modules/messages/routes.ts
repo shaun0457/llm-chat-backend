@@ -1,6 +1,8 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 
+import { prefersEventStream } from "../../http/accept.js";
 import { ProblemError } from "../../http/problem-details.js";
+import { type SseOptions, openSseStream } from "../../http/sse.js";
 import { type WaitConfig, effectiveWaitMs, parsePrefer, preferenceApplied } from "./prefer.js";
 import {
   failedTurnProblem,
@@ -11,6 +13,7 @@ import {
   sendMessageBody,
   sendMessageHeaders,
   sessionIdParams,
+  sseResponse,
   turnResponse,
 } from "./schemas.js";
 import type { MessagesService } from "./service.js";
@@ -26,6 +29,11 @@ const preferenceAppliedHeader = {
     "The preferences honoured: respond-async, or wait=<seconds waited at most> (the cap " +
     "when the request asked for more). Absent when none applied. Not a completion guarantee.",
 };
+const varyHeader = {
+  type: "string",
+  enum: ["Accept"],
+  description: "The response form (JSON or event stream) depends on Accept",
+};
 const noStoreHeader = {
   type: "string",
   enum: ["no-store"],
@@ -35,16 +43,25 @@ const noStoreHeader = {
 export const messagesRoutes: FastifyPluginAsyncZod<{
   service: MessagesService;
   jsonWait: WaitConfig;
-}> = async (app, { service, jsonWait }) => {
+  sse: SseOptions;
+}> = async (app, { service, jsonWait, sse }) => {
   app.post(
     "/sessions/:id/messages",
     {
+      // Before validation, so every answer of this route says that Accept chose its form; an
+      // event stream keeps it, as headers set before the hijack are copied (sse.ts).
+      onRequest: async (_request, reply) => {
+        void reply.header("vary", "Accept");
+      },
       schema: {
-        summary: "Send a message and wait a bounded time for the answer",
+        summary: "Send a message; stream the answer or wait a bounded time for it",
         description:
           "Stores the user message and a generating assistant message, then generates the " +
           "answer with the session's provider and model, or with the body's provider/model " +
-          "for this turn only. The response waits for the answer " +
+          "for this turn only. With Accept: text/event-stream the response is an event " +
+          "stream (see the 200 response); errors found before it starts are ordinary problem " +
+          "details with the statuses below. Otherwise (JSON) the response waits for the " +
+          "answer " +
           "at most the effective wait (Prefer: wait=N, otherwise the server's default wait, " +
           "always capped by its maximum; none with Prefer: respond-async): 200 with both " +
           "messages when it " +
@@ -67,9 +84,14 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
         body: sendMessageBody,
         response: {
           200: {
-            description: "The answer completed within the wait",
-            headers: { "Preference-Applied": preferenceAppliedHeader },
-            content: { "application/json": { schema: turnResponse } },
+            description:
+              "JSON: the answer completed within the wait. Event stream: the answer as it is " +
+              "generated (generation failures arrive as an error event, the status stays 200)",
+            headers: { "Preference-Applied": preferenceAppliedHeader, "Vary": varyHeader },
+            content: {
+              "application/json": { schema: turnResponse },
+              "text/event-stream": { schema: sseResponse },
+            },
           },
           202: {
             description:
@@ -85,24 +107,39 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
               "Retry-After": { type: "integer", description: "Seconds to wait before polling" },
               "Cache-Control": noStoreHeader,
               "Preference-Applied": preferenceAppliedHeader,
+              "Vary": varyHeader,
             },
             content: { "application/json": { schema: turnResponse } },
           },
           502: {
             description: "The answer failed within the wait",
-            headers: { "Preference-Applied": preferenceAppliedHeader },
+            headers: { "Preference-Applied": preferenceAppliedHeader, "Vary": varyHeader },
             content: { "application/problem+json": { schema: failedTurnProblem } },
           },
         },
       },
     },
     async (request, reply) => {
+      if (prefersEventStream(request.headers.accept)) {
+        // Prefer applies to JSON responses only.
+        await service.sendStreaming(
+          request.params.id,
+          request.body,
+          { apiKey: request.headers["x-llm-api-key"] },
+          () => openSseStream(reply, sse),
+        );
+        return reply;
+      }
       // Node joins repeated Prefer lines into one comma-separated value.
       const { prefer } = request.headers;
       const preferences = parsePrefer(prefer === undefined ? [] : [prefer]);
+      // The response is not sent before the wait ends, so a close now means the client left.
+      const clientGone = new AbortController();
+      reply.raw.once("close", () => clientGone.abort());
       const outcome = await service.send(request.params.id, request.body, {
         waitMs: effectiveWaitMs(preferences, jsonWait),
         apiKey: request.headers["x-llm-api-key"],
+        clientGone: clientGone.signal,
       });
       const applied = preferenceApplied(preferences, jsonWait);
       const headers: Record<string, string> =
@@ -183,6 +220,37 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
       // 404 is not cached either.
       void reply.header("cache-control", "no-store");
       return service.get(request.params.id, request.params.mid);
+    },
+  );
+
+  app.get(
+    "/sessions/:id/messages/:mid/events",
+    {
+      schema: {
+        summary: "Follow an answer as an event stream",
+        description:
+          "Re-attaches to an assistant message's current attempt, whatever the Accept header: " +
+          "message.created with both messages as they are now (the text so far), then the " +
+          "remaining deltas exactly once and done or error. A message that is already " +
+          "completed or failed gets message.created and done or error; one that is being " +
+          "generated where this server cannot follow it (another process, or a lost " +
+          "generation not yet failed as interrupted) gets message.created and " +
+          "message.detached: poll the message instead. The stream then ends. 404 " +
+          "session_not_found; message_not_found unless it is an assistant message of this " +
+          "session.",
+        tags: ["messages"],
+        params: messageParams,
+        response: {
+          200: {
+            description: "The answer as an event stream",
+            content: { "text/event-stream": { schema: sseResponse } },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      await service.events(request.params.id, request.params.mid, () => openSseStream(reply, sse));
+      return reply;
     },
   );
 };

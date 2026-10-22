@@ -150,7 +150,8 @@ export type Upstream = {
 
 /**
  * An msw-mocked OpenAI-compatible upstream for one test file. Unhandled requests fail the test,
- * so nothing reaches a real network. Responders are reset after each test.
+ * so nothing reaches a real network; only requests to 127.0.0.1 (the app on a real socket)
+ * pass through. Responders are reset after each test.
  */
 export function useUpstream(): Upstream {
   const requests: RecordedRequest[] = [];
@@ -170,7 +171,16 @@ export function useUpstream(): Upstream {
     }),
   );
 
-  beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+  beforeAll(() =>
+    server.listen({
+      // The app under test itself, listening on loopback, is reached for real.
+      onUnhandledRequest: (request, print) => {
+        if (new URL(request.url).hostname !== "127.0.0.1") {
+          print.error();
+        }
+      },
+    }),
+  );
   afterEach(() => {
     requests.length = 0;
     queue = [];

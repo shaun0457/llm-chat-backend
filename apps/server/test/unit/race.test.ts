@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { TIMED_OUT, untilAbort, withTimeout } from "../../src/modules/messages/race.js";
+import { TIMED_OUT, abortRace, untilAbort, withTimeout } from "../../src/modules/messages/race.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -83,5 +83,41 @@ describe("untilAbort", () => {
 
     await expect(untilAbort(work, controller.signal)).rejects.toBe(reason);
     rejectWork(new Error("late"));
+  });
+});
+
+describe("abortRace", () => {
+  it("passes each promise's value through while the signal is not aborted", async () => {
+    const races = abortRace(new AbortController().signal);
+
+    await expect(races.race(Promise.resolve(1))).resolves.toBe(1);
+    await expect(races.race(Promise.resolve(2))).resolves.toBe(2);
+    races.dispose();
+  });
+
+  it("rejects the pending race with the abort reason", async () => {
+    const controller = new AbortController();
+    const races = abortRace(controller.signal);
+    const pending = races.race(new Promise<never>(() => {}));
+
+    controller.abort(new Error("stopped"));
+
+    await expect(pending).rejects.toThrow("stopped");
+    await expect(races.race(Promise.resolve(3))).rejects.toThrow("stopped");
+  });
+
+  it("listens to the signal once for any number of races, until disposed", async () => {
+    const controller = new AbortController();
+    const add = vi.spyOn(controller.signal, "addEventListener");
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const races = abortRace(controller.signal);
+
+    for (let index = 0; index < 100; index += 1) {
+      await races.race(Promise.resolve(index));
+    }
+    races.dispose();
+
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });
