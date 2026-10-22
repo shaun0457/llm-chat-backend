@@ -21,6 +21,8 @@ export type FakeScript = {
   gate?: Promise<void>;
   /** How many chunks to emit before waiting at the gate. Default: all of them. */
   gateAfter?: number;
+  /** After the chunks (and after `gate`), wait for this promise (or the abort signal). */
+  finishGate?: Promise<void>;
   /** After the chunks, wait until the signal aborts; never finishes on its own. */
   hang?: boolean;
   /** False: end the stream without a finish event, as a broken upstream might. */
@@ -107,6 +109,9 @@ export class FakeLlmProvider implements LlmProvider {
     }
     if (script.gate !== undefined && gateAfter === deltas.length) {
       await Promise.race([script.gate, untilAborted(signal)]);
+    }
+    if (script.finishGate !== undefined) {
+      await Promise.race([script.finishGate, untilAborted(signal)]);
     }
     if (script.hang === true) {
       await untilAborted(signal);
