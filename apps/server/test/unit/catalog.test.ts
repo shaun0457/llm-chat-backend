@@ -28,6 +28,19 @@ function catalogError(input: unknown): CatalogError {
 }
 
 describe("model catalog", () => {
+  it("ships only NVIDIA models that passed the live check (ADR 0008, V3)", () => {
+    // Re-run the live-llm workflow before adding a model here.
+    const catalog = loadCatalog(DEFAULT_MODEL_CATALOG_PATH);
+
+    expect(catalog.provider("nvidia")).toMatchObject({
+      requiresKey: true,
+      defaultModel: "meta/llama-3.2-11b-vision-instruct",
+    });
+    expect(catalog.provider("nvidia")?.models.map((model) => model.id)).toEqual([
+      "meta/llama-3.2-11b-vision-instruct",
+    ]);
+  });
+
   it("ships a default catalog with the keyless demo provider", () => {
     const catalog = loadCatalog(DEFAULT_MODEL_CATALOG_PATH);
 

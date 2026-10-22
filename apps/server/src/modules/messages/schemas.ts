@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { API_KEY_PATTERN } from "../../credentials/api-key.js";
+
 // Lengths count UTF-16 code units (JavaScript string length), as for sessions. PostgreSQL text
 // cannot hold U+0000, so it is rejected here rather than failing the insert.
 const content = z
@@ -22,7 +24,7 @@ export const sendMessageBody = z.strictObject({ content });
 
 /** Fastify merges the validated headers over the raw ones, so the other headers stay as sent. */
 export const sendMessageHeaders = z.object({
-  prefer: z
+  "prefer": z
     .string()
     .optional()
     .describe(
@@ -32,6 +34,16 @@ export const sendMessageHeaders = z.object({
         "unless configured); " +
         "respond-async: answer at once without waiting. respond-async wins when both are " +
         "sent. Unknown or malformed preferences are ignored, never an error.",
+    ),
+  "x-llm-api-key": z
+    .string()
+    // Validated without echoing the value: the message names the rule only.
+    .regex(API_KEY_PATTERN, "must be 1-512 visible ASCII characters")
+    .optional()
+    .describe(
+      "Your own API key for this generation's provider. Used for this one generation, " +
+        "then dropped: never stored, logged or returned. Without it the server's own key " +
+        "for the provider is used, if it has one; providers with requiresKey: false need none.",
     ),
 });
 

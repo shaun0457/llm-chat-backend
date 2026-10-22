@@ -5,6 +5,8 @@ import type { IncomingMessage } from "node:http";
 
 import { type Clock, systemClock } from "./clock.js";
 import type { AppConfig } from "./config.js";
+import { REDACTED } from "./credentials/scrub.js";
+import { serializeError } from "./credentials/serialize-error.js";
 import type { Db } from "./db/client.js";
 import { createReadinessCheck } from "./db/readiness.js";
 import { registerApiDocs } from "./http/plugins.js";
@@ -53,11 +55,14 @@ export function jobShutdownWaitMs(
 const VALID_REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 
 /**
- * Credential headers when a request's headers are logged as `headers` or `req.headers`.
- * Not covered: headers nested in error objects (e.g. an upstream SDK error); the credentials
- * ticket adds error scrubbing.
+ * Credential headers when a request's headers are logged as `headers` or `req.headers`, and
+ * `apiKey` fields up to three levels deep. Errors are covered by the `err` serializer, which
+ * writes allowlisted fields only.
  */
 const REDACTED_PATHS = [
+  "apiKey",
+  "*.apiKey",
+  "*.*.apiKey",
   'req.headers["x-llm-api-key"]',
   "req.headers.authorization",
   'req.headers["proxy-authorization"]',
@@ -79,7 +84,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({
     logger: {
       level: config.logLevel,
-      redact: { paths: REDACTED_PATHS, censor: "[REDACTED]" },
+      redact: { paths: REDACTED_PATHS, censor: REDACTED },
+      serializers: { err: serializeError },
       ...(logStream === undefined ? {} : { stream: logStream }),
     },
     requestIdHeader: false,
@@ -130,6 +136,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     defaultSystemPrompt: config.defaultSystemPrompt,
     clock,
     staleThresholdMs,
+    operatorKeys: config.operatorKeys,
   });
   void app.register(messagesRoutes, {
     service: messages,

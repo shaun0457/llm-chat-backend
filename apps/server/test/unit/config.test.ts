@@ -39,6 +39,8 @@ describe("loadConfig", () => {
       terminalWriteBudgetMs: 10_000,
       reclaimGraceMs: 50_000,
       staleThresholdMs: 240_000,
+      nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
+      operatorKeys: {},
     });
   });
 
@@ -62,6 +64,8 @@ describe("loadConfig", () => {
       TERMINAL_STATEMENT_TIMEOUT_MS: "400",
       TERMINAL_WRITE_BUDGET_MS: "2000",
       RECLAIM_GRACE_MS: "1500",
+      NVIDIA_BASE_URL: "http://nim.internal:8000/v1",
+      NVIDIA_API_KEY: "operator-key-1",
     });
 
     expect(config).toEqual({
@@ -84,8 +88,50 @@ describe("loadConfig", () => {
       terminalWriteBudgetMs: 2_000,
       reclaimGraceMs: 1_500,
       staleThresholdMs: 63_500,
+      nvidiaBaseUrl: "http://nim.internal:8000/v1",
+      operatorKeys: { nvidia: "operator-key-1" },
     });
   });
+
+  it("takes <PROVIDER>_API_KEY for enabled providers only", () => {
+    const config = loadConfig({
+      DATABASE_URL,
+      PROVIDERS_ENABLED: "demo,local-llm",
+      LOCAL_LLM_API_KEY: "local-key",
+      NVIDIA_API_KEY: "not-enabled",
+    });
+
+    expect(config.operatorKeys).toEqual({ "local-llm": "local-key" });
+  });
+
+  it.each(["has space", "x".repeat(513), "café"])(
+    "rejects an operator key that is not 1-512 visible ASCII characters, without echoing it",
+    (key) => {
+      const error = configError({ DATABASE_URL, PROVIDERS_ENABLED: "nvidia", NVIDIA_API_KEY: key });
+
+      expect(error.message).toContain("NVIDIA_API_KEY");
+      expect(error.message).not.toContain(key);
+    },
+  );
+
+  it("rejects a NVIDIA_BASE_URL with credentials in it, without echoing them", () => {
+    const error = configError({
+      DATABASE_URL,
+      NVIDIA_BASE_URL: "https://user:pw0rd@nim.internal/v1",
+    });
+
+    expect(error.message).toContain("NVIDIA_BASE_URL");
+    expect(error.message).not.toContain("pw0rd");
+  });
+
+  it.each(["ftp://nim.internal/v1", "not a url"])(
+    "rejects a NVIDIA_BASE_URL that is not an http(s) URL: %s",
+    (url) => {
+      expect(configError({ DATABASE_URL, NVIDIA_BASE_URL: url }).message).toContain(
+        "NVIDIA_BASE_URL",
+      );
+    },
+  );
 
   it("requires DATABASE_URL", () => {
     expect(configError({}).message).toContain("DATABASE_URL");

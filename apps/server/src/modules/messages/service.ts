@@ -1,6 +1,8 @@
 import { v7 as uuidv7 } from "uuid";
 
 import type { Clock } from "../../clock.js";
+import { ApiKey } from "../../credentials/api-key.js";
+import { type OperatorKeys, decideCredential } from "../../credentials/decide.js";
 import type { Db, Tx } from "../../db/client.js";
 import { pgConstraint, pgErrorCode } from "../../db/errors.js";
 import { ProblemError } from "../../http/problem-details.js";
@@ -35,7 +37,7 @@ export type MessagesService = {
   send(
     sessionId: string,
     input: SendMessageInput,
-    options: { waitMs: number },
+    options: { waitMs: number; apiKey: string | undefined },
   ): Promise<JsonOutcome>;
   list(sessionId: string, page: ListMessagesInput): Promise<MessagePage>;
   /** Throws 404 message_not_found unless the message belongs to this session. */
@@ -87,6 +89,7 @@ type Admitted = {
   maxOutputTokens: number;
   systemPrompt: string | null;
   startedAtMonotonic: number;
+  apiKey: ApiKey;
 };
 
 export function createMessagesService(deps: {
@@ -99,9 +102,20 @@ export function createMessagesService(deps: {
   clock: Clock;
   /** A generating row older than this has no live job; see reclaimStale. */
   staleThresholdMs: number;
+  /** Secrets: the server's own key per provider id. */
+  operatorKeys: OperatorKeys;
 }): MessagesService {
-  const { db, registry, catalog, jobs, attach, defaultSystemPrompt, clock, staleThresholdMs } =
-    deps;
+  const {
+    db,
+    registry,
+    catalog,
+    jobs,
+    attach,
+    defaultSystemPrompt,
+    clock,
+    staleThresholdMs,
+    operatorKeys,
+  } = deps;
 
   // Admission steps, in the order the spec fixes. Later steps (replay, budget, credential,
   // expected history, capacity limits) slot in between these.
@@ -122,6 +136,7 @@ export function createMessagesService(deps: {
   function resolveStep(session: LockedSession): {
     adapter: LlmProvider;
     provider: string;
+    requiresKey: boolean;
     model: string;
     maxOutputTokens: number;
   } {
@@ -141,9 +156,30 @@ export function createMessagesService(deps: {
     return {
       adapter,
       provider: pair.provider,
+      requiresKey: catalog.provider(pair.provider)?.requiresKey ?? true,
       model: pair.model,
       maxOutputTokens: entry.maxOutputTokens,
     };
+  }
+
+  /** Decided once per new turn; the key goes only into the job. */
+  function credentialStep(
+    resolved: ReturnType<typeof resolveStep>,
+    headerKey: string | undefined,
+  ): ApiKey {
+    const decision = decideCredential(
+      headerKey,
+      { id: resolved.provider, requiresKey: resolved.requiresKey },
+      operatorKeys,
+    );
+    if ("rejected" in decision) {
+      throw new ProblemError(
+        422,
+        "llm_credential_missing",
+        "This provider needs an API key: send one in the X-LLM-Api-Key header",
+      );
+    }
+    return new ApiKey(decision.key);
   }
 
   async function busyStep(tx: Tx, sessionId: string): Promise<void> {
@@ -158,6 +194,7 @@ export function createMessagesService(deps: {
     session: LockedSession,
     content: string,
     resolved: ReturnType<typeof resolveStep>,
+    apiKey: ApiKey,
   ): Promise<Admitted> {
     const systemPrompt =
       session.systemPrompt ??
@@ -187,12 +224,14 @@ export function createMessagesService(deps: {
       maxOutputTokens: resolved.maxOutputTokens,
       systemPrompt,
       startedAtMonotonic,
+      apiKey,
     };
   }
 
   async function admit(
     sessionId: string,
     content: string,
+    headerKey: string | undefined,
   ): Promise<{ admitted: Admitted; attempt: number; reservation: Reservation }> {
     // Kept outside the callback only so a rollback (or a failed commit) can release it.
     let held: Reservation | undefined;
@@ -201,13 +240,14 @@ export function createMessagesService(deps: {
         const session = await lockStep(tx, sessionId);
         await reclaimStep(tx, sessionId);
         const resolved = resolveStep(session);
+        const apiKey = credentialStep(resolved, headerKey);
         await busyStep(tx, sessionId);
         const reservation = jobs.reserve();
         if (reservation === undefined) {
           throw serverBusy();
         }
         held = reservation;
-        const admitted = await insertStep(tx, sessionId, session, content, resolved);
+        const admitted = await insertStep(tx, sessionId, session, content, resolved, apiKey);
         const { attempt } = admitted.turn.assistantMessage;
         if (attempt === null) {
           // Thrown inside the transaction, so the turn is rolled back instead of left generating.
@@ -226,8 +266,8 @@ export function createMessagesService(deps: {
   }
 
   return {
-    async send(sessionId, input, { waitMs }) {
-      const { admitted, attempt, reservation } = await admit(sessionId, input.content);
+    async send(sessionId, input, { waitMs, apiKey }) {
+      const { admitted, attempt, reservation } = await admit(sessionId, input.content, apiKey);
       const { userMessage, assistantMessage } = admitted.turn;
       jobs.start({
         assistantId: assistantMessage.id,
@@ -238,7 +278,7 @@ export function createMessagesService(deps: {
         model: admitted.model,
         maxOutputTokens: admitted.maxOutputTokens,
         systemPrompt: admitted.systemPrompt,
-        apiKey: null,
+        apiKey: admitted.apiKey,
         startedAtMonotonic: admitted.startedAtMonotonic,
         reservation,
       });

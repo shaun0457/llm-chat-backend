@@ -30,13 +30,26 @@ export function detachedDb(): Db {
   });
 }
 
+/** The operator key test apps have for the key-requiring "other" provider of testProviders(). */
+export const TEST_OPERATOR_KEY = "test-operator-key-not-real";
+
 /**
  * Builds the app with test defaults: the shipped model catalog served by the real demo provider,
  * a detached database (pass `db` from useTestDatabase() for one that works). Tests register
- * extra routes before `ready()`.
+ * extra routes before `ready()`. `operatorKeys` replaces the configured operator keys; by
+ * default "other" has TEST_OPERATOR_KEY, as if OTHER_API_KEY were set.
  */
-export function makeTestApp(overrides: Partial<AppDeps> = {}): FastifyInstance {
-  const config = overrides.config ?? loadConfig(TEST_ENV);
+export function makeTestApp(
+  overrides: Partial<AppDeps> & { operatorKeys?: Readonly<Record<string, string>> } = {},
+): FastifyInstance {
+  const configured = overrides.config ?? loadConfig(TEST_ENV);
+  const config = {
+    ...configured,
+    operatorKeys: overrides.operatorKeys ?? {
+      other: TEST_OPERATOR_KEY,
+      ...configured.operatorKeys,
+    },
+  };
   const catalog = overrides.catalog ?? loadCatalog(config.modelCatalogPath);
   return buildApp({
     config,

@@ -5,6 +5,7 @@ import { type AppConfig, ConfigError, loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { CatalogError, type ModelCatalog, loadCatalog } from "./llm/catalog.js";
 import { DemoProvider } from "./llm/demo.js";
+import { OpenAiCompatibleProvider } from "./llm/openai-compatible.js";
 import { type ProviderRegistry, createRegistry } from "./llm/registry.js";
 
 /** Time to close the server and the pool after the jobs' wait. */
@@ -59,6 +60,7 @@ export async function main(env: Record<string, string | undefined> = process.env
     catalog = loadCatalog(config.modelCatalogPath);
     registry = createRegistry(catalog, config, {
       demo: new DemoProvider({ delayMs: config.demoDelayMs }),
+      nvidia: new OpenAiCompatibleProvider({ id: "nvidia", baseUrl: config.nvidiaBaseUrl }),
     });
   } catch (error) {
     if (error instanceof ConfigError || error instanceof CatalogError) {

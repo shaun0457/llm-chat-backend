@@ -3,9 +3,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import type { Clock } from "../../clock.js";
 import type { AppConfig } from "../../config.js";
+import type { ApiKey } from "../../credentials/api-key.js";
 import type { Db, Tx } from "../../db/client.js";
 import { pgErrorCode } from "../../db/errors.js";
 import { limitStatements } from "../../db/statement-timeout.js";
+import { failureOf } from "../../llm/errors.js";
 import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
@@ -28,7 +30,6 @@ import { TerminalWriteError, writeWithinBudget } from "./terminal-write.js";
  */
 export type Reservation = { release(): void };
 
-const UPSTREAM_ERROR_DETAIL = "The model provider returned an error.";
 const TIMEOUT_DETAIL = "The answer was not finished within the time limit.";
 const CANCELLED_DETAIL = "The server shut down before the answer was finished.";
 
@@ -115,8 +116,8 @@ export type JobSpec = {
   model: string;
   maxOutputTokens: number;
   systemPrompt: string | null;
-  /** Stays null until per-request credentials exist; never stored or logged. */
-  apiKey: string | null;
+  /** Decided at admission; never stored or logged, and cleared when the job ends. */
+  apiKey: ApiKey;
   /** The clock's reading taken just before the admitting insert: the deadline's origin. */
   startedAtMonotonic: number;
   reservation: Reservation;
@@ -313,7 +314,7 @@ export function createJobRegistry(deps: {
       controller.signal.throwIfAborted();
       const events = spec.provider.stream(request, {
         signal: controller.signal,
-        apiKey: spec.apiKey,
+        apiKey: spec.apiKey.reveal(),
       });
       for await (const event of untilAborted(events, controller.signal)) {
         if (event.type === "finish") {
@@ -380,8 +381,7 @@ export function createJobRegistry(deps: {
         ? await store((tx) =>
             failAssistant(tx, fence, {
               content,
-              errorCode: "llm_upstream_error",
-              errorDetail: UPSTREAM_ERROR_DETAIL,
+              ...failureOf(generationError),
             }),
           )
         : await store((tx) =>
@@ -473,6 +473,7 @@ export function createJobRegistry(deps: {
               log.error({ err: error, assistantId: spec.assistantId, step }, "job cleanup failed");
             }
           };
+          cleanup("key", () => spec.apiKey.clear());
           cleanup("release", () => spec.reservation.release());
           cleanup("leave", () => {
             if (jobs.get(spec.assistantId) === job) {
