@@ -3,6 +3,8 @@ import { v7 as uuidv7 } from "uuid";
 import type { Db } from "../../db/client.js";
 import { ProblemError } from "../../http/problem-details.js";
 import type { ModelPair, PairResolution, ProviderRegistry } from "../../llm/registry.js";
+import type { Job, JobRegistry } from "../messages/jobs.js";
+import { withTimeout } from "../messages/race.js";
 import { reclaimStale } from "../messages/reclaim.js";
 import { type SessionCursor, encodeCursor } from "./cursor.js";
 import {
@@ -12,8 +14,16 @@ import {
   insertSession,
   listSessionsPage,
   lockSession,
+  lockSessionActiveSince,
   updateSession,
 } from "./repository.js";
+
+/**
+ * How long a delete waits for the generations it aborted to end and free their capacity. An
+ * aborted job stops at once (a provider that ignores the signal is not waited for), so this
+ * only bounds a flush still in flight.
+ */
+const JOB_END_WAIT_MS = 1_000;
 import type { CreateSessionInput, Session, SessionPage, UpdateSessionInput } from "./schemas.js";
 
 export type SessionsService = {
@@ -23,10 +33,16 @@ export type SessionsService = {
   /** Under the row lock; a provider/model change is resolved against the current pair. */
   updateSession(id: string, input: UpdateSessionInput): Promise<Session>;
   /**
-   * The only way a session is deleted: lock the row, then delete it. The retention job and
-   * aborting a running generation extend this function rather than adding another path.
+   * The only way a session is deleted, by the endpoint and by retention: under the row lock,
+   * stale reclaim, then (with `inactiveBefore`) `skipped` when the session was active at or
+   * after that time, then every local job of the session is aborted (reason `deleted`) and
+   * the session is deleted with its messages. Resolves once those jobs have ended (waiting
+   * a moment at most), so their capacity is free again.
    */
-  deleteSession(id: string): Promise<"deleted" | "not_found">;
+  deleteSession(
+    id: string,
+    options?: { inactiveBefore?: string },
+  ): Promise<"deleted" | "not_found" | "skipped">;
   /** A live list: no snapshot, so activity between pages can move a session to page one. */
   listSessions(page: { limit: number; cursor: SessionCursor | undefined }): Promise<SessionPage>;
 };
@@ -49,8 +65,10 @@ export function createSessionsService(deps: {
   registry: ProviderRegistry;
   /** Session-scoped reads and writes reclaim stale turns first; see reclaimStale. */
   staleThresholdMs: number;
+  /** A deleted session's running generations are stopped through it. */
+  jobs: Pick<JobRegistry, "abortSession">;
 }): SessionsService {
-  const { db, registry, staleThresholdMs } = deps;
+  const { db, registry, staleThresholdMs, jobs } = deps;
 
   return {
     async createSession(input) {
@@ -100,14 +118,32 @@ export function createSessionsService(deps: {
       });
     },
 
-    async deleteSession(id) {
-      return db.tx(async (tx) => {
-        if ((await lockSession(tx, id)) === undefined) {
+    async deleteSession(id, options = {}) {
+      const { inactiveBefore } = options;
+      let aborted: Job[] = [];
+      const outcome = await db.tx(async (tx) => {
+        const locked =
+          inactiveBefore === undefined
+            ? await lockSession(tx, id)
+            : await lockSessionActiveSince(tx, id, inactiveBefore);
+        if (locked === undefined) {
           return "not_found" as const;
         }
+        await reclaimStale(tx, id, staleThresholdMs);
+        if ("active" in locked && locked.active) {
+          return "skipped" as const;
+        }
+        // By session, whatever the rows say after reclaim: a job whose row was just failed
+        // as interrupted may still be running here. An aborted job writes nothing more, so
+        // aborting before the commit is safe.
+        aborted = jobs.abortSession(id, "deleted");
         await deleteSessionRow(tx, id);
         return "deleted" as const;
       });
+      if (aborted.length > 0) {
+        await withTimeout(Promise.all(aborted.map((job) => job.finished)), JOB_END_WAIT_MS);
+      }
+      return outcome;
     },
 
     async listSessions({ limit, cursor }) {

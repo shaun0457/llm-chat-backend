@@ -122,10 +122,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
   void app.register(providersRoutes, { registry });
   const { staleThresholdMs } = config;
-  void app.register(sessionsRoutes, {
-    service: createSessionsService({ db, registry, staleThresholdMs }),
-  });
-
   const clock = deps.clock ?? systemClock;
   const jobs =
     deps.jobs ??
@@ -136,6 +132,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       log: app.log,
       capacity: capacityFor(config, catalog),
     });
+  const sessions = createSessionsService({ db, registry, staleThresholdMs, jobs });
+  void app.register(sessionsRoutes, { service: sessions });
+
   const messages = createMessagesService({
     db,
     registry,

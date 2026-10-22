@@ -158,13 +158,18 @@ export interface JobRegistry {
   /** The job running for this assistant message in this process, if any. */
   get(assistantId: string): Job | undefined;
   /**
+   * Aborts every job of this session running in this process, whatever its row's status, so
+   * that none writes again; returns them. For a session that is being deleted.
+   */
+  abortSession(sessionId: string, reason: "deleted"): Job[];
+  /**
    * Refuses new reservations, aborts every job (also those started meanwhile) and waits, at
    * most `waitMs` in all, for each to finish.
    */
   shutdown(waitMs: number): Promise<void>;
 }
 
-type RunningJob = Job & { controller: AbortController };
+type RunningJob = Job & { sessionId: string; controller: AbortController };
 
 /** The settings a job registry runs with; an AppConfig has them all. */
 export type JobTiming = Pick<
@@ -460,6 +465,7 @@ export function createJobRegistry(deps: {
       const job: RunningJob = {
         assistantId: spec.assistantId,
         attempt: spec.attempt,
+        sessionId: spec.sessionId,
         bus,
         finished,
         controller,
@@ -521,6 +527,17 @@ export function createJobRegistry(deps: {
     },
 
     get: (assistantId) => jobs.get(assistantId),
+
+    abortSession(sessionId, reason) {
+      const aborted: Job[] = [];
+      for (const job of jobs.values()) {
+        if (job.sessionId === sessionId) {
+          job.controller.abort(new JobStopped(reason));
+          aborted.push(job);
+        }
+      }
+      return aborted;
+    },
 
     async shutdown(waitMs) {
       closing = true;
