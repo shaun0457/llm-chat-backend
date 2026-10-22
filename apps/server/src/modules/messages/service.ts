@@ -12,6 +12,7 @@ import type { ProviderRegistry } from "../../llm/registry.js";
 import { type LockedSession, lockSession } from "../sessions/repository.js";
 import { resolvedPair, sessionNotFound } from "../sessions/service.js";
 import type { Attach, JsonOutcome } from "./attach.js";
+import { historyBudget } from "./context.js";
 import type { JobRegistry, Reservation } from "./jobs.js";
 import { reclaimStale } from "./reclaim.js";
 import {
@@ -88,6 +89,7 @@ type Admitted = {
   model: string;
   maxOutputTokens: number;
   systemPrompt: string | null;
+  historyBudget: number;
   startedAtMonotonic: number;
   apiKey: ApiKey;
 };
@@ -138,6 +140,7 @@ export function createMessagesService(deps: {
     provider: string;
     requiresKey: boolean;
     model: string;
+    contextWindow: number;
     maxOutputTokens: number;
   } {
     const pair = resolvedPair(registry.resolve({}, session));
@@ -158,8 +161,41 @@ export function createMessagesService(deps: {
       provider: pair.provider,
       requiresKey: catalog.provider(pair.provider)?.requiresKey ?? true,
       model: pair.model,
+      contextWindow: entry.contextWindow,
       maxOutputTokens: entry.maxOutputTokens,
     };
+  }
+
+  /** The frozen system prompt of a new turn: the session's own, else the server's default. */
+  function systemPromptOf(session: LockedSession): string | null {
+    return (
+      session.systemPrompt ??
+      (defaultSystemPrompt !== undefined && defaultSystemPrompt.length > 0
+        ? defaultSystemPrompt
+        : null)
+    );
+  }
+
+  /** Tokens left for earlier turns; throws 422 input_too_long when the input cannot fit. */
+  function budgetStep(
+    resolved: ReturnType<typeof resolveStep>,
+    systemPrompt: string | null,
+    content: string,
+  ): number {
+    const budget = historyBudget({
+      contextWindow: resolved.contextWindow,
+      maxOutputTokens: resolved.maxOutputTokens,
+      systemPrompt,
+      input: content,
+    });
+    if (budget < 0) {
+      throw new ProblemError(
+        422,
+        "input_too_long",
+        "The message is too long for the model's context window",
+      );
+    }
+    return budget;
   }
 
   /** Decided once per new turn; the key goes only into the job. */
@@ -194,13 +230,10 @@ export function createMessagesService(deps: {
     session: LockedSession,
     content: string,
     resolved: ReturnType<typeof resolveStep>,
+    systemPrompt: string | null,
+    budget: number,
     apiKey: ApiKey,
   ): Promise<Admitted> {
-    const systemPrompt =
-      session.systemPrompt ??
-      (defaultSystemPrompt !== undefined && defaultSystemPrompt.length > 0
-        ? defaultSystemPrompt
-        : null);
     // Immediately before the insert that sets started_at: the deadline then never ends later
     // than started_at + deadline, without comparing this clock with the database's.
     const startedAtMonotonic = clock.monotonicNow();
@@ -223,6 +256,7 @@ export function createMessagesService(deps: {
       model: resolved.model,
       maxOutputTokens: resolved.maxOutputTokens,
       systemPrompt,
+      historyBudget: budget,
       startedAtMonotonic,
       apiKey,
     };
@@ -240,6 +274,8 @@ export function createMessagesService(deps: {
         const session = await lockStep(tx, sessionId);
         await reclaimStep(tx, sessionId);
         const resolved = resolveStep(session);
+        const systemPrompt = systemPromptOf(session);
+        const budget = budgetStep(resolved, systemPrompt, content);
         const apiKey = credentialStep(resolved, headerKey);
         await busyStep(tx, sessionId);
         const reservation = jobs.reserve();
@@ -247,7 +283,16 @@ export function createMessagesService(deps: {
           throw serverBusy();
         }
         held = reservation;
-        const admitted = await insertStep(tx, sessionId, session, content, resolved, apiKey);
+        const admitted = await insertStep(
+          tx,
+          sessionId,
+          session,
+          content,
+          resolved,
+          systemPrompt,
+          budget,
+          apiKey,
+        );
         const { attempt } = admitted.turn.assistantMessage;
         if (attempt === null) {
           // Thrown inside the transaction, so the turn is rolled back instead of left generating.
@@ -278,6 +323,7 @@ export function createMessagesService(deps: {
         model: admitted.model,
         maxOutputTokens: admitted.maxOutputTokens,
         systemPrompt: admitted.systemPrompt,
+        historyBudget: admitted.historyBudget,
         apiKey: admitted.apiKey,
         startedAtMonotonic: admitted.startedAtMonotonic,
         reservation,

@@ -116,6 +116,8 @@ export type JobSpec = {
   model: string;
   maxOutputTokens: number;
   systemPrompt: string | null;
+  /** Tokens the earlier turns may use (see historyBudget); never negative. */
+  historyBudget: number;
   /** Decided at admission; never stored or logged, and cleared when the job ends. */
   apiKey: ApiKey;
   /** The clock's reading taken just before the admitting insert: the deadline's origin. */
@@ -314,8 +316,7 @@ export function createJobRegistry(deps: {
           systemPrompt: spec.systemPrompt,
           history,
           userMessage: spec.userMessage,
-          // Trimming is wired to the admitted model next.
-          historyBudget: Number.POSITIVE_INFINITY,
+          historyBudget: spec.historyBudget,
         }),
       };
       // Stopped already (e.g. admitted while the server closes): do not call the provider.
