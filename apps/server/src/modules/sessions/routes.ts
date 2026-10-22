@@ -132,6 +132,8 @@ export const sessionsRoutes: FastifyPluginAsyncZod<{ service: SessionsService }>
           ...problemResponses({
             400: "validation_error: the id is not a UUID",
             ...NOT_FOUND,
+            // Fastify parses a DELETE body too, although this route reads none.
+            ...BODY_PROBLEMS,
             ...COMMON_PROBLEMS,
           }),
         },

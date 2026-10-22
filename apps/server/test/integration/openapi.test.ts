@@ -111,7 +111,8 @@ describe("API documentation", () => {
       "post /sessions": ["400", "413", "415", "422", "429", "500"],
       "get /sessions/{id}": ["400", "404", "429", "500"],
       "patch /sessions/{id}": ["400", "404", "413", "415", "422", "429", "500"],
-      "delete /sessions/{id}": ["400", "404", "429", "500"],
+      // Fastify parses a DELETE body too.
+      "delete /sessions/{id}": ["400", "404", "413", "415", "429", "500"],
       "get /sessions/{id}/messages": ["400", "404", "429", "500"],
       "post /sessions/{id}/messages": [
         "400",
@@ -152,6 +153,10 @@ describe("API documentation", () => {
     ] as const) {
       expect(retryAfter(path, method, status)).toMatchObject({ schema: { type: "integer" } });
     }
+    // A JSON send whose turn is gone while its session remains answers message_not_found.
+    const sendNotFound: string = paths["/sessions/{id}/messages"].post.responses["404"].description;
+    expect(sendNotFound).toContain("session_not_found");
+    expect(sendNotFound).toContain("message_not_found");
   });
 
   it("names every assistant error code in the errorCode description", async () => {

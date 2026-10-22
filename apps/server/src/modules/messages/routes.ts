@@ -148,7 +148,9 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           },
           ...problemResponses({
             400: "validation_error: a malformed id, body or X-LLM-Api-Key (never echoed)",
-            404: "session_not_found",
+            404:
+              "session_not_found (also when the session was deleted while a JSON send " +
+              "waited); message_not_found when the turn is gone but the session still exists",
             409: "session_busy: an earlier answer in this session is still being generated",
             422:
               "message_id_conflict, provider_unavailable, model_not_supported, " +
