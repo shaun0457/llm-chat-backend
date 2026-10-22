@@ -193,7 +193,7 @@ export function createMessagesService(deps: {
       contextWindow: resolved.contextWindow,
       maxOutputTokens: resolved.maxOutputTokens,
       systemPrompt,
-      input: content,
+      message: content,
     });
     if (budget < 0) {
       throw new ProblemError(

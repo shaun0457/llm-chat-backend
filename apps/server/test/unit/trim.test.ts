@@ -25,7 +25,7 @@ describe("historyBudget", () => {
         contextWindow: 1000,
         maxOutputTokens: 100,
         systemPrompt: tokens(10),
-        input: tokens(20),
+        message: tokens(20),
       }),
     ).toBe(754);
   });
@@ -36,7 +36,7 @@ describe("historyBudget", () => {
         contextWindow: 1000,
         maxOutputTokens: 100,
         systemPrompt: null,
-        input: tokens(20),
+        message: tokens(20),
       }),
     ).toBe(772);
   });
@@ -48,7 +48,7 @@ describe("historyBudget", () => {
         contextWindow: 1005,
         maxOutputTokens: 100,
         systemPrompt: null,
-        input: tokens(20),
+        message: tokens(20),
       }),
     ).toBe(776);
   });
@@ -59,7 +59,7 @@ describe("historyBudget", () => {
         contextWindow: 1000,
         maxOutputTokens: 100,
         systemPrompt: null,
-        input: tokens(793),
+        message: tokens(793),
       }),
     ).toBe(-1);
     expect(
@@ -67,7 +67,7 @@ describe("historyBudget", () => {
         contextWindow: 1000,
         maxOutputTokens: 100,
         systemPrompt: null,
-        input: tokens(792),
+        message: tokens(792),
       }),
     ).toBe(0);
   });

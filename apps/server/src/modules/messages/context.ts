@@ -22,7 +22,10 @@ const MARGIN = 0.1;
 const messageTokens = (content: string) => estimateTokens(content) + MESSAGE_OVERHEAD_TOKENS;
 const turnTokens = (turn: HistoryTurn) => messageTokens(turn.question) + messageTokens(turn.answer);
 
-/** The cheapest possible turn: a non-blank question (≥ 1 token), an empty answer, overhead. */
+/**
+ * The cheapest possible turn: a question of at least 1 token (message content is never blank:
+ * sendMessageBody's `content` rule), an empty answer, and both messages' overhead.
+ */
 const MIN_TURN_TOKENS = 1 + 2 * MESSAGE_OVERHEAD_TOKENS;
 
 /** How many turns could fit `budget` at most; bounds how much history is read. */
@@ -32,14 +35,14 @@ export function maxTurnsWithin(budget: number): number {
 
 /**
  * The tokens left for earlier turns once the model's output reservation, a 10 % margin, the
- * system prompt and the new message (each with its overhead) are taken from the context
+ * system prompt and the new `message` (each with its overhead) are taken from the context
  * window. Negative: the new message cannot fit the model at all (422 input_too_long).
  */
 export function historyBudget(input: {
   contextWindow: number;
   maxOutputTokens: number;
   systemPrompt: string | null;
-  input: string;
+  message: string;
 }): number {
   const { contextWindow, maxOutputTokens, systemPrompt } = input;
   const system = systemPrompt !== null && systemPrompt.length > 0 ? messageTokens(systemPrompt) : 0;
@@ -48,7 +51,7 @@ export function historyBudget(input: {
     maxOutputTokens -
     Math.ceil(contextWindow * MARGIN) -
     system -
-    messageTokens(input.input)
+    messageTokens(input.message)
   );
 }
 
