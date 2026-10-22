@@ -22,8 +22,12 @@ describe("decideCredential", () => {
     expect(decideCredential(undefined, keyless, {})).toEqual({ key: null });
   });
 
-  it("still passes a header key on to a keyless provider", () => {
-    expect(decideCredential("from-header", keyless, {})).toEqual({ key: "from-header" });
+  it.each([
+    ["a header key", "from-header", {}],
+    ["an operator key", undefined, { local: "from-env" }],
+    ["both", "from-header", { local: "from-env" }],
+  ])("never gives a keyless provider a key, even with %s (#33)", (_label, header, operator) => {
+    expect(decideCredential(header, keyless, operator)).toEqual({ key: null });
   });
 
   it("rejects a provider that needs a key when there is none", () => {

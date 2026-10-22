@@ -7,15 +7,20 @@ export type OperatorKeys = Readonly<Record<string, string>>;
 export type CredentialDecision = { key: string | null } | { rejected: "llm_credential_missing" };
 
 /**
- * The key for one new send or retry, decided once at admission: the request's header, else
- * the operator's key for this provider, else none for a keyless provider, else rejected.
- * The header has already been validated by the route schema.
+ * The key for one new send or retry, decided once at admission. A keyless provider
+ * (`requiresKey: false`) never receives one: a header or operator key is ignored, so a
+ * caller's key never reaches a service that has no use for it. Otherwise: the request's
+ * header, else the operator's key for this provider, else rejected. The header has already
+ * been validated by the route schema.
  */
 export function decideCredential(
   headerKey: string | undefined,
   provider: ProviderMeta,
   operatorKeys: OperatorKeys,
 ): CredentialDecision {
+  if (!provider.requiresKey) {
+    return { key: null };
+  }
   if (headerKey !== undefined) {
     return { key: headerKey };
   }
@@ -25,5 +30,5 @@ export function decideCredential(
   if (operatorKey !== undefined) {
     return { key: operatorKey };
   }
-  return provider.requiresKey ? { rejected: "llm_credential_missing" } : { key: null };
+  return { rejected: "llm_credential_missing" };
 }
