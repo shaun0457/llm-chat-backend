@@ -27,6 +27,9 @@ const RECLAIM_SLACK_MS = 1_000;
 /** A positive whole number of milliseconds; zero or less would disable the safety net. */
 const timingMs = (fallback: number) =>
   z.coerce.number().int().min(1).max(MAX_TIMING_MS).default(fallback);
+/** At least one active generation; zero would refuse every send. */
+const capacityLimit = (fallback: number) =>
+  z.coerce.number().int().min(1).max(10_000).default(fallback);
 const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 const envSchema = z.object({
@@ -58,6 +61,8 @@ const envSchema = z.object({
   TERMINAL_STATEMENT_TIMEOUT_MS: timingMs(3_000),
   TERMINAL_WRITE_BUDGET_MS: timingMs(10_000),
   RECLAIM_GRACE_MS: timingMs(50_000),
+  MAX_ACTIVE_GENERATIONS: capacityLimit(8),
+  MAX_ACTIVE_PER_PROVIDER: capacityLimit(4),
   // Server configuration only: clients can never choose where a provider call goes.
   NVIDIA_BASE_URL: z
     .url({ protocol: /^https?$/ })
@@ -107,6 +112,13 @@ export type AppConfig = Readonly<{
    * (database clock) has no live job and is failed as `interrupted` by stale reclaim.
    */
   staleThresholdMs: number;
+  /** Active generations in this process at most; further sends get 503 server_busy. */
+  maxActiveGenerations: number;
+  /**
+   * Active generations per provider at most, unless its catalog entry sets maxConcurrency;
+   * further sends to that provider get 503 provider_busy.
+   */
+  maxActivePerProvider: number;
   /** Where the nvidia provider's OpenAI-compatible API lives. */
   nvidiaBaseUrl: string;
   /** `<PROVIDER>_API_KEY` of each enabled provider that has one, by provider id. Secrets. */
@@ -216,6 +228,8 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     reclaimGraceMs: parsed.RECLAIM_GRACE_MS,
     staleThresholdMs:
       parsed.GENERATION_DEADLINE_MS + parsed.TERMINAL_WRITE_BUDGET_MS + parsed.RECLAIM_GRACE_MS,
+    maxActiveGenerations: parsed.MAX_ACTIVE_GENERATIONS,
+    maxActivePerProvider: parsed.MAX_ACTIVE_PER_PROVIDER,
     nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,
     operatorKeys: readOperatorKeys(providersEnabled, present),
   });

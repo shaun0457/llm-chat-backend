@@ -51,12 +51,22 @@ export const sessionBusy = () =>
     "An answer is still being generated in this session; wait for it to finish",
   );
 
-/** Capacity refused: today only because the server is shutting down. */
+/** Capacity refused: the process is at its limit, or the server is shutting down. */
 export const serverBusy = () =>
   new ProblemError(
     503,
     "server_busy",
     "The server cannot start another answer right now; try again later",
+    undefined,
+    { "retry-after": "10" },
+  );
+
+/** The turn's provider is at its limit; other providers may still have room. */
+export const providerBusy = (provider: string, limit: number) =>
+  new ProblemError(
+    503,
+    "provider_busy",
+    `The provider "${provider}" is at its limit of ${limit} active ${limit === 1 ? "answer" : "answers"}; try again later`,
     undefined,
     { "retry-after": "10" },
   );
@@ -259,6 +269,17 @@ export function createMessagesService(deps: {
     };
   }
 
+  /** Synchronous, right before the insert; 503 with Retry-After when there is no room. */
+  function capacityStep(provider: string): Reservation {
+    const reservation = jobs.reserve(provider);
+    if (!("rejected" in reservation)) {
+      return reservation;
+    }
+    throw reservation.rejected === "provider_busy"
+      ? providerBusy(provider, reservation.limit)
+      : serverBusy();
+  }
+
   async function admit(
     sessionId: string,
     input: SendMessageInput,
@@ -276,10 +297,7 @@ export function createMessagesService(deps: {
         const budget = budgetStep(resolved, systemPrompt, content);
         const apiKey = credentialStep(resolved, headerKey);
         await busyStep(tx, sessionId);
-        const reservation = jobs.reserve();
-        if (reservation === undefined) {
-          throw serverBusy();
-        }
+        const reservation = capacityStep(resolved.provider);
         held = reservation;
         const admitted = await insertStep(
           tx,
