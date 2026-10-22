@@ -193,7 +193,7 @@ export function createMessagesService(deps: {
   async function admit(
     sessionId: string,
     content: string,
-  ): Promise<{ admitted: Admitted; reservation: Reservation }> {
+  ): Promise<{ admitted: Admitted; attempt: number; reservation: Reservation }> {
     // Kept outside the callback only so a rollback (or a failed commit) can release it.
     let held: Reservation | undefined;
     try {
@@ -208,7 +208,12 @@ export function createMessagesService(deps: {
         }
         held = reservation;
         const admitted = await insertStep(tx, sessionId, session, content, resolved);
-        return { admitted, reservation };
+        const { attempt } = admitted.turn.assistantMessage;
+        if (attempt === null) {
+          // Thrown inside the transaction, so the turn is rolled back instead of left generating.
+          throw new Error("an admitted assistant message has no attempt");
+        }
+        return { admitted, attempt, reservation };
       });
     } catch (error) {
       held?.release();
@@ -222,13 +227,8 @@ export function createMessagesService(deps: {
 
   return {
     async send(sessionId, input, { waitMs }) {
-      const { admitted, reservation } = await admit(sessionId, input.content);
+      const { admitted, attempt, reservation } = await admit(sessionId, input.content);
       const { userMessage, assistantMessage } = admitted.turn;
-      const { attempt } = assistantMessage;
-      if (attempt === null) {
-        reservation.release();
-        throw new Error("an admitted assistant message has no attempt");
-      }
       jobs.start({
         assistantId: assistantMessage.id,
         attempt,
