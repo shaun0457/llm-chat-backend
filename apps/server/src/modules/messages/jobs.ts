@@ -333,6 +333,9 @@ export function createJobRegistry(deps: {
           bus.append(event.text.replaceAll("\u0000", ""));
         } else {
           finish = { reason: event.reason, usage: event.usage };
+          // The answer is complete: do not wait for the provider to close its stream, during
+          // which a deadline or shutdown would turn a finished answer into a failure.
+          break;
         }
       }
     } catch (error) {

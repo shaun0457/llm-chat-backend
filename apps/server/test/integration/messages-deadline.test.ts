@@ -122,4 +122,28 @@ describe("deadline", () => {
       assistantMessage: { status: "failed", errorCode: "llm_timeout", content: "Deaf" },
     });
   });
+
+  it("stores an answer as soon as its finish event arrives, even if the stream stays open", async () => {
+    const config = loadConfig({ ...TEST_ENV, GENERATION_DEADLINE_MS: "300" });
+    const lingering: LlmProvider = {
+      id: "lingering",
+      async *stream() {
+        yield { type: "delta", text: "Complete" };
+        yield { type: "finish", reason: "stop", usage: null };
+        // The upstream connection is not closed yet (and the signal is ignored).
+        await new Promise(() => {});
+      },
+    };
+    app = makeTestApp({ db: testDb.db, config, ...testProviders({ llm: lingering }) });
+    const session = await createSession(app);
+
+    const response = await send(app, session.id, { content: "Hi" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().assistantMessage).toMatchObject({
+      status: "completed",
+      content: "Complete",
+      finishReason: "stop",
+    });
+  });
 });
