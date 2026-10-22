@@ -260,6 +260,28 @@ describe("SSE sends", () => {
     });
   });
 
+  describe("sse.shutdown", () => {
+    it("ends an open stream with error / cancelled when the server shuts down", async () => {
+      await start();
+      holdGeneration(["Hel", "lo"], 1);
+      const session = await createSession(app);
+      const stream = await streamSend(session.id, "Hi");
+      expect((await stream.nextEvent())?.event).toBe("message.created");
+
+      const closing = app.close();
+      const { frames, error } = await stream.drain();
+      await closing;
+
+      expect(error).toBeUndefined();
+      const last = eventsOf(frames).at(-1);
+      expect(last?.event).toBe("error");
+      expect(last?.data).toMatchObject({
+        code: "cancelled",
+        assistantMessage: { status: "failed", errorCode: "cancelled" },
+      });
+    });
+  });
+
   describe("sse.slow-consumer", () => {
     it("closes a connection that stops reading before its pending bytes pass the limit; the answer still completes", async () => {
       const logs = captureLogs();
