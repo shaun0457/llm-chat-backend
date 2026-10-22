@@ -25,6 +25,7 @@ repository runs and is documented at every step; what is not built yet is listed
 | Two or three build-versus-reuse decisions with their trade-offs | [Build vs reuse](#build-vs-reuse)                                                      |
 | Where the API documentation is                                  | [API documentation](#api-documentation)                                                |
 | Why it was built this way                                       | [`docs/adr`](docs/adr)                                                                 |
+| Safe to expose publicly: abuse limits, no authentication        | [Security considerations](#security-considerations), [Data retention](#data-retention) |
 | Bonus items: streaming, a local model, a public deployment      | [Streaming](#streaming-sse), [Local model](#local-model-ollama); deployment: to follow |
 
 ## Prerequisites
@@ -86,35 +87,44 @@ formatter: `pnpm --filter server start | pnpm --filter server exec pino-pretty`.
 Environment variables, validated at startup. An invalid value stops the process and names the
 variable, never its value. Blank values count as unset. `JSON_DEFAULT_WAIT_MS` must not
 exceed `JSON_MAX_WAIT_MS`. The four timing keys of [failure handling](#failure-handling) must
-be positive whole numbers of milliseconds, at most one hour.
+be positive whole numbers of milliseconds, at most one hour. `NVIDIA_BASE_URL` and
+`OLLAMA_BASE_URL` are checked only when their provider is enabled.
 
-| Variable                        | Default                      | Meaning                                                                                                         |
-| ------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                  | (required)                   | `postgres://` or `postgresql://` connection URL                                                                 |
-| `PORT`                          | `3000`                       | Listening port                                                                                                  |
-| `HOST`                          | `0.0.0.0`                    | Listening address                                                                                               |
-| `LOG_LEVEL`                     | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                                  |
-| `NODE_ENV`                      | `production`                 | `development`, `test` or `production`                                                                           |
-| `MODEL_CATALOG_PATH`            | bundled `config/models.json` | Model catalog file (see below)                                                                                  |
-| `PROVIDERS_ENABLED`             | `demo`                       | Comma-separated provider ids; each must be in the catalog                                                       |
-| `DEFAULT_PROVIDER`              | `demo`                       | Provider for sessions created without one; must be enabled                                                      |
-| `DEFAULT_MODEL`                 | the provider's default       | Model for sessions created with neither provider nor model; must be in the catalog                              |
-| `DEFAULT_SYSTEM_PROMPT`         | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                                  |
-| `FLUSH_INTERVAL_MS`             | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)                             |
-| `DEMO_DELAY_MS`                 | `50`                         | Pause between the demo provider's chunks (0–10,000)                                                             |
-| `JSON_DEFAULT_WAIT_MS`          | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                                    |
-| `JSON_MAX_WAIT_MS`              | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout                              |
-| `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`                            |
-| `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                     |
-| `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                               |
-| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                       |
-| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                     |
-| `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                    |
-| `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                       |
-| `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000) |
-| `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                  |
-| `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`    |
-| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                       |
+| Variable                        | Default                      | Meaning                                                                                                            |
+| ------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`                  | (required)                   | `postgres://` or `postgresql://` connection URL                                                                    |
+| `PORT`                          | `3000`                       | Listening port                                                                                                     |
+| `HOST`                          | `0.0.0.0`                    | Listening address                                                                                                  |
+| `LOG_LEVEL`                     | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                                     |
+| `NODE_ENV`                      | `production`                 | `development`, `test` or `production`                                                                              |
+| `MODEL_CATALOG_PATH`            | bundled `config/models.json` | Model catalog file (see below)                                                                                     |
+| `PROVIDERS_ENABLED`             | `demo`                       | Comma-separated provider ids; each must be in the catalog                                                          |
+| `DEFAULT_PROVIDER`              | `demo`                       | Provider for sessions created without one; must be enabled                                                         |
+| `DEFAULT_MODEL`                 | the provider's default       | Model for sessions created with neither provider nor model; must be in the catalog                                 |
+| `DEFAULT_SYSTEM_PROMPT`         | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                                     |
+| `FLUSH_INTERVAL_MS`             | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)                                |
+| `DEMO_DELAY_MS`                 | `50`                         | Pause between the demo provider's chunks (0–10,000)                                                                |
+| `JSON_DEFAULT_WAIT_MS`          | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                                       |
+| `JSON_MAX_WAIT_MS`              | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout                                 |
+| `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`                               |
+| `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                        |
+| `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                                  |
+| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                          |
+| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                        |
+| `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                       |
+| `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                          |
+| `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000)    |
+| `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                     |
+| `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`       |
+| `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                          |
+| `RATE_LIMIT_GENERAL_PER_MIN`    | `120`                        | Requests per minute per client address to every route except `/health*`; then 429 `rate_limited`                   |
+| `RATE_LIMIT_SEND_PER_MIN`       | `20`                         | Sends (`POST /sessions/:id/messages`, replays included) per minute per client address, on top of the general limit |
+| `TRUST_PROXY`                   | (none)                       | Comma-separated IPs or CIDR ranges of proxies whose `X-Forwarded-For` is believed; no hop counts, `true` or `*`    |
+| `CORS_ORIGINS`                  | (none)                       | Comma-separated `http(s)://host[:port]` origins allowed by CORS, or `*` alone; unset: no CORS headers              |
+| `RETENTION_DAYS`                | (none)                       | Delete sessions inactive for longer than this many days (1–3,650); unset: never                                    |
+| `RETENTION_INTERVAL_MS`         | `3600000`                    | How often retention runs while `RETENTION_DAYS` is set (10 ms to one day)                                          |
+| `DB_STATEMENT_TIMEOUT_MS`       | `10000`                      | Default limit of every database statement, lock waits included (100 ms to one hour)                                |
+| `REQUEST_TIMEOUT_MS`            | `30000`                      | How long a client may take to send a whole request; then 408. Never limits a response (1,000–600,000)              |
 
 The model catalog lists, per provider, whether it needs an API key, its default model, its
 models with context window and maximum output tokens, and optionally `maxConcurrency` (its
@@ -192,7 +202,7 @@ Index `(last_activity_at DESC, id DESC)` serves the session list.
 | `GET /sessions`                          | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `GET /sessions/:id`                      | 404 `session_not_found` if missing, 400 for a malformed id                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `PATCH /sessions/:id`                    | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `DELETE /sessions/:id`                   | 204, then 404                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `DELETE /sessions/:id`                   | 204 with all its messages, then 404; a running answer is stopped first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `POST /sessions/:id/messages`            | `{ "id"?, "content", "provider"?, "model"? }` (content 1–16,000 characters, not blank; unknown fields are a 400). `id` is your own UUID for the user message: repeating the send replays the stored turn, and an id used otherwise is 422 `message_id_conflict` ([Safe retries](#safe-retries)). `provider`/`model` override the session's pair for this turn only. With `Accept: text/event-stream` an event stream ([Streaming](#streaming-sse)); otherwise waits a bounded time (see below): 200 `{ userMessage, assistantMessage }`, 502 problem details with both messages when it failed (`code` is the answer's `errorCode`), 202 with both messages while it is still generating. 422 `provider_unavailable` / `model_not_supported` for a pair that does not resolve, 422 `input_too_long` when the message cannot fit the model (see [Limits](#limits)), 409 `session_busy` while the session's previous answer is generating, 503 `server_busy` / `provider_busy` with `Retry-After: 10` at a capacity limit or while the server shuts down |
 | `GET /sessions/:id/messages`             | `?limit=` 1–200 (default 50), `?before=` a message id of this session; newest page first, ascending `seq` within a page                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `GET /sessions/:id/messages/:mid`        | One message, including the partial text of an answer being generated; `Cache-Control: no-store`; 404 `message_not_found` outside this session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -237,8 +247,8 @@ flowchart LR
       ollama["ollama<br/>CPU only, 2 parallel answers, internal network"]
     end
     subgraph api["api: dist/index.js, one process built by buildApp()"]
-      routes["Fastify routes<br/>health · providers · sessions · messages<br/>zod schemas: validation and /openapi.json"]
-      services["sessions service<br/>messages service: admission transaction<br/>stale reclaim on every session-scoped request"]
+      routes["Fastify routes<br/>health · providers · sessions · messages<br/>zod schemas: validation and /openapi.json<br/>helmet · CORS · per-address rate limits"]
+      services["sessions service: deleteSession, retention interval<br/>messages service: admission transaction<br/>stale reclaim on every session-scoped request"]
       jobs["JobRegistry<br/>in-process jobs, one MessageBus each<br/>generation deadline, terminal-write budget<br/>process and provider capacity counters"]
       registry["ProviderRegistry<br/>ModelCatalog: config/models.json"]
       port{{"LlmProvider port"}}
@@ -412,6 +422,10 @@ curl -N localhost:3000/sessions/<id>/messages/<assistant id>/events   # re-attac
   message left `generating` by a crashed process gets `message.detached` until stale reclaim
   fails it as `interrupted` (after that, `error`). There is no `Last-Event-ID`: a reconnect
   always starts from a fresh snapshot.
+- **A deleted turn's stream ends without a final event.** Deleting the session stops the
+  generation at once and closes every open stream of it cleanly, with no `done` or `error`
+  event; following it again (`…/events`) then answers 404. A JSON send that was still waiting
+  for the answer gets 404 `session_not_found`.
 - **Proxies.** A `: ping` comment every 15 s (`SSE_PING_INTERVAL_MS`) keeps idle connections
   open; responses carry
   `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`, and the API never
@@ -516,6 +530,11 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot hav
 | History sent to the model      | the model's history budget, see below                        | the oldest whole turns are left out                                      |
 | Output per attempt             | the catalog's `maxOutputTokens`                              | finish reason `length`                                                   |
 | Wall time per attempt          | 180 s (`GENERATION_DEADLINE_MS`)                             | failed / `llm_timeout`                                                   |
+| Requests per client address    | 120 a minute (`RATE_LIMIT_GENERAL_PER_MIN`), not `/health*`  | 429 `rate_limited`, `Retry-After` in seconds                             |
+| Sends per client address       | 20 a minute (`RATE_LIMIT_SEND_PER_MIN`), replays included    | 429 `rate_limited`, `Retry-After` in seconds                             |
+| Request body                   | 128 KiB                                                      | 413 `request_error`                                                      |
+| Time to send a request         | 30 s (`REQUEST_TIMEOUT_MS`), never the response              | 408, the connection is closed                                            |
+| One database statement         | 10 s (`DB_STATEMENT_TIMEOUT_MS`), lock waits included        | 500 `internal_error`, logged                                             |
 
 - **Capacity** is checked at admission, after the busy check and right before the turn is
   inserted, and taken synchronously. There is no queue or waiting room: a full server or
@@ -692,6 +711,82 @@ requests from this repository labelled `local-llm`, and by hand. It caches the m
 runs and is not a required check. The script works against any base URL and provider, for
 example `node apps/server/scripts/smoke-local-llm.ts --base-url http://127.0.0.1:3000 --provider demo`.
 
+## Security considerations
+
+**There is no authentication.** Sessions are global: anyone who can reach the API, and on the
+public demo that is anyone, can list, read, change and delete every session and its messages.
+Do not put anything private into the demo. This is a deliberate trade-off for an evaluation
+service; the protections below limit abuse, not access.
+
+What is in place:
+
+- **Rate limits per client address** (in memory, per process, a fixed one-minute window):
+  120 requests a minute to every route except `/health` and `/health/ready`, and on top of
+  that 20 sends a minute (`POST /sessions/:id/messages`; a repeated send is a send and counts
+  too). Over a budget the answer is 429 problem details with code `rate_limited` and
+  `Retry-After`. IPv6 addresses are grouped by /64. The counters restart with the process.
+- **Client address.** Without `TRUST_PROXY` it is the socket's address and `X-Forwarded-For`
+  is ignored. With `TRUST_PROXY` (IPs or CIDR ranges only), a request from a listed proxy is
+  keyed by the nearest `X-Forwarded-For` address that is not itself a listed proxy, read from
+  the right; the leftmost value, which any client can write, never decides, and a socket that
+  is not listed cannot supply a chain. **The public deployment ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14)) runs with `TRUST_PROXY` unset
+  for now, so every client behind the platform's proxy shares one budget** (the proxy's
+  address): one heavy user can rate-limit everyone. Setting it needs the platform's
+  documented ingress addresses; client-IP attribution on the deployment is not verified yet
+  ([#25](https://github.com/shaun0457/llm-chat-backend/issues/25)).
+- **Capacity limits**: at most 8 answers at a time in the process and 4 per provider, each
+  over its limit answered at once with 503 ([Limits](#limits)).
+- **Request bounds**: bodies up to 128 KiB, 30 s to send a whole request (a slow body is cut
+  with 408; responses, event streams and JSON waits are never cut), 10 s per database
+  statement so no request waits forever behind a lock.
+- **Security headers** from `@fastify/helmet` on every response, problem details and event
+  streams included: a Content-Security-Policy of `'self'` (the API documentation at `/docs`
+  loads only its own assets, so it still works; `upgrade-insecure-requests` is left out so it
+  also works over plain HTTP), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, HSTS and the
+  cross-origin isolation headers.
+- **CORS** only for the origins in `CORS_ORIGINS` (or `*`); unset, no CORS headers are sent
+  and browsers on other origins cannot read responses. Credentials are never allowed (none
+  are used), and `Location`, `Retry-After`, `Preference-Applied` and `x-request-id` are
+  exposed to scripts.
+- **No server-side request forgery**: provider base URLs come only from server
+  configuration; clients choose a provider id, never a URL.
+- **API keys** never reach the database, logs or responses
+  ([Providers and API keys](#providers-and-api-keys)); upstream error text is scrubbed of keys,
+  bearer tokens and provider account identifiers before it is stored, returned or logged.
+- **Internal services**: PostgreSQL and Ollama are reachable only on the compose networks.
+
+Known gaps: one address may still hold every generation slot within its send budget, waiting
+JSON requests are bounded only by the send budget, and an operator key (if one is set) can be
+spent by any client. The `X-LLM-Api-Key` header is also forwarded to providers that need no
+key, such as `ollama`, because the credential order takes the header first; the exposure is
+low (Ollama's address is server-defined and internal to compose), and changing it is left to
+the owner. See [What I would do next](#what-i-would-do-next).
+
+**How authentication would be added.** First an API key per client (sent as a bearer token,
+stored hashed), later JWTs from an identity provider. Sessions get an `owner_id` column set at
+creation; every session-scoped query filters by it, so another owner's session answers 404
+exactly like a missing one. Rate limits, capacity and retention then key on the owner instead
+of the address, with per-owner quotas.
+
+## Data retention
+
+With `RETENTION_DAYS` set (the public deployment, [#14](https://github.com/shaun0457/llm-chat-backend/issues/14), sets `7`), the API deletes every session whose
+last activity (`lastActivityAt`: creation or the last message) is older than that many days,
+with all its messages. Locally it is unset and nothing is ever deleted.
+
+- It runs inside the API process every `RETENTION_INTERVAL_MS` (one hour by default) once the
+  server listens, and stops when the server shuts down. One run at a time; a failed run is
+  logged and the next one tries again. Each run logs how many sessions it deleted and skipped.
+- A run takes its cutoff from the database clock, then walks the candidates oldest first in
+  batches of 100 and deletes each through the same function as `DELETE /sessions/:id`. That
+  function locks the session and checks its activity again, so a session that received a
+  message after it was selected is skipped, not deleted.
+- Deleting a session (by a client or by retention) stops its running answer first: the
+  generation is aborted, writes nothing more, and its capacity slot is free when the delete
+  returns. Streams following it end without a final event.
+- A deleted session cannot be recovered; there is no soft delete or backup in the API.
+
 ## Build vs reuse
 
 **Reused: Fastify with zod route schemas and `@fastify/swagger`.** One zod schema per route
@@ -833,8 +928,6 @@ A first version of this list; the final submission pass completes it.
 
 **Still being built for v1**, each as its own ticket:
 
-- Stopping a generation when its session is deleted, retention of inactive sessions, rate
-  limits, security headers and CORS ([#12](https://github.com/shaun0457/llm-chat-backend/issues/12))
 - A public deployment of the demo ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14))
 
 **Extras after v1:**
@@ -851,6 +944,16 @@ A first version of this list; the final submission pass completes it.
 - Submission extras: a response-conformance test against the OpenAPI document, more diagrams, a
   load script and property-based tests
   ([#26](https://github.com/shaun0457/llm-chat-backend/issues/26))
+
+**Abuse protection, next steps** (see [Security considerations](#security-considerations)):
+
+- A per-address cap on active generations, or a capacity check before the admission
+  transaction: today one address can hold every generation slot within its send budget.
+- A per-model "caller must bring a key" flag, so an operator key cannot be spent by anyone.
+- Not forwarding `X-LLM-Api-Key` to keyless providers such as `ollama`; this changes the
+  documented credential order and is the owner's decision.
+- Looking a repeated send's id up before taking the session lock, so replays cost less.
+- A shared rate-limit store (e.g. Redis) once more than one instance runs.
 
 **Deliberately out of scope:**
 
