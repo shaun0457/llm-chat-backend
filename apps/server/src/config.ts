@@ -84,7 +84,10 @@ export type AppConfig = Readonly<{
   terminalStatementTimeoutMs: number;
   /** Limit of a whole terminal write, retries and backoff included. */
   terminalWriteBudgetMs: number;
-  /** Margin on top of deadline and terminal budget before a generating row counts as dead. */
+  /**
+   * Margin on top of deadline and terminal budget before a generating row counts as dead;
+   * always more than twice the statement timeout.
+   */
   reclaimGraceMs: number;
   /**
    * deadline + terminal budget + grace: a row still generating this long after `started_at`
@@ -129,6 +132,16 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       {
         key: "JSON_DEFAULT_WAIT_MS",
         reason: `greater than JSON_MAX_WAIT_MS; lower both (default ${DEFAULT_JSON_WAIT_MS})`,
+      },
+    ]);
+  }
+  // Past its deadline and terminal budget, a live job may still wait one statement timeout for
+  // a flush in flight and one more reading its final state back; reclaim must not beat it.
+  if (parsed.RECLAIM_GRACE_MS <= 2 * parsed.TERMINAL_STATEMENT_TIMEOUT_MS) {
+    throw new ConfigError([
+      {
+        key: "RECLAIM_GRACE_MS",
+        reason: "must be greater than twice TERMINAL_STATEMENT_TIMEOUT_MS",
       },
     ]);
   }

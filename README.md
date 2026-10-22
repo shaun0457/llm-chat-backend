@@ -72,7 +72,7 @@ be positive whole numbers of milliseconds, at most one hour.
 | `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`            |
 | `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                     |
 | `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown               |
-| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead (see below)                      |
+| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; > 2 × statement timeout         |
 
 The model catalog lists, per provider, whether it needs an API key, its default model and its
 models with context window and maximum output tokens. Unknown fields are rejected, so provider

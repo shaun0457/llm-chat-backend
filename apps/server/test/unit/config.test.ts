@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ConfigError, loadConfig } from "../../src/config.js";
+import { type AppConfig, ConfigError, loadConfig } from "../../src/config.js";
 import { DEFAULT_MODEL_CATALOG_PATH } from "../../src/paths.js";
 
 const DATABASE_URL = "postgres://app:pw@db.internal:5432/app";
@@ -59,7 +59,7 @@ describe("loadConfig", () => {
       JSON_DEFAULT_WAIT_MS: "0",
       JSON_MAX_WAIT_MS: "20000",
       GENERATION_DEADLINE_MS: "60000",
-      TERMINAL_STATEMENT_TIMEOUT_MS: "500",
+      TERMINAL_STATEMENT_TIMEOUT_MS: "400",
       TERMINAL_WRITE_BUDGET_MS: "2000",
       RECLAIM_GRACE_MS: "1000",
     });
@@ -80,7 +80,7 @@ describe("loadConfig", () => {
       jsonDefaultWaitMs: 0,
       jsonMaxWaitMs: 20_000,
       generationDeadlineMs: 60_000,
-      terminalStatementTimeoutMs: 500,
+      terminalStatementTimeoutMs: 400,
       terminalWriteBudgetMs: 2_000,
       reclaimGraceMs: 1_000,
       staleThresholdMs: 63_000,
@@ -147,6 +147,23 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ DATABASE_URL, JSON_DEFAULT_WAIT_MS: "5000", JSON_MAX_WAIT_MS: "5000" }),
     ).toMatchObject({ jsonDefaultWaitMs: 5_000, jsonMaxWaitMs: 5_000 });
+  });
+
+  it("rejects a reclaim grace that a live job could outlast after its deadline and budget", () => {
+    // A live job may wait one statement timeout for a flush and one more reading its final
+    // state back, on top of deadline and budget; reclaim must not fail it while it does.
+    const load = (): AppConfig =>
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "6000" });
+
+    expect(load).toThrow(ConfigError);
+    expect(load).toThrow(/RECLAIM_GRACE_MS/);
+    expect(load).toThrow(/TERMINAL_STATEMENT_TIMEOUT_MS/);
+  });
+
+  it("accepts a reclaim grace just above twice the statement timeout", () => {
+    expect(
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "6001" }),
+    ).toMatchObject({ reclaimGraceMs: 6_001 });
   });
 
   it("lists every invalid key", () => {
