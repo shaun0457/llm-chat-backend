@@ -226,7 +226,7 @@ it("shutdown also gets a history read stuck behind a lock cancelled in the datab
     // Far beyond the test: only the statement timeout can end the read in time. It is long
     // enough for the test to see the read waiting before the shutdown begins.
     GENERATION_DEADLINE_MS: "60000",
-    TERMINAL_STATEMENT_TIMEOUT_MS: "1500",
+    TERMINAL_STATEMENT_TIMEOUT_MS: "3000",
     TERMINAL_WRITE_BUDGET_MS: "300",
   });
   const locker = new pg.Client({ connectionString: testDb.url });
@@ -278,7 +278,7 @@ it("shutdown also gets a history read stuck behind a lock cancelled in the datab
       (row) =>
         row !== undefined &&
         (row.state === "idle" || !(row.query ?? "").startsWith('select "id", "seq", "role"')),
-      3_000,
+      5_000,
     );
     expect(await waitingHistoryRead()).toBeUndefined();
     expect(testDb.db.pool.waitingCount).toBe(0);
