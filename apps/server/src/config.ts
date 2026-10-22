@@ -50,7 +50,8 @@ const providerBaseUrl = (fallback: string) =>
 function isIpOrCidr(value: string): boolean {
   const [address = "", prefix, ...rest] = value.split("/");
   const version = isIP(address);
-  if (version === 0 || rest.length > 0) {
+  // A zone id (fe80::1%eth0) is not something a proxy address can be matched against.
+  if (version === 0 || rest.length > 0 || address.includes("%")) {
     return false;
   }
   if (prefix === undefined) {

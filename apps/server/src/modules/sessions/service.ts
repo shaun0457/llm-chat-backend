@@ -135,7 +135,10 @@ export function createSessionsService(deps: {
         }
         // By session, whatever the rows say after reclaim: a job whose row was just failed
         // as interrupted may still be running here. An aborted job writes nothing more, so
-        // aborting before the commit is safe.
+        // aborting before the commit is safe (#12, decision 1). Should the delete itself fail
+        // and roll back, the session stays with its turn left generating until stale reclaim
+        // fails it as interrupted. A send's job is registered synchronously once its
+        // admission commits, before this lock can be granted, so none is missed.
         aborted = jobs.abortSession(id, "deleted");
         await deleteSessionRow(tx, id);
         return "deleted" as const;

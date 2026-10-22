@@ -70,6 +70,7 @@ describe("delete.running", () => {
     expect(deleted.statusCode).toBe(204);
     // Aborted by the delete itself: no flush, deadline or later request was needed.
     expect(fake.signals[0]?.aborted).toBe(true);
+    expect(fake.signals[0]?.reason).toMatchObject({ stop: "deleted" });
     for (const message of [turn.userMessage, turn.assistantMessage]) {
       expect((await getMessage(app, doomed.id, message.id)).statusCode).toBe(404);
     }

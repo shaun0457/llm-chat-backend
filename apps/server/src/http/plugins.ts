@@ -11,6 +11,9 @@ import { ProblemError } from "./problem-details.js";
 type Transform = typeof jsonSchemaTransform;
 
 const ONE_MINUTE_MS = 60_000;
+/** Addresses each budget keeps counters for; about 10 MB at most per budget. */
+const RATE_LIMIT_ADDRESSES = 100_000;
+const HEALTH_ROUTES: ReadonlySet<string> = new Set(["/health", "/health/ready"]);
 
 /**
  * One rate-limit budget: a fixed one-minute window per client address (`request.ip`, IPv6
@@ -29,9 +32,14 @@ export type RateLimitPolicy = (request: FastifyRequest) => Promise<void>;
  * as separate hooks hold together instead (V2 in #12).
  */
 export function rateLimitPolicy(app: FastifyInstance, perMinute: number): RateLimitPolicy {
-  const check = app.createRateLimit({ max: perMinute, timeWindow: ONE_MINUTE_MS });
+  // `cache` is not in the plugin's types, but its in-memory store takes the size of its LRU
+  // map from these options (LocalStore.child); the default of 5,000 addresses would let anyone
+  // with more addresses push other clients' counters out.
+  const options = { max: perMinute, timeWindow: ONE_MINUTE_MS, cache: RATE_LIMIT_ADDRESSES };
+  const check = app.createRateLimit(options);
   return async (request) => {
     const result = await check(request);
+    // isAllowed: an allow-listed key; none is configured, so every request is counted.
     if (!result.isAllowed && result.isExceeded) {
       const seconds = String(Math.max(1, result.ttlInSeconds));
       throw new ProblemError(
@@ -84,12 +92,13 @@ export function registerSecurityHeaders(
 
 /** Health checks are never limited: the platform polls them. */
 function isHealthCheck(request: FastifyRequest): boolean {
-  return request.routeOptions.url?.startsWith("/health") === true;
+  return HEALTH_ROUTES.has(request.routeOptions.url ?? "");
 }
 
 /**
  * The general per-address limit on every request (unknown routes included) except the health
  * checks. Register before the routes; route-specific budgets (sends) add their own policy.
+ * CORS preflights are answered by @fastify/cors's own earlier hook and are not counted.
  */
 export function registerRateLimits(app: FastifyInstance, generalPerMinute: number): void {
   void app.register(fastifyRateLimit, { global: false });

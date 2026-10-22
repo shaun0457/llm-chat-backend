@@ -213,6 +213,7 @@ describe("loadConfig", () => {
       "10.0.0.0/",
       "10.0.0.256",
       "proxy.internal",
+      "fe80::1%eth0",
     ])("rejects %s: hop counts, true, wildcards and names are not an IP/CIDR list", (value) => {
       expect(configError({ DATABASE_URL, TRUST_PROXY: value }).message).toContain("TRUST_PROXY");
     });
