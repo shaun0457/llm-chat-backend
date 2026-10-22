@@ -111,6 +111,40 @@ describe("re-attaching with the events endpoint", () => {
       const done = (events[2]?.data as { assistantMessage: Message }).assistantMessage;
       expect(done).toMatchObject({ status: "completed", content: "abcd" });
     });
+
+    it("follows a live answer through a path with the session and message ids in upper case", async () => {
+      start();
+      const release = holdGeneration(["a", "b", "c"], 1);
+      const session = await createSession(app);
+      const { assistantMessage } = await sendAsync(session.id);
+      await eventually(
+        () => getMessage(app, session.id, assistantMessage.id),
+        (response) => response.json().content === "a",
+      );
+      const base = await listen(app);
+      const upperUrl = eventsUrl(session.id.toUpperCase(), assistantMessage.id.toUpperCase());
+      expect(upperUrl).not.toBe(eventsUrl(session.id, assistantMessage.id));
+
+      const stream = await openSse(`${base}${upperUrl}`);
+      expect(stream.status).toBe(200);
+      const created = await stream.nextEvent();
+      release();
+      const { frames, error } = await stream.drain();
+
+      expect(error).toBeUndefined();
+      expect(created?.event).toBe("message.created");
+      expect((created?.data as TurnBody).assistantMessage).toMatchObject({
+        id: assistantMessage.id,
+        status: "generating",
+        content: "a",
+      });
+      const events = eventsOf(frames);
+      expect(events.map(({ event }) => event)).toEqual(["delta", "delta", "done"]);
+      expect(events.slice(0, 2).map(({ data }) => data)).toEqual([
+        { id: assistantMessage.id, attempt: 1, text: "b" },
+        { id: assistantMessage.id, attempt: 1, text: "c" },
+      ]);
+    });
   });
 
   describe("events.after-202", () => {

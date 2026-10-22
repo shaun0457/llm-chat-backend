@@ -16,8 +16,11 @@ const timestamp = z
   .string()
   .describe("ISO-8601 UTC with microsecond precision, e.g. 2026-10-21T15:27:10.982364Z");
 
-export const sessionIdParams = z.object({ id: z.uuid() });
-export const messageParams = z.object({ id: z.uuid(), mid: z.uuid() });
+// Path ids in lower case, as PostgreSQL returns uuid values: compared with stored ids as
+// strings (the session of a replayed message) and used as keys of in-memory jobs.
+const pathId = () => z.uuid().toLowerCase();
+export const sessionIdParams = z.object({ id: pathId() });
+export const messageParams = z.object({ id: pathId(), mid: pathId() });
 
 // No length limit: an id that is not catalogued is a 422, whatever its length.
 const provider = z
@@ -35,8 +38,32 @@ const model = z
       "provider, or of the session's provider when none is given",
   );
 
+// A regex check, unlike a refine, is exported to the OpenAPI document; no flags, because
+// JSON Schema patterns carry none.
+const NOT_NIL_OR_MAX_UUID =
+  /^(?!(?:0{8}-0{4}-0{4}-0{4}-0{12}|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$)/;
+
 /** Strict: unknown fields are a 400, so later fields cannot be sent to a server ignoring them. */
 export const sendMessageBody = z.strictObject({
+  id: z
+    .uuid()
+    // Ids are global: a placeholder like the nil UUID would be taken by its first user.
+    .regex(NOT_NIL_OR_MAX_UUID, "must not be the nil or max UUID")
+    // Canonical like the path ids, should the id ever be compared as a string.
+    .toLowerCase()
+    // Zod leaves the format out of the document once a string has two patterns. Last: metadata
+    // belongs to one schema instance, and every further check makes a new one.
+    .meta({ format: "uuid" })
+    .optional()
+    .describe(
+      "Your own id for the user message (any UUID version, not the nil or max UUID; " +
+        "generate it at random), which makes the send safe to repeat: the same id with " +
+        "identical content (and, when given, the same provider and model) in the same " +
+        "session returns the stored turn instead of admitting a new one. Ids are global: one " +
+        "used by another message gives 422 message_id_conflict. Case does not matter; ids " +
+        "are returned in lower case. Without it the server generates a UUIDv7 and identical " +
+        "sends are not deduplicated",
+    ),
   content,
   provider: provider.optional(),
   model: model.optional(),

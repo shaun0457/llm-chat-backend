@@ -267,6 +267,21 @@ export async function findMessage(
   return row === undefined ? undefined : toMessage(row);
 }
 
+/** The message with this id, in whichever session it is. */
+export async function findAnyMessage(
+  db: Executor,
+  messageId: string,
+): Promise<Message | undefined> {
+  const [row] = await selectMessages(db).where(eq(messages.id, messageId));
+  return row === undefined ? undefined : toMessage(row);
+}
+
+/** The assistant message that answers this user message. */
+export async function findAnswer(db: Executor, userId: string): Promise<Message | undefined> {
+  const [row] = await selectMessages(db).where(eq(messages.replyToId, userId));
+  return row === undefined ? undefined : toMessage(row);
+}
+
 /** The user message and the assistant message answering it, by the assistant's id. */
 export async function findTurn(
   db: Executor,

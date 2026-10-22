@@ -16,6 +16,8 @@ import { historyBudget } from "./context.js";
 import type { JobRegistry, Reservation } from "./jobs.js";
 import { reclaimStale } from "./reclaim.js";
 import {
+  findAnswer,
+  findAnyMessage,
   findMessage,
   findSeq,
   findTurn,
@@ -29,6 +31,16 @@ import type { ListMessagesInput, Message, MessagePage, SendMessageInput, Turn } 
 
 const UNIQUE_VIOLATION = "23505";
 const ONE_GENERATING_INDEX = "messages_one_generating_per_session";
+/**
+ * The constraints a client id taken by a concurrent send violates: the user row's primary key,
+ * or the assistant row's reply_to_id, whichever row of the turn's insert is checked first.
+ */
+const CLIENT_ID_CONSTRAINTS: ReadonlySet<string> = new Set([
+  "messages_pkey",
+  "messages_reply_to_id_unique",
+]);
+/** Re-runs after a message id collision; the first re-run already resolves it. */
+const MAX_ADMISSION_RERUNS = 2;
 const TITLE_MAX_CODE_POINTS = 60;
 
 export type MessagesService = {
@@ -109,6 +121,19 @@ export function deriveTitle(content: string): string {
     .trimEnd()}…`;
 }
 
+/** A client id already used by a message that this request cannot be a repeat of. */
+export const messageIdConflict = (detail: string): ProblemError =>
+  new ProblemError(422, "message_id_conflict", detail);
+
+/** The attempt of a turn's assistant message, which every assistant row has. */
+function attemptOf(turn: Turn): number {
+  const { attempt } = turn.assistantMessage;
+  if (attempt === null) {
+    throw new Error("an assistant message has no attempt");
+  }
+  return attempt;
+}
+
 /** The turn as admitted, with what the job needs that the response does not show. */
 type Admitted = {
   turn: Turn;
@@ -120,6 +145,11 @@ type Admitted = {
   startedAtMonotonic: number;
   apiKey: ApiKey;
 };
+
+/** What admission decided: a new turn to generate, or the stored turn a repeated send names. */
+type Admission =
+  | { kind: "new"; admitted: Admitted; attempt: number; reservation: Reservation }
+  | { kind: "replay"; turn: Turn; attempt: number };
 
 export function createMessagesService(deps: {
   db: Db;
@@ -136,8 +166,8 @@ export function createMessagesService(deps: {
   const { db, registry, jobs, attach, defaultSystemPrompt, clock, staleThresholdMs, operatorKeys } =
     deps;
 
-  // Admission steps, in the order the spec fixes: lock, reclaim, resolve, budget, credential,
-  // busy, capacity, insert. Replay (#10) and the expected-history check (#23) slot in later.
+  // Admission steps, in the order the spec fixes: lock, reclaim, replay, resolve, budget,
+  // credential, busy, capacity, insert. The expected-history check (#23) slots in later.
 
   async function lockStep(tx: Tx, sessionId: string): Promise<LockedSession> {
     const session = await lockSession(tx, sessionId);
@@ -150,6 +180,46 @@ export function createMessagesService(deps: {
   /** A turn left generating by a crash or a failed final write no longer blocks the session. */
   async function reclaimStep(tx: Tx, sessionId: string): Promise<void> {
     await reclaimStale(tx, sessionId, staleThresholdMs);
+  }
+
+  /**
+   * The stored turn when the request repeats an earlier send (the same client id, in this
+   * session, with identical content and, where the request names them, the provider and model
+   * the turn was generated with); undefined when the id is new or absent. Any other use of an
+   * existing id is 422 message_id_conflict, whose detail never shows the stored message.
+   */
+  async function replayStep(
+    tx: Tx,
+    sessionId: string,
+    input: SendMessageInput,
+  ): Promise<Turn | undefined> {
+    if (input.id === undefined) {
+      return undefined;
+    }
+    const stored = await findAnyMessage(tx, input.id);
+    if (stored === undefined) {
+      return undefined;
+    }
+    if (stored.sessionId !== sessionId) {
+      throw messageIdConflict("The id is already used by a message in another session");
+    }
+    if (stored.role !== "user") {
+      throw messageIdConflict("The id is already used by an assistant message");
+    }
+    if (stored.content !== input.content) {
+      throw messageIdConflict("The content differs from the stored message with this id");
+    }
+    const answer = await findAnswer(tx, stored.id);
+    if (answer === undefined) {
+      throw new Error("a stored user message has no assistant message");
+    }
+    if (input.provider !== undefined && input.provider !== answer.provider) {
+      throw messageIdConflict("The provider differs from the one the stored turn used");
+    }
+    if (input.model !== undefined && input.model !== answer.model) {
+      throw messageIdConflict("The model differs from the one the stored turn used");
+    }
+    return { userMessage: stored, assistantMessage: answer };
   }
 
   /**
@@ -253,6 +323,7 @@ export function createMessagesService(deps: {
     tx: Tx,
     sessionId: string,
     session: LockedSession,
+    userId: string,
     content: string,
     resolved: ReturnType<typeof resolveStep>,
     systemPrompt: string | null,
@@ -264,7 +335,7 @@ export function createMessagesService(deps: {
     const startedAtMonotonic = clock.monotonicNow();
     const turn = await insertTurn(tx, {
       sessionId,
-      userId: uuidv7(),
+      userId,
       assistantId: uuidv7(),
       seq: session.nextSeq,
       content,
@@ -306,17 +377,24 @@ export function createMessagesService(deps: {
     }
   }
 
-  async function admit(
+  /** One run of the admission transaction. */
+  async function admitOnce(
     sessionId: string,
     input: SendMessageInput,
     headerKey: string | undefined,
-  ): Promise<{ admitted: Admitted; attempt: number; reservation: Reservation }> {
+  ): Promise<Admission> {
     // Kept outside the callback only so a rollback (or a failed commit) can release it.
     let held: Reservation | undefined;
     try {
-      return await db.tx(async (tx) => {
+      return await db.tx(async (tx): Promise<Admission> => {
         const session = await lockStep(tx, sessionId);
         await reclaimStep(tx, sessionId);
+        const replayed = await replayStep(tx, sessionId, input);
+        if (replayed !== undefined) {
+          // Nothing else applies to a repeated send: no key, catalog, budget, busy or capacity
+          // check, and no write. The commit keeps what reclaim may have changed.
+          return { kind: "replay", turn: replayed, attempt: attemptOf(replayed) };
+        }
         const { content } = input;
         const resolved = resolveStep(session, { provider: input.provider, model: input.model });
         const systemPrompt = systemPromptOf(session);
@@ -329,18 +407,16 @@ export function createMessagesService(deps: {
           tx,
           sessionId,
           session,
+          input.id ?? uuidv7(),
           content,
           resolved,
           systemPrompt,
           budget,
           apiKey,
         );
-        const { attempt } = admitted.turn.assistantMessage;
-        if (attempt === null) {
-          // Thrown inside the transaction, so the turn is rolled back instead of left generating.
-          throw new Error("an admitted assistant message has no attempt");
-        }
-        return { admitted, attempt, reservation };
+        // Thrown inside the transaction, so the turn is rolled back instead of left generating.
+        const attempt = attemptOf(admitted.turn);
+        return { kind: "new", admitted, attempt, reservation };
       });
     } catch (error) {
       held?.release();
@@ -352,13 +428,50 @@ export function createMessagesService(deps: {
     }
   }
 
-  /** Admits a new turn and starts its job; returns the turn as admitted. */
+  /**
+   * Admission, re-run when the client's id was inserted by a concurrent send to another
+   * session: the session lock does not serialise those, so the insert hits the primary key
+   * (or reply_to_id).
+   * The next run sees the committed row and answers 422 message_id_conflict (or a replay).
+   */
+  async function admit(
+    sessionId: string,
+    input: SendMessageInput,
+    headerKey: string | undefined,
+  ): Promise<Admission> {
+    let collision: unknown;
+    for (let run = 0; run <= MAX_ADMISSION_RERUNS; run += 1) {
+      try {
+        return await admitOnce(sessionId, input, headerKey);
+      } catch (error) {
+        const clientIdTaken =
+          input.id !== undefined &&
+          pgErrorCode(error) === UNIQUE_VIOLATION &&
+          CLIENT_ID_CONSTRAINTS.has(pgConstraint(error) ?? "");
+        if (!clientIdTaken) {
+          throw error;
+        }
+        collision = error;
+      }
+    }
+    // Unexpected: logged by the error handler and answered as 500 internal_error.
+    throw new Error("admission kept colliding on a message id", { cause: collision });
+  }
+
+  /**
+   * Admits a new turn and starts its job, or finds the turn a repeated send refers to; returns
+   * the turn as admitted or as stored, and the attempt to attach to.
+   */
   async function start(
     sessionId: string,
     input: SendMessageInput,
     apiKey: string | undefined,
   ): Promise<{ turn: Turn; attempt: number }> {
-    const { admitted, attempt, reservation } = await admit(sessionId, input, apiKey);
+    const admission = await admit(sessionId, input, apiKey);
+    if (admission.kind === "replay") {
+      return { turn: admission.turn, attempt: admission.attempt };
+    }
+    const { admitted, attempt, reservation } = admission;
     const { userMessage, assistantMessage } = admitted.turn;
     jobs.start({
       assistantId: assistantMessage.id,

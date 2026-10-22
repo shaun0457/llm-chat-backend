@@ -184,22 +184,27 @@ describe("JSON sends: Prefer, 202 and polling", () => {
   });
 
   describe("prefer.malformed", () => {
-    it.each(["wait=abc", "wait=-1, foo", "wait=1.5; x=y", 'handling=lenient, "wait"=3', ",,;"])(
-      "ignores %j: the default wait applies, no 400, nothing applied",
-      async (prefer) => {
-        start();
-        holdGeneration();
-        const session = await createSession(app);
+    it.each([
+      "wait=abc",
+      "wait=-1, foo",
+      "wait=1.5; x=y",
+      'handling=lenient, "wait"=3',
+      ",,;",
+      "respond-async=",
+      'respond-async="unterminated',
+    ])("ignores %j: the default wait applies, no 400, nothing applied", async (prefer) => {
+      start();
+      holdGeneration();
+      const session = await createSession(app);
 
-        const { value: response, elapsedMs } = await timed(() =>
-          send(app, session.id, { content: "Hi" }, { prefer }),
-        );
+      const { value: response, elapsedMs } = await timed(() =>
+        send(app, session.id, { content: "Hi" }, { prefer }),
+      );
 
-        expect(response.statusCode).toBe(202);
-        expect(elapsedMs).toBeGreaterThanOrEqual(190);
-        expect(response.headers["preference-applied"]).toBeUndefined();
-      },
-    );
+      expect(response.statusCode).toBe(202);
+      expect(elapsedMs).toBeGreaterThanOrEqual(190);
+      expect(response.headers["preference-applied"]).toBeUndefined();
+    });
   });
 
   describe("prefer.failure", () => {
@@ -260,24 +265,31 @@ describe("JSON sends: Prefer, 202 and polling", () => {
   describe("poll", () => {
     it("shows the current state on every poll, never cached, until the answer completes", async () => {
       start();
-      // Pauses 400 ms between its chunks, then holds until released.
-      const gate = createGate();
-      gates.push(gate.release);
-      fake.script({ deltas: ["one ", "two "], delayMs: 400, gate: gate.promise });
+      // Holds after its first chunk, and again before finishing, until each gate is released.
+      const second = createGate();
+      const finish = createGate();
+      gates.push(second.release, finish.release);
+      fake.script({
+        deltas: ["one ", "two "],
+        gate: second.promise,
+        gateAfter: 1,
+        finishGate: finish.promise,
+      });
       const session = await createSession(app);
       const sent = await send(app, session.id, { content: "Hi" }, { prefer: "respond-async" });
       expect(sent.statusCode).toBe(202);
       const poll = () => app.inject({ method: "GET", url: String(sent.headers.location) });
 
-      const first = await eventually(poll, (response) => response.json().content.length > 0);
-      const second = await eventually(poll, (response) => response.json().content === "one two ");
-      gate.release();
+      const afterOne = await eventually(poll, (response) => response.json().content.length > 0);
+      second.release();
+      const afterTwo = await eventually(poll, (response) => response.json().content === "one two ");
+      finish.release();
       const last = await eventually(poll, (response) => response.json().status !== "generating");
 
-      expect(first.json()).toMatchObject({ status: "generating", content: "one " });
-      expect(second.json()).toMatchObject({ status: "generating", content: "one two " });
+      expect(afterOne.json()).toMatchObject({ status: "generating", content: "one " });
+      expect(afterTwo.json()).toMatchObject({ status: "generating", content: "one two " });
       expect(last.json()).toMatchObject({ status: "completed", content: "one two " });
-      for (const response of [first, second, last]) {
+      for (const response of [afterOne, afterTwo, last]) {
         expect(response.statusCode).toBe(200);
         expect(response.headers["cache-control"]).toBe("no-store");
       }

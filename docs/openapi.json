@@ -868,7 +868,7 @@
         ]
       },
       "post": {
-        "description": "Stores the user message and a generating assistant message, then generates the answer with the session's provider and model, or with the body's provider/model for this turn only. With Accept: text/event-stream the response is an event stream (see the 200 response); errors found before it starts are ordinary problem details with the statuses below. Otherwise (JSON) the response waits for the answer at most the effective wait (Prefer: wait=N, otherwise the server's default wait, always capped by its maximum; none with Prefer: respond-async): 200 with both messages when it completed, 502 problem details with both messages when it failed, 202 with both messages when it is still being generated. Generation continues unless the server shuts down (the answer then fails as cancelled); the wait only decides the response. 404 session_not_found; 409 session_busy while an earlier answer in the session is still being generated; 422 provider_unavailable or model_not_supported when the requested or the session's pair does not resolve, input_too_long when the message and the system prompt cannot fit the model's context window with its output reservation, llm_credential_missing when the provider needs a key and neither X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed X-LLM-Api-Key (its value is never echoed); 503 with Retry-After: 10, server_busy when the server is at its limit of active answers or shutting down, provider_busy when the turn's provider is at its limit. Nothing is stored on any of these errors.",
+        "description": "Stores the user message and a generating assistant message, then generates the answer with the session's provider and model, or with the body's provider/model for this turn only. With Accept: text/event-stream the response is an event stream (see the 200 response); errors found before it starts are ordinary problem details with the statuses below. Otherwise (JSON) the response waits for the answer at most the effective wait (Prefer: wait=N, otherwise the server's default wait, always capped by its maximum; none with Prefer: respond-async): 200 with both messages when it completed, 502 problem details with both messages when it failed, 202 with both messages when it is still being generated. Generation continues unless the server shuts down (the answer then fails as cancelled); the wait only decides the response. A repeated send (the body's id names a user message of this session with identical content, and the provider/model, where given, of its turn) admits nothing: it answers with that turn as it is now, in the same form (200, 502 or 202; or the event stream: the snapshot, then live deltas while it is generating), without checking the key, the model, the session's activity or capacity. 404 session_not_found; 409 session_busy while an earlier answer in the session is still being generated; 422 message_id_conflict when the id is used by another message (another session, an assistant message, different content or a different provider/model), provider_unavailable or model_not_supported when the requested or the session's pair does not resolve, input_too_long when the message and the system prompt cannot fit the model's context window with its output reservation, llm_credential_missing when the provider needs a key and neither X-LLM-Api-Key nor a server key is available; 400 validation_error for a malformed X-LLM-Api-Key (its value is never echoed); 503 with Retry-After: 10, server_busy when the server is at its limit of active answers or shutting down, provider_busy when the turn's provider is at its limit. Nothing is stored on any of these errors.",
         "parameters": [
           {
             "in": "path",
@@ -919,6 +919,19 @@
                     "description": "1–16,000 characters, not only whitespace, no U+0000",
                     "maxLength": 16000,
                     "minLength": 1,
+                    "type": "string"
+                  },
+                  "id": {
+                    "allOf": [
+                      {
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "pattern": "^(?!(?:0{8}-0{4}-0{4}-0{4}-0{12}|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$)"
+                      }
+                    ],
+                    "description": "Your own id for the user message (any UUID version, not the nil or max UUID; generate it at random), which makes the send safe to repeat: the same id with identical content (and, when given, the same provider and model) in the same session returns the stored turn instead of admitting a new one. Ids are global: one used by another message gives 422 message_id_conflict. Case does not matter; ids are returned in lower case. Without it the server generates a UUIDv7 and identical sends are not deduplicated",
+                    "format": "uuid",
                     "type": "string"
                   },
                   "model": {

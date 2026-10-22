@@ -45,6 +45,25 @@ describe("prefer.parse", () => {
     },
   );
 
+  it.each([
+    "respond-async=",
+    'respond-async="unterminated',
+    'respond-async="a"b',
+    "respond-async=a b",
+  ])("ignores a malformed respond-async: %s", (value) => {
+    expect(parsePrefer([value])).toEqual(none);
+    expect(parsePrefer([`wait=5, ${value}`])).toEqual({ respondAsync: false, waitSeconds: 5 });
+  });
+
+  it("still honours respond-async with a well-formed value (the value has no meaning)", () => {
+    expect(parsePrefer(["respond-async=yes"]).respondAsync).toBe(true);
+    expect(parsePrefer(['respond-async="yes"']).respondAsync).toBe(true);
+  });
+
+  it("lets a malformed first respond-async win over a later valid one (only the first counts)", () => {
+    expect(parsePrefer(["respond-async=, respond-async"]).respondAsync).toBe(false);
+  });
+
   it("lets an invalid first wait win over a later valid one (RFC 7240 §2: only the first counts)", () => {
     expect(parsePrefer(["wait=abc, wait=5"]).waitSeconds).toBeNull();
   });
