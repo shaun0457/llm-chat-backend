@@ -51,19 +51,28 @@ function stopReasonOf(signal: AbortSignal): StopReason | undefined {
 }
 
 /**
- * What to log about a failed database write: its SQLSTATE and the innermost message, never
- * drizzle's own message, which repeats the query's parameters (the answer's text).
+ * What to log about a failure that may come from the database: its SQLSTATE when it has one
+ * and nothing else, because both drizzle's message (the query's parameters) and the
+ * database's own message can quote the answer's text. Without a SQLSTATE (a lost connection,
+ * the budget running out), the innermost error's name and message, which are the driver's or
+ * ours.
  */
-function describeFailure(error: unknown): { code: string | undefined; reason: string | undefined } {
+function describeFailure(
+  error: unknown,
+): { code: string } | { name: string | undefined; reason: string | undefined } {
+  const code = pgErrorCode(error);
+  if (code !== undefined) {
+    return { code };
+  }
   const seen = new Set<unknown>();
   let current = error;
-  let reason: string | undefined;
+  let innermost: Error | undefined;
   while (current instanceof Error && !seen.has(current)) {
     seen.add(current);
-    reason = current.message;
+    innermost = current;
     current = current.cause;
   }
-  return { code: pgErrorCode(error), reason };
+  return { name: innermost?.name, reason: innermost?.message };
 }
 
 /**
@@ -450,7 +459,10 @@ export function createJobRegistry(deps: {
                 "the terminal write did not succeed within its budget; stale reclaim will fail the turn",
               );
             } else {
-              log.error({ ...ids, err: error }, "the generation job failed unexpectedly");
+              log.error(
+                { ...ids, ...describeFailure(error) },
+                "the generation job failed unexpectedly",
+              );
             }
             end = "write_failed";
           },

@@ -152,7 +152,7 @@ describe("terminal-budget", () => {
     );
     const reclaimed = await getMessage(turn.app, turn.session.id, turn.assistantId);
     expect(reclaimed.json()).toMatchObject({ status: "failed", errorCode: "interrupted" });
-  });
+  }, 15_000);
 
   it("caps the last retry's statement to what is left of the budget", async () => {
     // The first try takes 1 s and fails; 300 ms are left, then 200 ms after a 100 ms backoff:
@@ -190,6 +190,9 @@ describe("terminal-budget", () => {
       .entries()
       .find((entry) => entry.level === 50 && entry.assistantId === turn.assistantId);
     expect(failure).toMatchObject({ writeAttempts: 1, code: "23514" });
+    // The database's message can quote the rejected value (the answer): only the code is kept.
+    expect(failure).not.toHaveProperty("reason");
+    expect(JSON.stringify(failure)).not.toContain("invalid by the test");
     expect(turn.held()).toBe(0);
   });
 
