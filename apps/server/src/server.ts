@@ -1,16 +1,26 @@
 import type { FastifyInstance } from "fastify";
 
-import { buildApp } from "./app.js";
+import { buildApp, jobShutdownWaitMs } from "./app.js";
 import { type AppConfig, ConfigError, loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { CatalogError, type ModelCatalog, loadCatalog } from "./llm/catalog.js";
 import { DemoProvider } from "./llm/demo.js";
 import { type ProviderRegistry, createRegistry } from "./llm/registry.js";
 
-const SHUTDOWN_TIMEOUT_MS = 10_000;
+/** Time to close the server and the pool after the jobs' wait. */
+const CLOSE_MARGIN_MS = 4_000;
+
+/**
+ * The forced-exit timeout: the jobs' wait (terminal-write budget + stop grace) plus a margin,
+ * so that aborted generations can store their final state first (15 s by default). A
+ * platform's stop grace period must be longer, or it kills the process first.
+ */
+export function shutdownTimeoutMs(config: AppConfig): number {
+  return jobShutdownWaitMs(config) + CLOSE_MARGIN_MS;
+}
 
 /** SIGTERM/SIGINT → app.close() → exit 0; a second signal or the timeout forces exit 1. */
-function handleShutdownSignals(app: FastifyInstance): void {
+function handleShutdownSignals(app: FastifyInstance, timeoutMs: number): void {
   let closing = false;
 
   const shutdown = (signal: NodeJS.Signals): void => {
@@ -24,7 +34,7 @@ function handleShutdownSignals(app: FastifyInstance): void {
     setTimeout(() => {
       app.log.error("graceful shutdown timed out, forcing exit");
       process.exit(1);
-    }, SHUTDOWN_TIMEOUT_MS).unref();
+    }, timeoutMs).unref();
 
     app.close().then(
       () => process.exit(0),
@@ -78,6 +88,6 @@ export async function main(env: Record<string, string | undefined> = process.env
     throw error;
   }
   app.addHook("onClose", () => db.close());
-  handleShutdownSignals(app);
+  handleShutdownSignals(app, shutdownTimeoutMs(config));
   await app.listen({ port: config.port, host: config.host });
 }
