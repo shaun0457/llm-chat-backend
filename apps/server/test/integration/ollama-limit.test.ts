@@ -52,7 +52,9 @@ describe("ollama.limit", () => {
   });
 
   /** Sends a turn whose ollama generation waits at a gate; returns once ollama was called. */
-  async function holdOpen(session: Session): Promise<{ open: () => Promise<LightMyRequestResponse> }> {
+  async function holdOpen(
+    session: Session,
+  ): Promise<{ open: () => Promise<LightMyRequestResponse> }> {
     const gate = createGate();
     gates.push(gate.release);
     ollama.script({ deltas: ["Held"], gate: gate.promise });
