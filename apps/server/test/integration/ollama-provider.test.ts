@@ -22,11 +22,13 @@ describe("ollama provider", () => {
     await app.close();
   });
 
-  function start(): void {
+  /** `env` adds settings, such as an operator key (`OLLAMA_API_KEY`). */
+  function start(env: Record<string, string> = {}): void {
     const config = loadConfig({
       ...TEST_ENV,
       PROVIDERS_ENABLED: "demo,ollama",
       OLLAMA_BASE_URL: UPSTREAM_BASE_URL,
+      ...env,
     });
     const catalog = loadCatalog(config.modelCatalogPath);
     app = makeTestApp({
@@ -34,7 +36,7 @@ describe("ollama provider", () => {
       config,
       catalog,
       registry: createRegistry(catalog, config, createAdapters(config)),
-      operatorKeys: {},
+      operatorKeys: config.operatorKeys,
     });
   }
 
@@ -81,6 +83,66 @@ describe("ollama provider", () => {
       stream: true,
       stream_options: { include_usage: true },
       messages: [{ role: "user", content: "What is 2+2?" }],
+    });
+  });
+
+  // #33: a keyless provider never receives a credential, whatever the request or the server has.
+  describe("never receives a key (#33)", () => {
+    const CALLER_KEY = "caller-key-not-real-33";
+    const OPERATOR_KEY = "operator-key-not-real-33";
+    const answer = streamOf([{ content: "4", finishReason: "stop" }]);
+
+    function expectOnlyThePlaceholder(key: string): void {
+      expect(upstream.requests).toHaveLength(1);
+      expect(upstream.requests[0]?.authorization).toBe("Bearer no-key");
+      expect(JSON.stringify(upstream.requests[0])).not.toContain(key);
+    }
+
+    it("sends the placeholder, never the caller's X-LLM-Api-Key", async () => {
+      start();
+      upstream.reply(answer);
+      const session = await createSession(app, { provider: "ollama" });
+
+      const response = await send(
+        app,
+        session.id,
+        { content: "What is 2+2?" },
+        { "x-llm-api-key": CALLER_KEY },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().assistantMessage).toMatchObject({ status: "completed", content: "4" });
+      expectOnlyThePlaceholder(CALLER_KEY);
+    });
+
+    it("sends the placeholder, never an operator key configured for it", async () => {
+      start({ OLLAMA_API_KEY: OPERATOR_KEY });
+      upstream.reply(answer);
+      const session = await createSession(app, { provider: "ollama" });
+
+      const response = await send(app, session.id, { content: "What is 2+2?" });
+
+      expect(response.statusCode).toBe(200);
+      expectOnlyThePlaceholder(OPERATOR_KEY);
+    });
+
+    it("still rejects a malformed X-LLM-Api-Key with 400, never echoing it", async () => {
+      start();
+      const session = await createSession(app, { provider: "ollama" });
+      const malformed = "bad key-value-33";
+
+      const response = await send(
+        app,
+        session.id,
+        { content: "What is 2+2?" },
+        { "x-llm-api-key": malformed },
+      );
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: "validation_error" });
+      expect(response.body).not.toContain(malformed);
+      expect(response.body).toContain("x-llm-api-key");
+      expect(upstream.requests).toHaveLength(0);
     });
   });
 
