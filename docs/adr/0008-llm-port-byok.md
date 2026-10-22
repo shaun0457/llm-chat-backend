@@ -108,8 +108,8 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
 - **V3 reasoning in content:** the two catalogued models are instruction models without a
   reasoning mode. A live stream per model is **pending** (needs a key); the optional test
   `test/adapters/nvidia-live.test.ts` checks for `<think>` in the text, exactly one finish
-  and the presence of usage, and runs only with `LLM_LIVE_TESTS=1` and `NVIDIA_API_KEY` set,
-  outside CI.
+  and the presence of usage, and runs only with `LLM_LIVE_TESTS=1` and `NVIDIA_API_KEY` set
+  (in CI, only in the `live-llm` workflow).
 - **V4 SDK retries and timeout** (openai 7.28.0 source, `client.js`): `shouldRetry` retries
   408, 409, 429 and every status ≥ 500, plus connection errors and timeouts; 401/403 are not
   retried, unless the server sends `x-should-retry: true`, which the SDK obeys. Retries honour

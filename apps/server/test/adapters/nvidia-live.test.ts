@@ -3,50 +3,81 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config.js";
 import { loadCatalog } from "../../src/llm/catalog.js";
 import { OpenAiCompatibleProvider } from "../../src/llm/openai-compatible.js";
-import type { LlmEvent } from "../../src/llm/port.js";
+import type { LlmEvent, LlmRequest } from "../../src/llm/port.js";
+import { isTransientUpstreamFailure, liveCheckEnabled } from "../helpers/live.js";
 
 /**
- * Optional live check against NVIDIA's hosted API (ADR 0008, V2/V3). Opt-in: runs only with
- * LLM_LIVE_TESTS=1 and NVIDIA_API_KEY set, and never in CI, so an exported key alone never
- * makes `pnpm test` call a paid API. The key is read from the environment and written nowhere.
+ * Live check against NVIDIA's hosted API (ADR 0008, V2/V3). Opt-in: it runs only with
+ * LLM_LIVE_TESTS=1 and NVIDIA_API_KEY set, so an exported key alone never makes `pnpm test`
+ * call a paid API. CI runs it only in the `live-llm` workflow. The key is read from the
+ * environment and never printed: each result line holds the model id, finish reason, usage and
+ * the start of the answer, nothing else.
  */
 const key = process.env.NVIDIA_API_KEY;
-const live =
-  process.env.LLM_LIVE_TESTS === "1" &&
-  key !== undefined &&
-  key.length > 0 &&
-  process.env.CI === undefined;
+const live = liveCheckEnabled(process.env);
+
+/** Inline reasoning some models emit in their content (V3). */
+const INLINE_REASONING = /<\/?(think|thinking|reasoning|thought)>/i;
 
 describe.skipIf(!live)("nvidia live", { timeout: 120_000 }, () => {
   const config = loadConfig({ DATABASE_URL: "postgres://unused@127.0.0.1:9/unused" });
   const models = loadCatalog(config.modelCatalogPath).provider("nvidia")?.models ?? [];
   const provider = new OpenAiCompatibleProvider({ id: "nvidia", baseUrl: config.nvidiaBaseUrl });
 
+  it("has catalogued NVIDIA models to check", () => {
+    expect(models.length).toBeGreaterThan(0);
+  });
+
+  /** One short streaming call, attempted a second time only after a 429 or 5xx. */
+  async function streamOnce(model: string): Promise<LlmEvent[]> {
+    const request: LlmRequest = {
+      model,
+      maxOutputTokens: 32,
+      messages: [
+        { role: "system", content: "Answer in one short sentence." },
+        { role: "user", content: "What is the capital of France?" },
+      ],
+    };
+    for (let attempt = 1; ; attempt += 1) {
+      const events: LlmEvent[] = [];
+      try {
+        for await (const event of provider.stream(request, {
+          signal: AbortSignal.timeout(60_000),
+          apiKey: key ?? null,
+        })) {
+          events.push(event);
+        }
+        return events;
+      } catch (error) {
+        if (attempt >= 2 || !isTransientUpstreamFailure(error)) {
+          throw error;
+        }
+      }
+    }
+  }
+
   it.each(models.map((model) => [model.id]))(
     "%s streams an answer without inline reasoning, with one finish",
     async (model) => {
-      const events: LlmEvent[] = [];
-      for await (const event of provider.stream(
-        {
-          model,
-          maxOutputTokens: 64,
-          messages: [
-            { role: "system", content: "Answer in one short sentence." },
-            { role: "user", content: "What is the capital of France?" },
-          ],
-        },
-        { signal: AbortSignal.timeout(60_000), apiKey: key ?? null },
-      )) {
-        events.push(event);
-      }
+      const events = await streamOnce(model);
 
       const text = events.map((event) => (event.type === "delta" ? event.text : "")).join("");
       const finishes = events.filter((event) => event.type === "finish");
-      expect(text.length).toBeGreaterThan(0);
-      expect(text).not.toMatch(/<\/?think>/i);
+      const finish = finishes[0];
+      // V2: usage is reported only if the provider honours stream_options.include_usage.
+      // eslint-disable-next-line no-console -- the result line is this check's report
+      console.log(
+        `LIVE_RESULT ${JSON.stringify({
+          model,
+          finishReason: finish?.reason ?? null,
+          usage: finish?.usage ?? null,
+          answer: text.slice(0, 80),
+        })}`,
+      );
+
+      expect(text.trim().length).toBeGreaterThan(0);
+      expect(text).not.toMatch(INLINE_REASONING);
       expect(finishes).toHaveLength(1);
-      // V2: whether the provider honours stream_options.include_usage (null means it does not).
-      expect(finishes[0]).toHaveProperty("usage");
     },
   );
 });

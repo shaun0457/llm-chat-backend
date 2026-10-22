@@ -319,7 +319,8 @@ OpenAI-compatible adapter itself is tested from the other side of the port, agai
 arrangements, reasoning fields, 401/403, 429 then success, persistent 5xx, context overflow
 and timeouts. The sentinel tests combine the real adapter with msw. Separately, an opt-in live check
 calls every catalogued NVIDIA model: `LLM_LIVE_TESTS=1 NVIDIA_API_KEY=… pnpm test:unit`. It is
-skipped otherwise and never runs in CI.
+skipped otherwise. In CI only the `live-llm` workflow runs it, with the repository secret: on
+pushes to `main`, by hand, or on a pull request labelled `live-llm`.
 
 Integration tests start one PostgreSQL 17 container per run, migrate a template database once,
 and give every test file its own copy, so files run in parallel without seeing each other's
