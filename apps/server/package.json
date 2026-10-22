@@ -7,6 +7,9 @@
     "drizzle"
   ],
   "dependencies": {
+    "@fastify/cors": "11.3.1",
+    "@fastify/helmet": "13.1.2",
+    "@fastify/rate-limit": "11.2.1",
     "@fastify/swagger": "9.9.2",
     "@fastify/swagger-ui": "6.1.2",
     "drizzle-orm": "0.45.4",
