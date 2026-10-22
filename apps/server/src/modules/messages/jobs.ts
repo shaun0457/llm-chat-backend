@@ -12,7 +12,7 @@ import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
 import { remainingMs } from "./deadline.js";
-import { untilAbort, withTimeout } from "./race.js";
+import { abortRace, untilAbort, withTimeout } from "./race.js";
 import {
   completeAssistant,
   failAssistant,
@@ -81,17 +81,19 @@ function describeFailure(
 /**
  * The provider's events until `signal` aborts. Providers must honour the signal (see the
  * port), but one that does not cannot hold a job past its deadline or a shutdown: every event
- * is raced against the abort, which then ends the iteration with the abort reason, and the
- * provider's stream is asked to end without being waited for.
+ * is raced against the abort (one listener for the whole stream), which then ends the
+ * iteration with the abort reason, and the provider's stream is asked to end without being
+ * waited for.
  */
 async function* untilAborted<T>(events: AsyncIterable<T>, signal: AbortSignal): AsyncGenerator<T> {
   const iterator = events[Symbol.asyncIterator]();
+  const abort = abortRace(signal);
   let exhausted = false;
   try {
     for (;;) {
       // Checked first: once aborted, the provider is not resumed again.
       signal.throwIfAborted();
-      const result = await untilAbort(iterator.next(), signal);
+      const result = await abort.race(iterator.next());
       if (result.done === true) {
         exhausted = true;
         return;
@@ -99,6 +101,7 @@ async function* untilAborted<T>(events: AsyncIterable<T>, signal: AbortSignal): 
       yield result.value;
     }
   } finally {
+    abort.dispose();
     if (!exhausted) {
       // Not awaited: a provider that ignores the signal may never settle it.
       Promise.resolve(iterator.return?.()).catch(() => {});
