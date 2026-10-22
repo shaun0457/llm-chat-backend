@@ -447,7 +447,8 @@ curl -i -X POST localhost:3000/sessions/<id>/messages -H 'content-type: applicat
   answer that failed was still a call to the model.
 - **Limits.** Content is compared exactly, so a client that re-normalises text (a trailing
   newline, Unicode normalisation) gets 422 instead of a replay. Ids are global: one id cannot
-  be reused in another session. Without an id there is no deduplication: two identical sends
+  be reused in another session, so generate them at random (a v4 or v7 UUID), never from a
+  counter or the content, or someone who guesses an id can take it first. Without an id there is no deduplication: two identical sends
   create two turns, or the second gets 409 `session_busy` while the first is generating.
   Retrying a failed answer (a new attempt of the same turn) is not built yet; see
   [What I would do next](#what-i-would-do-next).

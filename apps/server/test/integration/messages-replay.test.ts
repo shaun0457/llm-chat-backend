@@ -267,7 +267,9 @@ describe("idempotent send: client message ids", () => {
 
       const replay = send(app, session.id, payload, { prefer: "wait=5" });
       pending.push(replay);
-      setTimeout(release, 100);
+      // Let the replay reach its wait, then let the answer finish.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      release();
 
       const response = await replay;
       expect(response.statusCode).toBe(200);
@@ -552,6 +554,9 @@ describe("idempotent send: client message ids", () => {
     }
 
     it("admits one of two concurrent sends of the same id to two sessions; the other gets 422 and leaks nothing", async () => {
+      // Timing decides whether the loser collides on the primary key or already sees the
+      // winner's row; the outcome must be the same either way. The next test forces the
+      // collision.
       start({ MAX_ACTIVE_GENERATIONS: "2" });
       const first = await createSession(app);
       const second = await createSession(app);
@@ -590,8 +595,10 @@ describe("idempotent send: client message ids", () => {
       const target = await createSession(app);
       const id = crypto.randomUUID();
       const concurrent = new pg.Client({ connectionString: testDb.url });
-      await concurrent.connect();
+      // A dropped connection then fails the test instead of crashing the worker.
+      concurrent.on("error", () => {});
       try {
+        await concurrent.connect();
         await concurrent.query("BEGIN");
         await concurrent.query(
           "INSERT INTO messages (id, session_id, seq, role, content, status)" +
@@ -614,8 +621,11 @@ describe("idempotent send: client message ids", () => {
           async () =>
             (
               await testDb.db.pool.query<{ n: number }>(
+                // The send's insert, waiting for the other transaction to end (its key).
                 "SELECT count(*)::int AS n FROM pg_stat_activity" +
-                  " WHERE wait_event_type = 'Lock' AND datname = current_database()",
+                  " WHERE wait_event_type = 'Lock' AND wait_event = 'transactionid'" +
+                  " AND datname = current_database()" +
+                  " AND query ILIKE 'insert into \"messages\"%'",
               )
             ).rows[0]?.n ?? 0,
           (waiting) => waiting > 0,
@@ -634,8 +644,9 @@ describe("idempotent send: client message ids", () => {
         // The colliding run's reservation was released: the only slot is free.
         expect(await holdInFreshSessions(1)).toEqual([202]);
       } finally {
+        // Cleanup only: after the COMMIT there is nothing to roll back.
         await concurrent.query("ROLLBACK").catch(() => {});
-        await concurrent.end();
+        await concurrent.end().catch(() => {});
       }
     });
   });

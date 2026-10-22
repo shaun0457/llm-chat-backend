@@ -115,7 +115,7 @@ export function deriveTitle(content: string): string {
 }
 
 /** A client id already used by a message that this request cannot be a repeat of. */
-export const messageIdConflict = (detail: string) =>
+export const messageIdConflict = (detail: string): ProblemError =>
   new ProblemError(422, "message_id_conflict", detail);
 
 /** The attempt of a turn's assistant message, which every assistant row has. */
@@ -431,21 +431,23 @@ export function createMessagesService(deps: {
     input: SendMessageInput,
     headerKey: string | undefined,
   ): Promise<Admission> {
-    for (let run = 0; ; run += 1) {
+    let collision: unknown;
+    for (let run = 0; run <= MAX_ADMISSION_RERUNS; run += 1) {
       try {
         return await admitOnce(sessionId, input, headerKey);
       } catch (error) {
-        const idTaken =
-          pgErrorCode(error) === UNIQUE_VIOLATION && pgConstraint(error) === MESSAGES_PRIMARY_KEY;
-        if (!idTaken) {
+        const clientIdTaken =
+          input.id !== undefined &&
+          pgErrorCode(error) === UNIQUE_VIOLATION &&
+          pgConstraint(error) === MESSAGES_PRIMARY_KEY;
+        if (!clientIdTaken) {
           throw error;
         }
-        if (run >= MAX_ADMISSION_RERUNS) {
-          // Unexpected: logged by the error handler and answered as 500 internal_error.
-          throw new Error("admission kept colliding on a message id", { cause: error });
-        }
+        collision = error;
       }
     }
+    // Unexpected: logged by the error handler and answered as 500 internal_error.
+    throw new Error("admission kept colliding on a message id", { cause: collision });
   }
 
   /**
