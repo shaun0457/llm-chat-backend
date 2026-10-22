@@ -61,7 +61,7 @@ describe("loadConfig", () => {
       GENERATION_DEADLINE_MS: "60000",
       TERMINAL_STATEMENT_TIMEOUT_MS: "400",
       TERMINAL_WRITE_BUDGET_MS: "2000",
-      RECLAIM_GRACE_MS: "1000",
+      RECLAIM_GRACE_MS: "1500",
     });
 
     expect(config).toEqual({
@@ -82,8 +82,8 @@ describe("loadConfig", () => {
       generationDeadlineMs: 60_000,
       terminalStatementTimeoutMs: 400,
       terminalWriteBudgetMs: 2_000,
-      reclaimGraceMs: 1_000,
-      staleThresholdMs: 63_000,
+      reclaimGraceMs: 1_500,
+      staleThresholdMs: 63_500,
     });
   });
 
@@ -151,19 +151,20 @@ describe("loadConfig", () => {
 
   it("rejects a reclaim grace that a live job could outlast after its deadline and budget", () => {
     // After its deadline a live job may still wait one statement timeout for a flush before
-    // its terminal budget (read-back included); reclaim must not fail it while it does.
+    // its terminal budget (read-back included); reclaim must not fail it while it does, and
+    // a second of slack covers late timers.
     const load = (): AppConfig =>
-      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "3000" });
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "3999" });
 
     expect(load).toThrow(ConfigError);
     expect(load).toThrow(/RECLAIM_GRACE_MS/);
     expect(load).toThrow(/TERMINAL_STATEMENT_TIMEOUT_MS/);
   });
 
-  it("accepts a reclaim grace just above the statement timeout", () => {
+  it("accepts a reclaim grace of the statement timeout plus one second", () => {
     expect(
-      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "3001" }),
-    ).toMatchObject({ reclaimGraceMs: 3_001 });
+      loadConfig({ DATABASE_URL, TERMINAL_STATEMENT_TIMEOUT_MS: "3000", RECLAIM_GRACE_MS: "4000" }),
+    ).toMatchObject({ reclaimGraceMs: 4_000 });
   });
 
   it("lists every invalid key", () => {

@@ -20,6 +20,8 @@ const MAX_JSON_WAIT_MS = 600_000;
 const DEFAULT_JSON_WAIT_MS = 30_000;
 /** Upper bound of the generation and reclaim timings: one hour, far below setTimeout's limit. */
 const MAX_TIMING_MS = 3_600_000;
+/** Slack that RECLAIM_GRACE_MS must keep on top of the statement timeout (late timers). */
+const RECLAIM_SLACK_MS = 1_000;
 
 /** A positive whole number of milliseconds; zero or less would disable the safety net. */
 const timingMs = (fallback: number) =>
@@ -86,7 +88,7 @@ export type AppConfig = Readonly<{
   terminalWriteBudgetMs: number;
   /**
    * Margin on top of deadline and terminal budget before a generating row counts as dead;
-   * always more than the statement timeout.
+   * at least the statement timeout plus one second.
    */
   reclaimGraceMs: number;
   /**
@@ -137,12 +139,12 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   }
   // Past its deadline a live job may still wait one statement timeout for a flush in flight
   // before its terminal budget (which includes reading its final state back) starts; reclaim
-  // must not beat it.
-  if (parsed.RECLAIM_GRACE_MS <= parsed.TERMINAL_STATEMENT_TIMEOUT_MS) {
+  // must not beat it, with a second of slack for late timers and a busy event loop.
+  if (parsed.RECLAIM_GRACE_MS < parsed.TERMINAL_STATEMENT_TIMEOUT_MS + RECLAIM_SLACK_MS) {
     throw new ConfigError([
       {
         key: "RECLAIM_GRACE_MS",
-        reason: "must be greater than TERMINAL_STATEMENT_TIMEOUT_MS",
+        reason: `must be at least TERMINAL_STATEMENT_TIMEOUT_MS + ${RECLAIM_SLACK_MS}`,
       },
     ]);
   }

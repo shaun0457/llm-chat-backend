@@ -59,12 +59,13 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (180 + 10 + 50 = 240 s) after its `
   statement of its own before `GET /sessions/:id`, the message list and get-one. Later
   session-scoped endpoints (events, retry, delete) adopt the same entry point, `reclaimStale`.
   Usually it matches nothing; the partial unique index on generating rows serves it.
-  Startup rejects a `RECLAIM_GRACE_MS` that is not above `TERMINAL_STATEMENT_TIMEOUT_MS`: after
-  its deadline a live job may still wait one statement for a flush in flight before its terminal
-  budget starts. Every database call of a job carries a statement timeout (the history read the
-  time left before the deadline, a flush one statement timeout, the terminal write and its
-  read-back of the final state the budget), so a call the job stops waiting for is cancelled by
-  the database as well and frees its connection.
+  Startup rejects a `RECLAIM_GRACE_MS` below `TERMINAL_STATEMENT_TIMEOUT_MS` + 1 s: after its
+  deadline a live job may still wait one statement for a flush in flight before its terminal
+  budget starts, and the second covers late timers. Every database call of a job carries a
+  statement timeout (the history read and a flush one statement timeout, the history read no
+  later than the deadline either; the terminal write and its read-back of the final state the
+  budget), so a call the job stops waiting for, at its deadline or at a shutdown, is cancelled
+  by the database within the shutdown wait and frees its connection.
 - **Fencing covers the rest.** Every generation write carries `id + attempt + status =
 'generating'`. A worker that wakes after its row was reclaimed (a paused process, a frozen
   event loop) matches no row on its next flush, aborts with reason `fenced` and writes nothing
