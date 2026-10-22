@@ -57,8 +57,10 @@ function isIpOrCidr(value: string): boolean {
   if (prefix === undefined) {
     return true;
   }
+  // No leading zeros, and never /0: a range holding every address trusts every client's
+  // X-Forwarded-For, which is what rejecting `true` is for.
   const bits = Number(prefix);
-  return /^\d{1,3}$/.test(prefix) && bits <= (version === 4 ? 32 : 128);
+  return /^[1-9]\d{0,2}$/.test(prefix) && bits <= (version === 4 ? 32 : 128);
 }
 
 /**
@@ -122,10 +124,8 @@ const envSchema = z.object({
   SSE_BUFFER_LIMIT_BYTES: z.coerce.number().int().min(16_384).max(67_108_864).default(262_144),
   MAX_ACTIVE_GENERATIONS: capacityLimit(8),
   MAX_ACTIVE_PER_PROVIDER: capacityLimit(4),
-  // Server configuration only: clients can never choose where a provider call goes. Checked
-  // below, and only for enabled providers.
-  NVIDIA_BASE_URL: z.string().optional(),
-  OLLAMA_BASE_URL: z.string().optional(),
+  // NVIDIA_BASE_URL and OLLAMA_BASE_URL are not here: readBaseUrls checks them, and only for
+  // enabled providers.
   DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(MAX_TIMING_MS).default(10_000),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(MAX_JSON_WAIT_MS).default(30_000),
   RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).optional(),
@@ -141,7 +141,10 @@ const envSchema = z.object({
   CORS_ORIGINS: corsOriginList.optional(),
 });
 
-/** The provider base URLs; a provider's own is validated only when it is enabled. */
+/**
+ * The provider base URLs; a provider's own is validated only when it is enabled. Server
+ * configuration only: clients can never choose where a provider call goes.
+ */
 const BASE_URLS = [
   { provider: "nvidia", key: "NVIDIA_BASE_URL", fallback: DEFAULT_NVIDIA_BASE_URL },
   { provider: "ollama", key: "OLLAMA_BASE_URL", fallback: DEFAULT_OLLAMA_BASE_URL },
