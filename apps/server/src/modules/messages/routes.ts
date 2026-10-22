@@ -1,5 +1,6 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 
+import { prefersEventStream } from "../../http/accept.js";
 import { ProblemError } from "../../http/problem-details.js";
 import { type SseOptions, openSseStream } from "../../http/sse.js";
 import { type WaitConfig, effectiveWaitMs, parsePrefer, preferenceApplied } from "./prefer.js";
@@ -28,29 +29,16 @@ const preferenceAppliedHeader = {
     "The preferences honoured: respond-async, or wait=<seconds waited at most> (the cap " +
     "when the request asked for more). Absent when none applied. Not a completion guarantee.",
 };
+const varyHeader = {
+  type: "string",
+  enum: ["Accept"],
+  description: "The response form (JSON or event stream) depends on Accept",
+};
 const noStoreHeader = {
   type: "string",
   enum: ["no-store"],
   description: "The state may change until the answer is completed or failed; never cache it",
 };
-
-/**
- * Whether the client asked for an event stream: `text/event-stream` among the media ranges of
- * `Accept` (parameters ignored, except that q=0 refuses it).
- */
-export function wantsEventStream(accept: string | undefined): boolean {
-  if (accept === undefined) {
-    return false;
-  }
-  return accept.split(",").some((range) => {
-    const [type = "", ...parameters] = range.split(";").map((part) => part.trim().toLowerCase());
-    if (type !== "text/event-stream") {
-      return false;
-    }
-    const q = parameters.find((parameter) => parameter.startsWith("q="));
-    return q === undefined || Number(q.slice(2)) !== 0;
-  });
-}
 
 export const messagesRoutes: FastifyPluginAsyncZod<{
   service: MessagesService;
@@ -60,6 +48,11 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
   app.post(
     "/sessions/:id/messages",
     {
+      // Before validation, so every answer of this route says that Accept chose its form; an
+      // event stream keeps it, as headers set before the hijack are copied (sse.ts).
+      onRequest: async (_request, reply) => {
+        void reply.header("vary", "Accept");
+      },
       schema: {
         summary: "Send a message; stream the answer or wait a bounded time for it",
         description:
@@ -94,7 +87,7 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
             description:
               "JSON: the answer completed within the wait. Event stream: the answer as it is " +
               "generated (generation failures arrive as an error event, the status stays 200)",
-            headers: { "Preference-Applied": preferenceAppliedHeader },
+            headers: { "Preference-Applied": preferenceAppliedHeader, "Vary": varyHeader },
             content: {
               "application/json": { schema: turnResponse },
               "text/event-stream": { schema: sseResponse },
@@ -114,19 +107,20 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
               "Retry-After": { type: "integer", description: "Seconds to wait before polling" },
               "Cache-Control": noStoreHeader,
               "Preference-Applied": preferenceAppliedHeader,
+              "Vary": varyHeader,
             },
             content: { "application/json": { schema: turnResponse } },
           },
           502: {
             description: "The answer failed within the wait",
-            headers: { "Preference-Applied": preferenceAppliedHeader },
+            headers: { "Preference-Applied": preferenceAppliedHeader, "Vary": varyHeader },
             content: { "application/problem+json": { schema: failedTurnProblem } },
           },
         },
       },
     },
     async (request, reply) => {
-      if (wantsEventStream(request.headers.accept)) {
+      if (prefersEventStream(request.headers.accept)) {
         // Prefer applies to JSON responses only.
         await service.sendStreaming(
           request.params.id,

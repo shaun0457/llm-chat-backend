@@ -81,6 +81,7 @@ describe("SSE sends", () => {
       expect(stream.headers.get("x-accel-buffering")).toBe("no");
       expect(stream.headers.get("connection")).toBe("keep-alive");
       expect(stream.headers.get("content-encoding")).toBeNull();
+      expect(stream.headers.get("vary")).toBe("Accept");
       // Set by an onRequest hook before the reply was hijacked (V1).
       expect(stream.headers.get("x-request-id")).toBe("sse-send-1");
 
@@ -194,6 +195,7 @@ describe("SSE sends", () => {
 
       expect(response.statusCode).toBe(409);
       expect(response.headers["content-type"]).toContain("application/problem+json");
+      expect(response.headers.vary).toBe("Accept");
       expect(response.json()).toMatchObject({ status: 409, code: "session_busy" });
     });
 
@@ -210,10 +212,49 @@ describe("SSE sends", () => {
       );
 
       expect(invalid.statusCode).toBe(400);
+      expect(invalid.headers.vary).toBe("Accept");
       expect(invalid.json()).toMatchObject({ code: "validation_error" });
       expect(unknown.statusCode).toBe(404);
       expect(unknown.headers["content-type"]).toContain("application/problem+json");
+      expect(unknown.headers.vary).toBe("Accept");
       expect(unknown.json()).toMatchObject({ code: "session_not_found" });
+    });
+  });
+
+  describe("sse.negotiation", () => {
+    it.each([
+      ["application/json, text/event-stream;q=0.5"],
+      ["text/event-stream, */*"],
+      ["text/event-stream;q=0"],
+      [""],
+    ])("answers JSON with Vary: Accept for Accept %j", async (accept) => {
+      await start();
+      const session = await createSession(app);
+
+      const response = await send(app, session.id, { content: "Hi" }, { accept });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toContain("application/json");
+      expect(response.headers.vary).toBe("Accept");
+      expect(response.json()).toMatchObject({
+        assistantMessage: { status: "completed", content: "Hello" },
+      });
+    });
+
+    it("streams when the event stream has a higher q than JSON", async () => {
+      await start();
+      const session = await createSession(app);
+
+      const stream = await streamSend(session.id, "Hi", {
+        accept: "text/event-stream, application/json;q=0.9",
+      });
+
+      expect(stream.status).toBe(200);
+      expect(stream.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+      expect(stream.headers.get("vary")).toBe("Accept");
+      const { error, frames } = await stream.drain();
+      expect(error).toBeUndefined();
+      expect(eventsOf(frames).at(-1)?.event).toBe("done");
     });
   });
 

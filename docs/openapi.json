@@ -881,7 +881,7 @@
             }
           },
           {
-            "description": "text/event-stream for an event stream of the answer; anything else (or none) for JSON",
+            "description": "An event stream of the answer when text/event-stream is listed by name with a q above 0 and above that of application/json (which application/* and */* also match); JSON otherwise, also on a tie or without Accept",
             "in": "header",
             "name": "accept",
             "required": false,
@@ -1330,6 +1330,15 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "Vary": {
+                "description": "The response form (JSON or event stream) depends on Accept",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
+                }
               }
             }
           },
@@ -1735,6 +1744,15 @@
                 "description": "Seconds to wait before polling",
                 "schema": {
                   "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "The response form (JSON or event stream) depends on Accept",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
+                  "type": "string"
                 }
               }
             }
@@ -2147,6 +2165,15 @@
               "Preference-Applied": {
                 "description": "The preferences honoured: respond-async, or wait=<seconds waited at most> (the cap when the request asked for more). Absent when none applied. Not a completion guarantee.",
                 "schema": {
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response form (JSON or event stream) depends on Accept",
+                "schema": {
+                  "enum": [
+                    "Accept"
+                  ],
                   "type": "string"
                 }
               }

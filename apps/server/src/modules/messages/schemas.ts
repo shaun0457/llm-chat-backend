@@ -48,7 +48,9 @@ export const sendMessageHeaders = z.object({
     .string()
     .optional()
     .describe(
-      "text/event-stream for an event stream of the answer; anything else (or none) for JSON",
+      "An event stream of the answer when text/event-stream is listed by name with a q " +
+        "above 0 and above that of application/json (which application/* and */* also " +
+        "match); JSON otherwise, also on a tie or without Accept",
     ),
   "prefer": z
     .string()
