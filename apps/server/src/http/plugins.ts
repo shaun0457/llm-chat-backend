@@ -6,6 +6,7 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { jsonSchemaTransform } from "fastify-type-provider-zod";
 
+import { HEALTH_PATHS } from "../modules/health/routes.js";
 import { ProblemError } from "./problem-details.js";
 
 type Transform = typeof jsonSchemaTransform;
@@ -13,7 +14,7 @@ type Transform = typeof jsonSchemaTransform;
 const ONE_MINUTE_MS = 60_000;
 /** Addresses each budget keeps counters for; about 10 MB at most per budget. */
 const RATE_LIMIT_ADDRESSES = 100_000;
-const HEALTH_ROUTES: ReadonlySet<string> = new Set(["/health", "/health/ready"]);
+const HEALTH_ROUTES: ReadonlySet<string> = new Set(Object.values(HEALTH_PATHS));
 
 /**
  * One rate-limit budget: a fixed one-minute window per client address (`request.ip`, IPv6
