@@ -286,7 +286,8 @@ describe("terminal-budget", () => {
       async () =>
         (
           await testDb.db.pool.query<{ n: number }>(
-            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event = 'PgSleep'",
+            "SELECT count(*)::int AS n FROM pg_stat_activity" +
+              " WHERE wait_event = 'PgSleep' AND datname = current_database()",
           )
         ).rows[0]?.n ?? 0,
       (sleeping) => sleeping > 0,
@@ -301,13 +302,21 @@ describe("terminal-budget", () => {
     expect(performance.now() - started).toBeLessThan(2_500);
     expect(end).toBe("terminal");
     expect(turn.held()).toBe(0);
+    // The cancelled flush is logged by its SQLSTATE only: the failed query's parameters hold
+    // the partial answer.
+    const flushFailure = turn.logs
+      .entries()
+      .find((entry) => entry.level === 40 && entry.assistantId === turn.assistantId);
+    expect(flushFailure).toMatchObject({ code: "57014" });
+    expect(JSON.stringify(turn.logs.entries())).not.toContain("Stalled");
     // The flush itself is cancelled in the database at its statement timeout instead of
     // keeping its pooled connection for the whole 5 s.
     await eventually(
       async () =>
         (
           await testDb.db.pool.query<{ n: number }>(
-            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event = 'PgSleep'",
+            "SELECT count(*)::int AS n FROM pg_stat_activity" +
+              " WHERE wait_event = 'PgSleep' AND datname = current_database()",
           )
         ).rows[0]?.n ?? 0,
       (sleeping) => sleeping === 0,

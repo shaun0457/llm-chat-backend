@@ -40,9 +40,8 @@ class BudgetExhausted extends Error {
 
 /** `promise`, or a BudgetExhausted rejection once `ms` have passed first. */
 async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
-  // A try abandoned here still ends on its own (at its statement timeout, V2); its outcome is
-  // then of no interest, but must not surface as an unhandled rejection.
-  promise.catch(() => {});
+  // A try abandoned here still ends on its own (at its statement timeout, V2); withTimeout
+  // keeps its later rejection from surfacing as unhandled.
   const result = await withTimeout(promise, ms);
   if (result === TIMED_OUT) {
     throw new BudgetExhausted();

@@ -249,7 +249,11 @@ export function createJobRegistry(deps: {
           }
         })
         .catch((error: unknown) => {
-          jobLog.warn({ err: error }, "flushing partial content failed; retrying on next tick");
+          // By SQLSTATE only: the failed query's parameters hold the partial answer.
+          jobLog.warn(
+            describeFailure(error),
+            "flushing partial content failed; retrying on next tick",
+          );
         })
         .finally(() => {
           flushing = undefined;
@@ -282,11 +286,16 @@ export function createJobRegistry(deps: {
     let generationFailed = false;
     let generationError: unknown;
     try {
-      // A read stuck behind a lock must not outlast the deadline: the job stops waiting at the
-      // abort, and the database cancels the read itself when the deadline has passed.
+      // A read stuck behind a lock must not hold the job: it stops waiting at the abort, and
+      // the database cancels the read itself after one statement timeout at most (or at the
+      // deadline, if sooner), so a read abandoned at a shutdown frees its connection in time.
       const history = await untilAbort(
         db.tx(async (tx) => {
-          await limitStatements(tx, leftMs);
+          const readMs = Math.min(
+            timing.terminalStatementTimeoutMs,
+            remainingMs(timing.generationDeadlineMs, spec.startedAtMonotonic, clock.monotonicNow()),
+          );
+          await limitStatements(tx, Math.max(1, readMs));
           return historyBefore(tx, spec.sessionId, spec.userMessage.seq);
         }),
         controller.signal,
@@ -307,18 +316,18 @@ export function createJobRegistry(deps: {
         apiKey: spec.apiKey,
       });
       for await (const event of untilAborted(events, controller.signal)) {
+        if (event.type === "finish") {
+          // The answer is complete, even if an abort came with it: do not wait for the
+          // provider to close its stream, during which a deadline or shutdown would turn a
+          // finished answer into a failure.
+          finish = { reason: event.reason, usage: event.usage };
+          break;
+        }
         if (controller.signal.aborted) {
           break;
         }
-        if (event.type === "delta") {
-          // PostgreSQL text cannot hold U+0000; one such character would make every write fail.
-          bus.append(event.text.replaceAll("\u0000", ""));
-        } else {
-          finish = { reason: event.reason, usage: event.usage };
-          // The answer is complete: do not wait for the provider to close its stream, during
-          // which a deadline or shutdown would turn a finished answer into a failure.
-          break;
-        }
+        // PostgreSQL text cannot hold U+0000; one such character would make every write fail.
+        bus.append(event.text.replaceAll("\u0000", ""));
       }
     } catch (error) {
       generationFailed = true;

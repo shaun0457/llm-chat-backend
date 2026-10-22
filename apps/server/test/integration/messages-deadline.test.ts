@@ -206,6 +206,59 @@ describe("deadline", () => {
   }, 15_000);
 });
 
+it("shutdown also gets a history read stuck behind a lock cancelled in the database", async () => {
+  const config = loadConfig({
+    ...TEST_ENV,
+    // Far beyond the test: only the statement timeout can end the read in time.
+    GENERATION_DEADLINE_MS: "60000",
+    TERMINAL_STATEMENT_TIMEOUT_MS: "200",
+    TERMINAL_WRITE_BUDGET_MS: "300",
+  });
+  const locker = new pg.Client({ connectionString: testDb.url });
+  await locker.connect();
+  const inner = testJobs(testDb.db, { config });
+  let locked: Promise<unknown> | undefined;
+  let started: true | undefined;
+  const jobs: JobRegistry = {
+    ...inner,
+    reserve() {
+      // As above: granted at the admission's commit, ahead of the job's history read.
+      locked = locker.query("BEGIN; LOCK TABLE messages IN ACCESS EXCLUSIVE MODE");
+      return inner.reserve();
+    },
+    start(spec) {
+      const job = inner.start(spec);
+      started = true;
+      return job;
+    },
+  };
+  const current = makeTestApp({
+    db: testDb.db,
+    config,
+    jobs,
+    ...testProviders({ llm: new FakeLlmProvider() }),
+  });
+  try {
+    const session = await createSession(current);
+    const pending = send(current, session.id, { content: "Hi" }, { prefer: "respond-async" });
+    await eventuallyDefined(() => locked);
+    await eventuallyDefined(() => (started ? Promise.resolve(started) : undefined));
+
+    const closed = inner.shutdown(2_000);
+
+    // Shutdown stops waiting for the read at once; the database must not keep running it until
+    // the deadline either, or closing the pool would wait for its connection.
+    expect(await historyReadsWaitingAfter(1_000)).toBe(0);
+    await locker.query("COMMIT");
+    await closed;
+    await pending;
+  } finally {
+    await locker.query("COMMIT").catch(() => {});
+    await locker.end();
+    await current.close();
+  }
+}, 15_000);
+
 /**
  * History reads (the job's select of id, seq, role …) waiting for a lock, polled until none are
  * left or `ms` pass. The request's own read of the turn waits too; request-path timeouts are
