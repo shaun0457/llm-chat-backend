@@ -118,8 +118,8 @@ export function createMessagesService(deps: {
   const { db, registry, jobs, attach, defaultSystemPrompt, clock, staleThresholdMs, operatorKeys } =
     deps;
 
-  // Admission steps, in the order the spec fixes. Later steps (replay, budget, credential,
-  // expected history, capacity limits) slot in between these.
+  // Admission steps, in the order the spec fixes: lock, reclaim, resolve, budget, credential,
+  // busy, capacity, insert. Replay (#10) and the expected-history check (#23) slot in later.
 
   async function lockStep(tx: Tx, sessionId: string): Promise<LockedSession> {
     const session = await lockSession(tx, sessionId);
