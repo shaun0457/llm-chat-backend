@@ -35,7 +35,7 @@ jobs:
       group: live-llm-${{ github.ref }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,7 +52,7 @@ jobs:
         id: live
         shell: bash
         working-directory: apps/server
-        timeout-minutes: 8
+        timeout-minutes: 16
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           LLM_LIVE_TESTS: "1"
@@ -125,14 +125,14 @@ jobs:
       - name: Prepare a CI-only catalog with short answers
         shell: bash
         run: |
-          # The shipped catalog stays unchanged. This copy caps the default NVIDIA model at 32
+          # The shipped catalog stays unchanged. This copy caps the default NVIDIA model at 1024
           # output tokens, so the client request carries no max_tokens (the server sends the cap).
           mkdir -p "$RUNNER_TEMP/live-e2e"
           jq '.providers.nvidia.defaultModel as $model
-            | (.providers.nvidia.models[] | select(.id == $model) | .maxOutputTokens) = 32' \
+            | (.providers.nvidia.models[] | select(.id == $model) | .maxOutputTokens) = 1024' \
             apps/server/config/models.json > "$RUNNER_TEMP/models.live.json"
           jq -e '.providers.nvidia.defaultModel as $model
-            | [.providers.nvidia.models[] | select(.id == $model and .maxOutputTokens == 32)]
+            | [.providers.nvidia.models[] | select(.id == $model and .maxOutputTokens == 1024)]
             | length == 1' "$RUNNER_TEMP/models.live.json" > /dev/null
           printf '%s\n' \
             'services:' \
