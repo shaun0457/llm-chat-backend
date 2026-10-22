@@ -92,6 +92,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     void reply.header(REQUEST_ID_HEADER, request.id);
   });
 
+  // Valid (a platform proxy may require a short wait), but worth knowing when reading 202s.
+  const generationLimitMs = config.generationDeadlineMs + config.terminalWriteBudgetMs;
+  if (config.jsonMaxWaitMs < generationLimitMs) {
+    app.log.info(
+      { jsonMaxWaitMs: config.jsonMaxWaitMs, generationLimitMs },
+      "JSON_MAX_WAIT_MS is below the generation deadline plus the terminal-write budget; " +
+        "JSON clients may get 202 for long answers and should poll",
+    );
+  }
+
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   registerProblemDetails(app);
