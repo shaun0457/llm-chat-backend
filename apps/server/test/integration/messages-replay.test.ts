@@ -92,4 +92,72 @@ describe("idempotent send: client message ids", () => {
       },
     );
   });
+
+  describe("replay.completed", () => {
+    it.each([[{}], [{ prefer: "respond-async" }]])(
+      "answers a repeated send of a completed turn with 200 and the same turn, admitting nothing (headers %j)",
+      async (headers) => {
+        start();
+        const session = await createSession(app);
+        const payload = { id: crypto.randomUUID(), content: "Hi" };
+        const original = await send(app, session.id, payload);
+        expect(original.statusCode).toBe(200);
+        const sessionBefore = (await app.inject({ url: `/sessions/${session.id}` })).json();
+
+        const replay = await send(app, session.id, payload, headers);
+
+        expect(replay.statusCode).toBe(200);
+        expect(replay.headers.vary).toBe("Accept");
+        expect(replay.json()).toEqual(original.json());
+        expect((replay.json() as TurnBody).assistantMessage).toMatchObject({
+          status: "completed",
+          content: "Hello",
+        });
+        expect(fake.requests).toHaveLength(1);
+        expect(await allMessages(app, session.id)).toHaveLength(2);
+        // A replay writes nothing: not even the session's activity time.
+        expect((await app.inject({ url: `/sessions/${session.id}` })).json()).toEqual(
+          sessionBefore,
+        );
+      },
+    );
+
+    it("answers a repeated send of a failed turn with 502 and both stored messages, also with respond-async", async () => {
+      start();
+      fake.script({ deltas: ["Hel", "lo"], throwAfter: 1 });
+      const session = await createSession(app);
+      const payload = { id: crypto.randomUUID(), content: "Hi" };
+      const original = await send(app, session.id, payload);
+      expect(original.statusCode).toBe(502);
+
+      const replay = await send(app, session.id, payload, { prefer: "respond-async" });
+
+      expect(replay.statusCode).toBe(502);
+      expect(replay.headers["content-type"]).toMatch(/^application\/problem\+json/);
+      expect(replay.headers["preference-applied"]).toBe("respond-async");
+      expect(replay.json()).toEqual(original.json());
+      expect(replay.json()).toMatchObject({
+        code: "llm_upstream_error",
+        userMessage: { id: payload.id },
+        assistantMessage: { status: "failed", content: "Hel" },
+      });
+      expect(fake.requests).toHaveLength(1);
+      expect(await allMessages(app, session.id)).toHaveLength(2);
+    });
+
+    it("replays an earlier turn after a later one, without a new turn", async () => {
+      start();
+      const session = await createSession(app);
+      const first = { id: crypto.randomUUID(), content: "First" };
+      const original = await send(app, session.id, first);
+      await send(app, session.id, { content: "Second" });
+
+      const replay = await send(app, session.id, first);
+
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual(original.json());
+      expect(await allMessages(app, session.id)).toHaveLength(4);
+      expect(fake.requests).toHaveLength(2);
+    });
+  });
 });
