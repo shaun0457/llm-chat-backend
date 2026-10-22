@@ -37,6 +37,16 @@ const model = z
 
 /** Strict: unknown fields are a 400, so later fields cannot be sent to a server ignoring them. */
 export const sendMessageBody = z.strictObject({
+  id: z
+    .uuid()
+    .optional()
+    .describe(
+      "Your own id for the user message (any UUID version), which makes the send safe to " +
+        "repeat: the same id with identical content (and, when given, the same provider and " +
+        "model) in the same session returns the stored turn instead of admitting a new one. " +
+        "Ids are global: one used by another message gives 422 message_id_conflict. Without " +
+        "it the server generates a UUIDv7 and identical sends are not deduplicated",
+    ),
   content,
   provider: provider.optional(),
   model: model.optional(),

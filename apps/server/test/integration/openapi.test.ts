@@ -97,7 +97,7 @@ describe("API documentation", () => {
     );
     const send =
       paths["/sessions/{id}/messages"].post.requestBody.content["application/json"].schema;
-    expect(Object.keys(send.properties).sort()).toEqual(["content", "model", "provider"]);
+    expect(Object.keys(send.properties).sort()).toEqual(["content", "id", "model", "provider"]);
     expect(send.properties.provider.description).toContain(
       "Alone: that provider's default model, including when it is the session's provider",
     );

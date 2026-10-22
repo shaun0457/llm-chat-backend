@@ -253,6 +253,7 @@ export function createMessagesService(deps: {
     tx: Tx,
     sessionId: string,
     session: LockedSession,
+    userId: string,
     content: string,
     resolved: ReturnType<typeof resolveStep>,
     systemPrompt: string | null,
@@ -264,7 +265,7 @@ export function createMessagesService(deps: {
     const startedAtMonotonic = clock.monotonicNow();
     const turn = await insertTurn(tx, {
       sessionId,
-      userId: uuidv7(),
+      userId,
       assistantId: uuidv7(),
       seq: session.nextSeq,
       content,
@@ -329,6 +330,7 @@ export function createMessagesService(deps: {
           tx,
           sessionId,
           session,
+          input.id ?? uuidv7(),
           content,
           resolved,
           systemPrompt,
