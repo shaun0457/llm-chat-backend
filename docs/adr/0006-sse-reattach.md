@@ -105,7 +105,7 @@ completed` with status 200 when the stream ends (integration test `messages-sse`
 - A stream is followed live only in the process that runs the job. Another process (a brief
   deploy overlap) answers `message.detached`, and the client falls back to polling.
 - A user who closes the tab still pays for the answer, which is stored. Stopping a generation
-  on purpose is session deletion (#12) for now. A delete aborts the session's jobs before it
+  on purpose is session deletion (#12) for now. A delete aborts the session's jobs as soon as it
   commits, so the streams following them end at once, without a final event (no new event
   type or error code); re-attaching afterwards answers 404.
 - The buffer limit applies while the stream is open. Once the server ends a stream, Node

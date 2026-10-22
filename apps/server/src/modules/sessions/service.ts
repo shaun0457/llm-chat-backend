@@ -3,7 +3,7 @@ import { v7 as uuidv7 } from "uuid";
 import type { Db } from "../../db/client.js";
 import { ProblemError } from "../../http/problem-details.js";
 import type { ModelPair, PairResolution, ProviderRegistry } from "../../llm/registry.js";
-import type { Job, JobRegistry } from "../messages/jobs.js";
+import type { JobRegistry } from "../messages/jobs.js";
 import { withTimeout } from "../messages/race.js";
 import { reclaimStale } from "../messages/reclaim.js";
 import { type SessionCursor, encodeCursor } from "./cursor.js";
@@ -35,9 +35,9 @@ export type SessionsService = {
   /**
    * The only way a session is deleted, by the endpoint and by retention: under the row lock,
    * stale reclaim, then (with `inactiveBefore`) `skipped` when the session was active at or
-   * after that time, then every local job of the session is aborted (reason `deleted`) and
-   * the session is deleted with its messages. Resolves once those jobs have ended (waiting
-   * a moment at most), so their capacity is free again.
+   * after that time, then the session is deleted with its messages; once that has committed,
+   * every local job of the session is aborted (reason `deleted`). Resolves once those jobs
+   * have ended (waiting a moment at most), so their capacity is free again.
    */
   deleteSession(
     id: string,
@@ -120,7 +120,6 @@ export function createSessionsService(deps: {
 
     async deleteSession(id, options = {}) {
       const { inactiveBefore } = options;
-      let aborted: Job[] = [];
       const outcome = await db.tx(async (tx) => {
         const locked =
           inactiveBefore === undefined
@@ -133,16 +132,19 @@ export function createSessionsService(deps: {
         if ("active" in locked && locked.active) {
           return "skipped" as const;
         }
-        // By session, whatever the rows say after reclaim: a job whose row was just failed
-        // as interrupted may still be running here. An aborted job writes nothing more, so
-        // aborting before the commit is safe (#12, decision 1). Should the delete itself fail
-        // and roll back, the session stays with its turn left generating until stale reclaim
-        // fails it as interrupted. A send's job is registered synchronously once its
-        // admission commits, before this lock can be granted, so none is missed.
-        aborted = jobs.abortSession(id, "deleted");
         await deleteSessionRow(tx, id);
         return "deleted" as const;
       });
+      if (outcome !== "deleted") {
+        return outcome;
+      }
+      // After the commit, so that a stream or JSON wait following an aborted job reads the
+      // turn as gone (and ends without a final event) rather than as still generating. Until
+      // then a job's writes match no row once the delete commits, and are fenced off. By
+      // session, whatever the rows said after reclaim: a job whose row was just failed as
+      // interrupted may still be running here. A send's job is registered synchronously once
+      // its admission commits, before this delete could lock the session, so none is missed.
+      const aborted = jobs.abortSession(id, "deleted");
       if (aborted.length > 0) {
         await withTimeout(Promise.all(aborted.map((job) => job.finished)), JOB_END_WAIT_MS);
       }
