@@ -47,6 +47,33 @@ describe("openSseStream", () => {
     expect(stream.send("delta", { text: "x" })).toBe(false);
   });
 
+  it("reports an event as not sent once the connection is destroyed, before close is emitted", async () => {
+    let opened!: (result: { afterDestroy: boolean; closed: boolean }) => void;
+    const result = new Promise<{ afterDestroy: boolean; closed: boolean }>((resolve) => {
+      opened = resolve;
+    });
+    app = Fastify({ logger: false });
+    app.get("/stream", async (_request, reply) => {
+      const stream = openSseStream(reply, {
+        ssePingIntervalMs: 10_000,
+        sseBufferLimitBytes: 65_536,
+      });
+      // The client reset the socket; Node emits 'close' only on a later tick.
+      reply.raw.destroy();
+      opened({ afterDestroy: stream.send("delta", { text: "x" }), closed: stream.closed });
+      return reply;
+    });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as AddressInfo;
+
+    // The head was already flushed, so the response may arrive before the reset; either is fine.
+    void fetch(`http://127.0.0.1:${port}/stream`)
+      .then((response) => response.body?.cancel())
+      .catch(() => {});
+
+    expect(await result).toEqual({ afterDestroy: false, closed: true });
+  });
+
   it("closes the connection instead of throwing when the head cannot be written", async () => {
     let opened!: (result: SseStream | Error) => void;
     const streamOpened = new Promise<SseStream | Error>((resolve) => {

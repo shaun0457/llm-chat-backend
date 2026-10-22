@@ -80,7 +80,8 @@ export function openSseStream(reply: FastifyReply, options: SseOptions): SseStre
   const listeners: Array<() => void> = [];
 
   const write = (frame: string): boolean => {
-    if (ending) {
+    // `destroyed` covers a client that is gone before Node emits 'close' on a later tick.
+    if (ending || response.destroyed) {
       return false;
     }
     const pendingBytes = response.writableLength;
@@ -146,7 +147,7 @@ export function openSseStream(reply: FastifyReply, options: SseOptions): SseStre
       }
     },
     get closed() {
-      return ending;
+      return ending || response.destroyed;
     },
   };
 }
