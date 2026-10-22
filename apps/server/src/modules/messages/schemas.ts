@@ -16,8 +16,11 @@ const timestamp = z
   .string()
   .describe("ISO-8601 UTC with microsecond precision, e.g. 2026-10-21T15:27:10.982364Z");
 
-export const sessionIdParams = z.object({ id: z.uuid() });
-export const messageParams = z.object({ id: z.uuid(), mid: z.uuid() });
+// Path ids in lower case, as PostgreSQL returns uuid values: compared with stored ids as
+// strings (the session of a replayed message) and used as keys of in-memory jobs.
+const pathId = () => z.uuid().toLowerCase();
+export const sessionIdParams = z.object({ id: pathId() });
+export const messageParams = z.object({ id: pathId(), mid: pathId() });
 
 // No length limit: an id that is not catalogued is a 422, whatever its length.
 const provider = z

@@ -115,6 +115,24 @@ describe("idempotent send: client message ids", () => {
       expect(fake.requests).toHaveLength(1);
     });
 
+    it("replays a send made through the session path in upper case, with 200 and the same turn", async () => {
+      start();
+      const session = await createSession(app);
+      const upperSessionId = session.id.toUpperCase();
+      expect(upperSessionId).not.toBe(session.id);
+      const payload = { id: crypto.randomUUID(), content: "Hi" };
+      const original = await send(app, upperSessionId, payload);
+      expect(original.statusCode).toBe(200);
+
+      const replay = await send(app, upperSessionId, payload);
+
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json()).toEqual(original.json());
+      expect((replay.json() as TurnBody).userMessage.sessionId).toBe(session.id);
+      expect(fake.requests).toHaveLength(1);
+      expect(await allMessages(app, session.id)).toHaveLength(2);
+    });
+
     it.each([
       ["not a uuid"],
       [""],
