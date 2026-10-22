@@ -22,8 +22,16 @@ import { messagesRoutes } from "./modules/messages/routes.js";
 import { createMessagesService } from "./modules/messages/service.js";
 import { providersRoutes } from "./modules/providers/routes.js";
 import { sessionsRoutes } from "./modules/sessions/routes.js";
+import { type Retention, createRetention } from "./modules/sessions/retention.js";
 import { createSessionsService } from "./modules/sessions/service.js";
 import { MIGRATIONS_FOLDER } from "./paths.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Deletes inactive sessions; null unless RETENTION_DAYS is set. Tests call runOnce(). */
+    retention: Retention | null;
+  }
+}
 
 /** The app never closes `db`: its owner does (server.ts on shutdown, the test harness per file). */
 export type AppDeps = {
@@ -134,6 +142,27 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     });
   const sessions = createSessionsService({ db, registry, staleThresholdMs, jobs });
   void app.register(sessionsRoutes, { service: sessions });
+
+  const retention =
+    config.retentionDays === undefined
+      ? null
+      : createRetention({
+          db,
+          sessions,
+          days: config.retentionDays,
+          intervalMs: config.retentionIntervalMs,
+          log: app.log,
+        });
+  app.decorate("retention", retention);
+  if (retention !== null) {
+    // Only a listening server runs it: tests and the OpenAPI script build apps that never do.
+    app.addHook("onListen", async () => {
+      retention.start();
+    });
+    app.addHook("preClose", async () => {
+      await retention.stop();
+    });
+  }
 
   const messages = createMessagesService({
     db,
