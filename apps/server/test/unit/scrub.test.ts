@@ -47,6 +47,17 @@ describe("scrub", () => {
     expect(scrub("The model is overloaded.", KEY)).toBe("The model is overloaded.");
   });
 
+  it("removes the key as a JSON body or a URL would echo it", () => {
+    const key = 'k"ey\\with/sp&ce';
+
+    expect(scrub(JSON.stringify({ message: `bad key ${key}` }), key)).toBe(
+      '{"message":"bad key [REDACTED]"}',
+    );
+    expect(scrub(`https://h/p?token=${encodeURIComponent(key)}`, key)).toBe(
+      "https://h/p?token=[REDACTED]",
+    );
+  });
+
   it("removes the key before the patterns, so no fragment of it survives", () => {
     expect(scrub(`Bearer ${KEY}`, KEY)).toBe("Bearer [REDACTED]");
     expect(scrub(`?api_key=${KEY}`, KEY)).toBe("?api_key=[REDACTED]");

@@ -9,11 +9,18 @@ const KNOWN_KEY_FORMATS = /\b(?:nvapi-[\w-]{8,}|sk-[\w-]{16,})/g;
 
 /**
  * Removes credentials from text before it is stored, returned or logged: the literal `key`
- * (if any), bearer tokens, key query parameters and recognisable key formats. The literal key
+ * (if any, also JSON-escaped or URL-encoded), bearer tokens, key query parameters and recognisable key formats. The literal key
  * goes first, so a pattern can never leave a fragment of it behind.
  */
 export function scrub(text: string, key: string | null): string {
-  const withoutKey = key === null || key.length === 0 ? text : text.split(key).join(REDACTED);
+  let withoutKey = text;
+  if (key !== null && key.length > 0) {
+    // Also as a JSON string or a URL would carry it; the longest form first.
+    const forms = [...new Set([key, JSON.stringify(key).slice(1, -1), encodeURIComponent(key)])];
+    for (const form of forms.sort((a, b) => b.length - a.length)) {
+      withoutKey = withoutKey.split(form).join(REDACTED);
+    }
+  }
   return withoutKey
     .replace(BEARER, `$1 ${REDACTED}`)
     .replace(KEY_PARAM, `$1$2=${REDACTED}`)
