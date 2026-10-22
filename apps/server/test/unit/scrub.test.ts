@@ -85,6 +85,11 @@ describe("scrub: upstream account identifiers", () => {
     ],
     ['Not found for Account "acct-123"', 'Not found for Account "[REDACTED]"'],
     ["NOT FOUND FOR ACCOUNT 'acct-123'.", "NOT FOUND FOR ACCOUNT '[REDACTED]'."],
+    // A raw JSON body, before it is parsed.
+    [
+      String.raw`{"detail":"Not found for account \"acct-123\""}`,
+      String.raw`{"detail":"Not found for account \"[REDACTED]\""}`,
+    ],
   ])("replaces the quoted value after the word account: %s", (input, expected) => {
     expect(scrub(input, null)).toBe(expected);
   });

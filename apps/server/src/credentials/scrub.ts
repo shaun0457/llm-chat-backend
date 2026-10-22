@@ -12,9 +12,10 @@ const KNOWN_KEY_FORMATS = /\b(?:nvapi-[\w-]{8,}|sk-[\w-]{16,}|(?:nvapi|sk)-[\w-]
 /**
  * The quoted value after the word `account`, as in NVIDIA's 404 text `Function '<id>': Not
  * found for account '<account id>'`. Not a credential, but sessions are unauthenticated, so
- * anyone holding a session id could read the provider account it names.
+ * anyone holding a session id could read the provider account it names. The quotes may be
+ * JSON-escaped (`\"`), as in a raw error body.
  */
-const ACCOUNT_ID = /\b(account\s+)(['"])[^'"\r\n]{0,256}\2/gi;
+const ACCOUNT_ID = /\b(account\s+)(\\?['"])[^'"\\\r\n]{0,256}\2/gi;
 
 /**
  * Removes credentials from text before it is stored, returned or logged: the literal `key`
