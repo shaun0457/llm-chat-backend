@@ -6,13 +6,13 @@
       "models": [{ "id": "demo", "contextWindow": 8192, "maxOutputTokens": 1024 }]
     },
     "nvidia": {
-      "defaultModel": "meta/llama-3.2-11b-vision-instruct",
+      "defaultModel": "nvidia/nemotron-3-ultra-550b-a55b",
       "requiresKey": true,
       "models": [
         {
-          "id": "meta/llama-3.2-11b-vision-instruct",
-          "contextWindow": 32768,
-          "maxOutputTokens": 2048
+          "id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "contextWindow": 262144,
+          "maxOutputTokens": 4096
         }
       ]
     },

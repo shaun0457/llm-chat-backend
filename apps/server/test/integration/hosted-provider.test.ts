@@ -32,9 +32,9 @@ describe("hosted provider (nvidia) end to end", () => {
     expect(nvidia).toEqual({
       id: "nvidia",
       requiresKey: true,
-      defaultModel: "meta/llama-3.2-11b-vision-instruct",
+      defaultModel: "nvidia/nemotron-3-ultra-550b-a55b",
       models: [
-        { id: "meta/llama-3.2-11b-vision-instruct", contextWindow: 32768, maxOutputTokens: 2048 },
+        { id: "nvidia/nemotron-3-ultra-550b-a55b", contextWindow: 262144, maxOutputTokens: 4096 },
       ],
     });
   });
@@ -59,7 +59,7 @@ describe("hosted provider (nvidia) end to end", () => {
       status: "completed",
       content: "Hello there",
       provider: "nvidia",
-      model: "meta/llama-3.2-11b-vision-instruct",
+      model: "nvidia/nemotron-3-ultra-550b-a55b",
       usage: { promptTokens: 21, completionTokens: 3 },
       finishReason: "stop",
     });
@@ -68,8 +68,8 @@ describe("hosted provider (nvidia) end to end", () => {
     expect(upstream.requests).toHaveLength(1);
     expect(upstream.requests[0]?.authorization).toBe(`Bearer ${KEY}`);
     expect(upstream.requests[0]?.body).toMatchObject({
-      model: "meta/llama-3.2-11b-vision-instruct",
-      max_tokens: 2048,
+      model: "nvidia/nemotron-3-ultra-550b-a55b",
+      max_tokens: 4096,
       messages: [{ role: "user", content: "Hi" }],
     });
   });

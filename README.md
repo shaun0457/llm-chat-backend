@@ -561,30 +561,39 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot hav
 
 ## Providers and API keys
 
-| Provider | Needs a key | Models (`config/models.json`)                  | Enable with                                                                                       |
-| -------- | ----------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `demo`   | no          | `demo`: a fixed sentence, for trying the API   | (on by default)                                                                                   |
-| `nvidia` | yes         | `meta/llama-3.2-11b-vision-instruct` (default) | `PROVIDERS_ENABLED=demo,nvidia`                                                                   |
-| `ollama` | no          | `qwen2.5:0.5b` (default), local, CPU only      | `PROVIDERS_ENABLED=demo,ollama` with the `local-llm` profile ([Local model](#local-model-ollama)) |
+| Provider | Needs a key | Models (`config/models.json`)                                    | Enable with                                                                                       |
+| -------- | ----------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `demo`   | no          | `demo`: a fixed sentence, for trying the API                     | (on by default)                                                                                   |
+| `nvidia` | yes         | `nvidia/nemotron-3-ultra-550b-a55b` (default), a reasoning model | `PROVIDERS_ENABLED=demo,nvidia`                                                                   |
+| `ollama` | no          | `qwen2.5:0.5b` (default), local, CPU only                        | `PROVIDERS_ENABLED=demo,ollama` with the `local-llm` profile ([Local model](#local-model-ollama)) |
 
 `nvidia` talks to NVIDIA's hosted OpenAI-compatible API through the official `openai` SDK; any
-other OpenAI-compatible server can be added the same way. Only non-reasoning models are
-catalogued, and only the answer content becomes text: reasoning side fields are ignored.
+other OpenAI-compatible server can be added the same way. Only the answer content becomes text.
+`nemotron-3-ultra` reasons before it answers, and its reasoning (`reasoning_content` or
+`reasoning`) is never read: it is not stored, returned, streamed, logged or sent as history.
+While the model reasons, an event stream shows only `message.created` and `: ping` comments,
+and a JSON client simply waits. An answer that has no text after reasoning, or that used up
+`maxOutputTokens` before any text, fails as `llm_upstream_error` instead of completing empty.
+Answers are the model's text as written, which may include Markdown such as `**bold**`.
 `GET /providers` lists the enabled providers, their models and `requiresKey`; it never says
 whether the server has a key of its own.
 
 **Live-verified.** Every catalogued NVIDIA model is checked against the real API by the
 `live-llm` workflow before it is listed. Its result line on 2026-10-22
-([run 39718461460](https://github.com/shaun0457/llm-chat-backend/actions/runs/39718461460)),
+([run 39812414213](https://github.com/shaun0457/llm-chat-backend/actions/runs/39812414213)),
 for "What is the capital of France?" with "Answer in one short sentence.":
 
 ```text
-LIVE_RESULT {"model":"meta/llama-3.2-11b-vision-instruct","finishReason":"stop","usage":{"promptTokens":60,"completionTokens":8},"answer":"The capital of France is Paris."}
+LIVE_RESULT {"model":"nvidia/nemotron-3-ultra-550b-a55b","finishReason":"stop","usage":{"promptTokens":29,"completionTokens":44},"totalMs":38675,"answer":"The capital of France is Paris."}
 ```
 
-NVIDIA's hosted API queues requests to busy models; that call took about 60 s. Models that
-answered 404 for the key's account, timed out, or reason before answering were left out
-(ADR 0008, V3).
+The completion tokens include the reasoning. NVIDIA's hosted API queues requests to busy
+models and sometimes answers "Service temporarily overloaded"; that call took 39 s, while the
+same question took about 2 s in other runs. In a benchmark of the five models the key could
+use (20 calls each), `nemotron-3-ultra` answered every time, with its first answer token after
+2.0 s (median) and the whole answer after 6.7 s (median) and 19.4 s (p95); the model it
+replaced answered 3 of 5 times. Models that answered 404 for the key's account were left out
+(ADR 0008, amendment for issue #36).
 
 **Bring your own key.** Send your key in the `X-LLM-Api-Key` header of
 `POST /sessions/:id/messages`. A provider that needs no key (`requiresKey: false`, such as
@@ -623,12 +632,12 @@ again.
 
 **Failures** are stored on the assistant message and answered with 502 in JSON mode:
 
-| `errorCode`            | When                                                                                           |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `llm_auth_failed`      | the provider rejected the key (401/403); never retried                                         |
-| `llm_context_overflow` | the provider said the input is too long for the model's context                                |
-| `llm_timeout`          | no response headers within 60 s, on each of three attempts; or `GENERATION_DEADLINE_MS` passed |
-| `llm_upstream_error`   | 429, 5xx, a connection error, a malformed stream, or no finish reason                          |
+| `errorCode`            | When                                                                                                                          |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `llm_auth_failed`      | the provider rejected the key (401/403); never retried                                                                        |
+| `llm_context_overflow` | the provider said the input is too long for the model's context                                                               |
+| `llm_timeout`          | no response headers within 60 s, on each of three attempts; or `GENERATION_DEADLINE_MS` passed                                |
+| `llm_upstream_error`   | 429, 5xx, a connection error, a malformed stream, no finish reason, or no answer text after reasoning or at the output budget |
 
 429, 5xx, connection errors and timeouts are retried twice by the SDK before they fail.
 `errorDetail` is a short, scrubbed message (at most 500 characters), for example
@@ -893,12 +902,12 @@ the adapter: `LLM_LIVE_TESTS=1 NVIDIA_API_KEY=… pnpm test:unit`. It is skipped
 only the `live-llm` workflow runs it, with the repository secret: on pushes to `main`, by hand,
 or on a pull request from this repository labelled `live-llm`. A second job of that workflow
 starts the built image with `docker compose`, the server's key and a CI-only catalog copy that
-caps answers at 32 tokens, creates an `nvidia` session and asks one question through
-`POST /sessions/:id/messages` (JSON, `Prefer: wait=150`), then once more as an event stream
-(`Accept: text/event-stream`), which must end with `done`. It passes only with a completed,
-non-empty answer each way. In a second session it sends "My name is Ada" and then asks for the
-name, and the second answer must contain "Ada", which shows the first turn reached the model
-as history. It prints just the answers and their usage, and fails if a response or
+caps answers at 1024 tokens (reasoning included), creates an `nvidia` session and asks one
+question through `POST /sessions/:id/messages` (JSON, `Prefer: wait=150`), then once more as an
+event stream (`Accept: text/event-stream`), which must end with `done`. It passes only with a
+completed, non-empty answer each way. In a second session it sends "My name is Ada" and then
+asks for the name, and the second answer must contain "Ada", which shows the first turn reached
+the model as history. It prints just the answers and their usage, and fails if a response or
 the container logs (which must not be empty) contain a key-shaped string. It runs after the
 adapter job, so the two never call NVIDIA at the same time. Neither job is a required check.
 

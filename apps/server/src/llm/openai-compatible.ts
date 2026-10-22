@@ -77,6 +77,20 @@ async function readStart(response: Response, maxBytes: number): Promise<string> 
   }
 }
 
+/** The delta fields OpenAI-compatible servers stream reasoning in. */
+const REASONING_FIELDS = ["reasoning_content", "reasoning"] as const;
+
+/** Whether a delta carries reasoning text; the text itself is never returned. */
+function hasReasoning(delta: object | undefined): boolean {
+  if (delta === undefined) {
+    return false;
+  }
+  return REASONING_FIELDS.some((field) => {
+    const value: unknown = (delta as Record<string, unknown>)[field];
+    return typeof value === "string" && value.length > 0;
+  });
+}
+
 function finishReason(value: string): LlmFinishReason {
   return value === "stop" || value === "length" ? value : "other";
 }
@@ -165,15 +179,23 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       // Finish reason and usage are accumulated separately: usage may come in a later chunk.
       let reason: LlmFinishReason | undefined;
       let usage: LlmUsage | null = null;
+      /** Whether any answer text other than whitespace arrived. */
+      let answered = false;
+      /** Whether the model reasoned; only the presence is noted, never the text. */
+      let reasoned = false;
       for await (const chunk of chunks) {
+        // Reasoning chunks also count as progress: a model may reason for a while first.
         armIdleTimer();
         // Compatible servers do not always send every field the SDK's types promise.
         const choice = chunk.choices?.[0];
-        // Only answer content becomes text; reasoning side fields are ignored.
+        // Only answer content becomes text. Reasoning in a side field is never kept, so it
+        // cannot be stored, streamed or logged.
         const text = choice?.delta?.content;
         if (typeof text === "string" && text.length > 0) {
+          answered ||= text.trim().length > 0;
           yield { type: "delta", text };
         }
+        reasoned ||= hasReasoning(choice?.delta);
         if (typeof choice?.finish_reason === "string") {
           reason = finishReason(choice.finish_reason);
         }
@@ -188,6 +210,17 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         throw new LlmError(
           "llm_upstream_error",
           "The model provider ended the answer without a finish reason.",
+        );
+      }
+      // A model that used up its output budget, or reasoned, without any answer text has not
+      // answered (typically its reasoning took the whole budget). Other streams without text
+      // (e.g. a content filter) finish as before.
+      if (!answered && (reason === "length" || reasoned)) {
+        throw new LlmError(
+          "llm_upstream_error",
+          reason === "length"
+            ? "The model used its whole output budget before it started the answer."
+            : "The model reasoned but finished without any answer text.",
         );
       }
       yield { type: "finish", reason, usage };

@@ -125,14 +125,15 @@ jobs:
       - name: Prepare a CI-only catalog with short answers
         shell: bash
         run: |
-          # The shipped catalog stays unchanged. This copy caps the default NVIDIA model at 32
-          # output tokens, so the client request carries no max_tokens (the server sends the cap).
+          # The shipped catalog stays unchanged. This copy caps the default NVIDIA model at 1024
+          # output tokens (its reasoning plus a short answer, #36), so the client request
+          # carries no max_tokens (the server sends the cap).
           mkdir -p "$RUNNER_TEMP/live-e2e"
           jq '.providers.nvidia.defaultModel as $model
-            | (.providers.nvidia.models[] | select(.id == $model) | .maxOutputTokens) = 32' \
+            | (.providers.nvidia.models[] | select(.id == $model) | .maxOutputTokens) = 1024' \
             apps/server/config/models.json > "$RUNNER_TEMP/models.live.json"
           jq -e '.providers.nvidia.defaultModel as $model
-            | [.providers.nvidia.models[] | select(.id == $model and .maxOutputTokens == 32)]
+            | [.providers.nvidia.models[] | select(.id == $model and .maxOutputTokens == 1024)]
             | length == 1' "$RUNNER_TEMP/models.live.json" > /dev/null
           printf '%s\n' \
             'services:' \

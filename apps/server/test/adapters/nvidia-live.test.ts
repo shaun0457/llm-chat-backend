@@ -40,7 +40,8 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
   async function streamOnce(model: string): Promise<LlmEvent[]> {
     const request: LlmRequest = {
       model,
-      maxOutputTokens: 32,
+      // Room for a reasoning model's reasoning before the short answer (#36).
+      maxOutputTokens: 1024,
       messages: [
         { role: "system", content: "Answer in one short sentence." },
         { role: "user", content: "What is the capital of France?" },
@@ -72,7 +73,9 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
   it.concurrent.each(models.map((model) => [model.id]))(
     "%s streams an answer without inline reasoning, with one finish",
     async (model) => {
+      const started = performance.now();
       const events = await streamOnce(model);
+      const totalMs = Math.round(performance.now() - started);
 
       const text = events.map((event) => (event.type === "delta" ? event.text : "")).join("");
       const finishes = events.filter((event) => event.type === "finish");
@@ -82,6 +85,7 @@ describe.skipIf(!live)("nvidia live", { timeout: 2 * CALL_TIMEOUT_MS + 10_000 },
         model,
         finishReason: finish?.reason ?? null,
         usage: finish?.usage ?? null,
+        totalMs,
         answer: text.slice(0, 80),
       });
 
