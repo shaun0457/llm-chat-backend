@@ -5,11 +5,12 @@ import type { Clock } from "../../clock.js";
 import type { AppConfig } from "../../config.js";
 import type { Db, Tx } from "../../db/client.js";
 import { pgErrorCode } from "../../db/errors.js";
+import { limitStatements } from "../../db/statement-timeout.js";
 import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
 import { remainingMs } from "./deadline.js";
-import { TIMED_OUT, untilAbort, withTimeout } from "./race.js";
+import { untilAbort, withTimeout } from "./race.js";
 import {
   completeAssistant,
   failAssistant,
@@ -87,6 +88,8 @@ async function* untilAborted<T>(events: AsyncIterable<T>, signal: AbortSignal): 
   let exhausted = false;
   try {
     for (;;) {
+      // Checked first: once aborted, the provider is not resumed again.
+      signal.throwIfAborted();
       const result = await untilAbort(iterator.next(), signal);
       if (result.done === true) {
         exhausted = true;
@@ -192,33 +195,20 @@ export function createJobRegistry(deps: {
     /**
      * This attempt's final state when it is already stored: by an earlier try whose commit
      * reached the database although the job saw it fail, or by stale reclaim. Undefined when
-     * the row is gone, belongs to a newer attempt, or is still generating, or when the read
-     * takes longer than one statement (a stalled database must not hold the job here).
+     * the row is gone, belongs to a newer attempt, or is still generating.
      */
-    const storedFinalState = async (): Promise<Message | undefined> => {
-      try {
-        const row = await withTimeout(
-          findMessage(db.drizzle, spec.sessionId, spec.assistantId),
-          timing.terminalStatementTimeoutMs,
-        );
-        if (row === TIMED_OUT) {
-          jobLog.warn("reading the final state back took too long");
-          return undefined;
-        }
-        return row?.attempt === spec.attempt && row.status !== "generating" ? row : undefined;
-      } catch (error) {
-        jobLog.warn({ code: pgErrorCode(error) }, "could not read the final state back");
-        return undefined;
-      }
+    const ownFinalState = async (tx: Tx): Promise<Message | undefined> => {
+      const row = await findMessage(tx, spec.sessionId, spec.assistantId);
+      return row?.attempt === spec.attempt && row.status !== "generating" ? row : undefined;
     };
     /**
      * Every terminal write goes through the budget; it throws TerminalWriteError. When the
-     * fence no longer matches, the row's own final state (if this attempt has one) is reported.
+     * fence no longer matches, the row's own final state (if this attempt has one) is reported;
+     * it is read in the same try, so the read is bounded and retried like the write, and a row
+     * whose state cannot be read ends as a failed write rather than as "deleted".
      */
-    const store = async (
-      write: (tx: Tx) => Promise<Message | undefined>,
-    ): Promise<Message | undefined> => {
-      const written = await writeWithinBudget(
+    const store = (write: (tx: Tx) => Promise<Message | undefined>): Promise<Message | undefined> =>
+      writeWithinBudget(
         {
           db,
           clock,
@@ -227,10 +217,8 @@ export function createJobRegistry(deps: {
             budgetMs: timing.terminalWriteBudgetMs,
           },
         },
-        write,
+        async (tx) => (await write(tx)) ?? (await ownFinalState(tx)),
       );
-      return written ?? (await storedFinalState());
-    };
     const { controller, bus } = job;
     let fenceLost = false;
     let flushed = "";
@@ -246,7 +234,12 @@ export function createJobRegistry(deps: {
       if (flushing !== undefined || fenceLost || content === flushed) {
         return;
       }
-      flushing = flushContent(db.drizzle, fence, content)
+      // Limited in the database too, so a flush the job stops waiting for frees its connection.
+      flushing = db
+        .tx(async (tx) => {
+          await limitStatements(tx, timing.terminalStatementTimeoutMs);
+          return flushContent(tx, fence, content);
+        })
         .then((matched) => {
           if (matched) {
             flushed = content;
@@ -289,9 +282,13 @@ export function createJobRegistry(deps: {
     let generationFailed = false;
     let generationError: unknown;
     try {
-      // A read stuck behind a lock must not outlast the deadline; abandoned, it ends on its own.
+      // A read stuck behind a lock must not outlast the deadline: the job stops waiting at the
+      // abort, and the database cancels the read itself when the deadline has passed.
       const history = await untilAbort(
-        historyBefore(db.drizzle, spec.sessionId, spec.userMessage.seq),
+        db.tx(async (tx) => {
+          await limitStatements(tx, leftMs);
+          return historyBefore(tx, spec.sessionId, spec.userMessage.seq);
+        }),
         controller.signal,
       );
       const request = {

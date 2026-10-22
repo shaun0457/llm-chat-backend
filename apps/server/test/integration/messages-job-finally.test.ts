@@ -122,6 +122,11 @@ describe("job.finally", () => {
     if (job === undefined) {
       throw new Error("expected the generation to be running");
     }
+    // The first delta is in before the gate; subscribing after it hears the rest only.
+    await eventually(
+      async () => job.bus.snapshot(),
+      (text) => text === "Hel",
+    );
     const heard: string[] = [];
     job.bus.subscribe((event) => heard.push(event.type));
 

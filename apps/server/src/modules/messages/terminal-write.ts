@@ -1,9 +1,9 @@
-import { sql } from "drizzle-orm";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { Clock } from "../../clock.js";
 import type { Db, Tx } from "../../db/client.js";
 import { pgErrorCode } from "../../db/errors.js";
+import { limitStatements } from "../../db/statement-timeout.js";
 import { remainingMs } from "./deadline.js";
 import { TIMED_OUT, withTimeout } from "./race.js";
 
@@ -92,9 +92,7 @@ export async function writeWithinBudget<T>(
           if (statementMs === 0) {
             throw new BudgetExhausted();
           }
-          await tx.execute(
-            sql`SELECT set_config('statement_timeout', ${`${statementMs}ms`}, true)`,
-          );
+          await limitStatements(tx, statementMs);
           return write(tx);
         }),
         available,

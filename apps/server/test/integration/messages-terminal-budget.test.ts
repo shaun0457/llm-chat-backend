@@ -296,9 +296,22 @@ describe("terminal-budget", () => {
     turn.gate.release();
     const end = await turn.job.finished;
 
-    // Without the bound the job would sit behind the 5 s flush.
+    // Without the bound the job would sit behind the 5 s flush. The database cancels the flush
+    // at its statement timeout, so the final write gets the row and stores the answer.
     expect(performance.now() - started).toBeLessThan(2_500);
-    expect(end).toBe("write_failed");
+    expect(end).toBe("terminal");
     expect(turn.held()).toBe(0);
+    // The flush itself is cancelled in the database at its statement timeout instead of
+    // keeping its pooled connection for the whole 5 s.
+    await eventually(
+      async () =>
+        (
+          await testDb.db.pool.query<{ n: number }>(
+            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event = 'PgSleep'",
+          )
+        ).rows[0]?.n ?? 0,
+      (sleeping) => sleeping === 0,
+      1_000,
+    );
   }, 15_000);
 });

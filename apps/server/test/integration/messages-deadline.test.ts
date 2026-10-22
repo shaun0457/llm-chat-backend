@@ -181,23 +181,51 @@ describe("deadline", () => {
     const fake = new FakeLlmProvider().script({ deltas: ["Never"] });
     app = makeTestApp({ db: testDb.db, config, jobs, ...testProviders({ llm: fake }) });
     const session = await createSession(app);
+    let releaseAt: NodeJS.Timeout | undefined;
     try {
       const pending = send(app, session.id, { content: "Hi" }, { prefer: "respond-async" });
-      await locked;
-      const releaseAt = setTimeout(() => void locker.query("COMMIT"), LOCK_HELD_MS);
+      // Granted once the admission commits.
+      await eventuallyDefined(() => locked);
+      releaseAt = setTimeout(() => void locker.query("COMMIT").catch(() => {}), LOCK_HELD_MS);
 
       const outcome = await eventuallyDefined(() => ended);
 
-      clearTimeout(releaseAt);
-      await locker.query("COMMIT");
       expect(outcome.afterMs).toBeLessThan(LOCK_HELD_MS / 2);
+      // The final write is stuck behind the same lock; reclaim will fail the turn later.
+      expect(outcome.end).toBe("write_failed");
       expect(fake.requests).toEqual([]);
-      await pending;
+      // The abandoned read is cancelled in the database too: it does not keep its pooled
+      // connection until the lock goes away.
+      expect(await historyReadsWaitingAfter(LOCK_HELD_MS / 3)).toBe(0);
+      expect((await pending).statusCode).toBe(202);
     } finally {
+      clearTimeout(releaseAt);
+      await locker.query("COMMIT").catch(() => {});
       await locker.end();
     }
   }, 15_000);
 });
+
+/**
+ * History reads (the job's select of id, seq, role …) waiting for a lock, polled until none are
+ * left or `ms` pass. The request's own read of the turn waits too; request-path timeouts are
+ * not part of this ticket.
+ */
+async function historyReadsWaitingAfter(ms: number): Promise<number> {
+  const until = performance.now() + ms;
+  for (;;) {
+    const { rows } = await testDb.db.pool.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM pg_stat_activity" +
+        " WHERE wait_event_type = 'Lock' AND datname = current_database()" +
+        ` AND query LIKE 'select "id", "seq", "role"%'`,
+    );
+    const waiting = rows[0]?.n ?? 0;
+    if (waiting === 0 || performance.now() >= until) {
+      return waiting;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
 
 /** `read()`'s value once it is defined. */
 async function eventuallyDefined<T>(read: () => Promise<T> | undefined): Promise<T> {
