@@ -223,8 +223,8 @@ flowchart LR
     postgres[("postgres<br/>PostgreSQL 17")]
     subgraph api["api: dist/index.js, one process built by buildApp()"]
       routes["Fastify routes<br/>health · providers · sessions · messages<br/>zod schemas: validation and /openapi.json"]
-      services["sessions service<br/>messages service: admission transaction"]
-      jobs["JobRegistry<br/>in-process jobs, one MessageBus each"]
+      services["sessions service<br/>messages service: admission transaction<br/>stale reclaim on every session-scoped request"]
+      jobs["JobRegistry<br/>in-process jobs, one MessageBus each<br/>generation deadline, terminal-write budget"]
       registry["ProviderRegistry<br/>ModelCatalog: config/models.json"]
       port{{"LlmProvider port"}}
       demo["DemoProvider<br/>no key"]
@@ -242,7 +242,7 @@ flowchart LR
   port --- openai
   openai -- "the turn's key, server-defined base URL" --> nvidia
   migrate -- "advisory lock, Drizzle migrations" --> postgres
-  services -- "row lock, inserts, reads" --> postgres
+  services -- "row lock, reclaim, inserts, reads" --> postgres
   jobs -- "fenced UPDATEs" --> postgres
 ```
 
@@ -253,8 +253,11 @@ one admission transaction, and every generation runs as a job inside the same pr
 reach models only through the `LlmProvider` port; the `ProviderRegistry` maps the enabled
 provider ids from the model catalog to their adapters. `demo` answers in process without a
 key, and `nvidia` goes through `OpenAiCompatibleProvider` to NVIDIA's hosted API with the key
-decided for that turn. PostgreSQL is the only shared state; memory holds what a restart may
-lose harmlessly (the text being streamed, abort controllers, capacity reservations).
+decided for that turn. Each job ends at its generation deadline at the latest, and an answer
+whose job died with the process is failed as `interrupted` by the next request that touches its
+session ([Failure handling](#failure-handling)). PostgreSQL is the only shared state; memory
+holds what a restart may lose harmlessly (the text being streamed, abort controllers, capacity
+reservations).
 
 ### Sending a message
 
@@ -421,8 +424,9 @@ parameters or database error details). Upstream error text is scrubbed of the ke
 tokens and key query parameters before it is stored, returned or logged. Sentinel tests check
 that a key appears in no log line, no database row and no response, also when the upstream
 echoes it back. While a generation runs, its key is necessarily in process memory. A restart
-loses running generations together with their keys; such an answer is retried with the key
-sent again.
+loses running generations together with their keys; such an answer becomes `failed`/`interrupted`
+([Failure handling](#failure-handling)) and is asked again in a new turn, with the key sent
+again.
 
 **Failures** are stored on the assistant message and answered with 502 in JSON mode:
 
@@ -466,9 +470,10 @@ leases, heartbeats, a sweeper and a hand-off between the worker and the request 
 the answer. The cost is a single API process: capacity and live text are per process, and a
 restart loses the running generations. Correctness never depends on that memory: the row lock,
 the partial unique index and fenced writes in PostgreSQL decide every outcome
-([ADR 0003](docs/adr/0003-single-process-db-truth.md)). Until crash recovery
-([#6](https://github.com/shaun0457/llm-chat-backend/issues/6)) lands, though, an answer cut
-off by a restart stays `generating` and keeps its session busy.
+([ADR 0003](docs/adr/0003-single-process-db-truth.md)), and an answer cut off by a restart is
+reclaimed from the database alone: after a fixed threshold it becomes `failed`/`interrupted`
+([ADR 0005](docs/adr/0005-deadline-reclaim.md)). The price is that the session shows the dead
+answer as `generating`, and stays busy, for up to four minutes.
 
 ## Test
 
@@ -485,23 +490,27 @@ low on a laptop.
 ### Testing approach
 
 Tests check external behaviour: status codes, headers, bodies, and rows as the API returns them.
-They do not assert on internal calls, map contents or private state. Two boundary observations
-are allowed because some guarantees can only be seen there: the fake provider records the
-requests it receives (to check what context a turn sent), and read-only database queries check
-that no column holds an API key.
+They do not assert on internal calls, map contents or private state. A few boundary
+observations are allowed because some guarantees can only be seen there: the fake provider
+records the requests it receives (to check what context a turn sent), read-only database
+queries check that no column holds an API key, and the crash-recovery tests insert the
+`generating` row a crashed process would have left behind.
 
-| Layer            | Where                    | What it covers                                                                                                                                  |
-| ---------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Unit             | `test/unit`, `test/lint` | Pure pieces: configuration, catalog, `Prefer` parsing, context assembly, cursors, the scrubber, the OpenAPI file; the dependency-direction rule |
-| Adapter contract | `test/adapters`          | `OpenAiCompatibleProvider` against an msw-mocked upstream API                                                                                   |
-| Integration      | `test/integration`       | Nearly every behaviour, through HTTP: `buildApp()` and `inject()` against a real PostgreSQL 17, with a fake LLM provider                        |
-| Process          | `test/process`           | The built server and migration entries as child processes, and Node's server timeouts on a real listening socket                                |
-| CI only          | `.github/workflows`      | The container image, the `docker compose` stack, migration and OpenAPI drift, and the live hosted-model checks                                  |
+| Layer            | Where                    | What it covers                                                                                                                                                                                                                  |
+| ---------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit             | `test/unit`, `test/lint` | Pure pieces: configuration, catalog, `Prefer` parsing, context assembly, cursors, the scrubber, deadline arithmetic, timeout races, the terminal-write budget, shutdown timing, the OpenAPI file; the dependency-direction rule |
+| Adapter contract | `test/adapters`          | `OpenAiCompatibleProvider` against an msw-mocked upstream API                                                                                                                                                                   |
+| Integration      | `test/integration`       | Nearly every behaviour, through HTTP: `buildApp()` and `inject()` against a real PostgreSQL 17, with a fake LLM provider                                                                                                        |
+| Process          | `test/process`           | The built server and migration entries as child processes (startup errors, signals, a shutdown that cannot finish), and Node's server timeouts on a real listening socket                                                       |
+| CI only          | `.github/workflows`      | The container image, the `docker compose` stack, migration and OpenAPI drift, and the live hosted-model checks                                                                                                                  |
 
 Integration tests start one PostgreSQL 17 container per run (testcontainers), migrate a
 template database once, and give every test file its own copy, so files run in parallel
-without seeing each other's rows. Locks, unique constraints and conditional updates are
-therefore tested for real, not against a mock database.
+without seeing each other's rows. Locks, unique constraints, conditional updates and statement
+timeouts are therefore tested for real, not against a mock database. Time-dependent rules run
+with scaled-down settings: tests build the app with a generation deadline of a few hundred
+milliseconds or a short terminal-write budget, a test clock (`test/helpers/clock.ts`) makes an
+admission look slow, and crashed rows get a `started_at` minutes in the past.
 
 **How the LLM is faked.** The test suite never calls a real LLM provider; the boundary is faked
 at two levels. Service and integration tests inject `FakeLlmProvider`
@@ -556,9 +565,6 @@ A first version of this list; the final submission pass completes it.
 
 **Still being built for v1**, each as its own ticket:
 
-- Generation deadlines and crash recovery: a stuck call ends at a hard deadline, and an answer
-  cut off by a restart becomes `failed`/`interrupted`
-  ([#6](https://github.com/shaun0457/llm-chat-backend/issues/6))
 - Admission rules: an input-size budget, per-message provider and model overrides, and
   per-process and per-provider capacity limits with 503
   ([#7](https://github.com/shaun0457/llm-chat-backend/issues/7))

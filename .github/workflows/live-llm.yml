@@ -116,7 +116,7 @@ jobs:
         shell: bash
         run: |
           # The shipped catalog stays unchanged. This copy caps the default NVIDIA model at 32
-          # output tokens, so the request itself carries no max_tokens.
+          # output tokens, so the client request carries no max_tokens (the server sends the cap).
           mkdir -p "$RUNNER_TEMP/live-e2e"
           jq '.providers.nvidia.defaultModel as $model
             | (.providers.nvidia.models[] | select(.id == $model) | .maxOutputTokens) = 32' \
