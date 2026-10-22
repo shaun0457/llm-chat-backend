@@ -135,9 +135,13 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
       // Node joins repeated Prefer lines into one comma-separated value.
       const { prefer } = request.headers;
       const preferences = parsePrefer(prefer === undefined ? [] : [prefer]);
+      // The response is not sent before the wait ends, so a close now means the client left.
+      const clientGone = new AbortController();
+      reply.raw.once("close", () => clientGone.abort());
       const outcome = await service.send(request.params.id, request.body, {
         waitMs: effectiveWaitMs(preferences, jsonWait),
         apiKey: request.headers["x-llm-api-key"],
+        clientGone: clientGone.signal,
       });
       const applied = preferenceApplied(preferences, jsonWait);
       const headers: Record<string, string> =

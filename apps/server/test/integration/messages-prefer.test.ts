@@ -224,6 +224,39 @@ describe("JSON sends: Prefer, 202 and polling", () => {
     });
   });
 
+  describe("prefer.disconnect", () => {
+    it("lets the answer finish and be stored when the client leaves during the wait", async () => {
+      start(LONG_WAIT_ENV);
+      const release = holdGeneration(["Hel", "lo"]);
+      const session = await createSession(app);
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const { port } = app.server.address() as AddressInfo;
+      const leaving = new AbortController();
+
+      const sent = fetch(`http://127.0.0.1:${port}/sessions/${session.id}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "Hi" }),
+        signal: leaving.signal,
+      });
+      const generating = await eventually(
+        () => app.inject({ method: "GET", url: `/sessions/${session.id}/messages?limit=2` }),
+        (page) => page.json().items.length === 2,
+      );
+      leaving.abort();
+      await expect(sent).rejects.toThrow();
+      release();
+
+      const assistant = (generating.json().items as Message[])[1];
+      const stored = await eventually(
+        () =>
+          app.inject({ method: "GET", url: `/sessions/${session.id}/messages/${assistant?.id}` }),
+        (poll) => poll.json().status !== "generating",
+      );
+      expect(stored.json()).toMatchObject({ status: "completed", content: "Hello" });
+    });
+  });
+
   describe("poll", () => {
     it("shows the current state on every poll, never cached, until the answer completes", async () => {
       start();

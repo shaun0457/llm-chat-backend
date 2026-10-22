@@ -2,7 +2,7 @@ import type { FastifyBaseLogger } from "fastify";
 
 import type { SseStream } from "../../http/sse.js";
 import type { Job, JobRegistry } from "./jobs.js";
-import { withTimeout } from "./race.js";
+import { untilAbort, withTimeout } from "./race.js";
 import type { Message, Turn } from "./schemas.js";
 
 /**
@@ -18,12 +18,18 @@ export type JsonOutcome = Readonly<{
 export type Attach = {
   /**
    * The turn's state for a JSON response. With a local job for this attempt, waits until that
-   * job has ended or `waitMs` has passed, whichever comes first; then reads the rows as they
-   * are. Undefined when the turn no longer exists (its session was deleted). A job that could
-   * not store the final state leaves its row generating: that is reported as pending, and
-   * stale reclaim fails the row later.
+   * job has ended, `waitMs` has passed or `clientGone` aborts, whichever comes first (the job
+   * goes on in every case); then reads the rows as they are. Undefined when the turn no
+   * longer exists (its session was deleted). A job that could not store the final state
+   * leaves its row generating: that is reported as pending, and stale reclaim fails the row
+   * later.
    */
-  json(assistantId: string, attempt: number, waitMs: number): Promise<JsonOutcome | undefined>;
+  json(
+    assistantId: string,
+    attempt: number,
+    waitMs: number,
+    clientGone?: AbortSignal,
+  ): Promise<JsonOutcome | undefined>;
   /**
    * Streams the turn: `message.created` with both messages as they are now, then
    * - with a local job for this attempt: every later delta exactly once, then `done` or
@@ -123,10 +129,13 @@ export function createAttach(deps: {
   }
 
   return {
-    async json(assistantId, attempt, waitMs) {
+    async json(assistantId, attempt, waitMs, clientGone) {
       const job = localJob(assistantId, attempt);
-      if (job !== undefined) {
-        await withTimeout(job.finished, waitMs);
+      if (job !== undefined && clientGone?.aborted !== true) {
+        const ended =
+          clientGone === undefined ? job.finished : untilAbort(job.finished, clientGone);
+        // Only the abort rejects (`finished` never does): the client is gone, stop waiting.
+        await withTimeout(ended, waitMs).catch(() => {});
       }
       const turn = await readTurn(assistantId);
       if (turn === undefined) {

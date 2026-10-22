@@ -140,6 +140,41 @@ describe("attach.json", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("stops waiting as soon as the client goes away and leaves no timer behind", async () => {
+    vi.useFakeTimers();
+    const { job } = controlledJob();
+    const gone = new AbortController();
+    let settled = false;
+    const pending = attachWith(job, () => turn("generating"))
+      .json(ASSISTANT, 1, 5_000, gone.signal)
+      .finally(() => {
+        settled = true;
+      });
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(settled).toBe(false);
+    gone.abort();
+    const outcome = await pending;
+
+    expect(outcome?.kind).toBe("pending");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not wait at all for a client that is already gone", async () => {
+    vi.useFakeTimers();
+    const { job } = controlledJob();
+
+    // No timer is advanced: a wait would never end.
+    const outcome = await attachWith(job, () => turn("generating")).json(
+      ASSISTANT,
+      1,
+      5_000,
+      AbortSignal.abort(),
+    );
+
+    expect(outcome?.kind).toBe("pending");
+  });
+
   it("does not wait for a job of another attempt", async () => {
     vi.useFakeTimers();
     const { job } = controlledJob(2);

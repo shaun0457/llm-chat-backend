@@ -33,13 +33,14 @@ const TITLE_MAX_CODE_POINTS = 60;
 
 export type MessagesService = {
   /**
-   * Admits a turn, starts its generation and waits for it at most `waitMs`: completed, failed,
-   * or pending when the answer is still being generated (also when the server shuts down).
+   * Admits a turn, starts its generation and waits for it at most `waitMs`, or until
+   * `clientGone` aborts: completed, failed, or pending when the answer is still being
+   * generated (also when the server shuts down).
    */
   send(
     sessionId: string,
     input: SendMessageInput,
-    options: { waitMs: number; apiKey: string | undefined },
+    options: { waitMs: number; apiKey: string | undefined; clientGone?: AbortSignal },
   ): Promise<JsonOutcome>;
   /**
    * Admits a turn like `send`, then opens the event stream with `open` (only once admission
@@ -307,10 +308,10 @@ export function createMessagesService(deps: {
   }
 
   return {
-    async send(sessionId, input, { waitMs, apiKey }) {
+    async send(sessionId, input, { waitMs, apiKey, clientGone }) {
       const { turn, attempt } = await start(sessionId, input, apiKey);
       const { assistantMessage } = turn;
-      const outcome = await attach.json(assistantMessage.id, attempt, waitMs);
+      const outcome = await attach.json(assistantMessage.id, attempt, waitMs, clientGone);
       if (outcome === undefined) {
         // Deleted while generating, normally together with its session.
         throw (await sessionExists(db.drizzle, sessionId)) ? messageNotFound() : sessionNotFound();
