@@ -6,7 +6,7 @@ import { TEST_ENV, makeTestApp } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import { type LogCapture, captureLogs } from "../helpers/log-capture.js";
-import { type Message, createSession, send } from "../helpers/messages.js";
+import { type Message, createSession, eventually, getMessage, send } from "../helpers/messages.js";
 import { testProviders } from "../helpers/providers.js";
 import { type SseConnection, eventsOf, listen, openSse } from "../helpers/sse-client.js";
 
@@ -208,6 +208,55 @@ describe("SSE sends", () => {
       expect(unknown.statusCode).toBe(404);
       expect(unknown.headers["content-type"]).toContain("application/problem+json");
       expect(unknown.json()).toMatchObject({ code: "session_not_found" });
+    });
+  });
+
+  describe("sse.disconnect", () => {
+    it("keeps generating after the client closes mid-stream and stores the whole answer", async () => {
+      await start();
+      const release = holdGeneration(["Hel", "lo", " there"], 1);
+      const session = await createSession(app);
+
+      const stream = await streamSend(session.id, "Hi");
+      const created = await stream.nextEvent();
+      const { assistantMessage } = created?.data as TurnBody;
+      // The first chunk, live or already in the snapshot; the rest is held.
+      if (assistantMessage.content === "") {
+        expect((await stream.nextEvent())?.data).toMatchObject({ text: "Hel" });
+      }
+      stream.close();
+      release();
+
+      const stored = await eventually(
+        () => getMessage(app, session.id, assistantMessage.id),
+        (response) => response.json().status !== "generating",
+      );
+      expect(stored.json()).toMatchObject({ status: "completed", content: "Hello there" });
+    });
+  });
+
+  describe("sse.ping", () => {
+    it("sends ping comments while the answer is quiet", async () => {
+      await start({ SSE_PING_INTERVAL_MS: "100" });
+      const release = holdGeneration(["Hel", "lo"]);
+      const session = await createSession(app);
+
+      const stream = await streamSend(session.id, "Hi");
+      let pings = 0;
+      // Bounded by the test timeout, not by a fixed pause.
+      while (pings < 3) {
+        const frame = await stream.next();
+        expect(frame).toBeDefined();
+        if (frame?.kind === "comment") {
+          expect(frame.raw).toBe(": ping");
+          pings += 1;
+        }
+      }
+      release();
+      const { frames, error } = await stream.drain();
+
+      expect(error).toBeUndefined();
+      expect(eventsOf(frames).at(-1)?.event).toBe("done");
     });
   });
 });
