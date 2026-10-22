@@ -43,6 +43,8 @@ const SSE_HEADERS: OutgoingHttpHeaders = {
   "connection": "keep-alive",
 };
 
+const FRAMING_HEADERS: ReadonlySet<string> = new Set(["content-length", "transfer-encoding"]);
+
 /**
  * Takes over the reply and opens an event stream on it: the headers already set on the reply
  * (by hooks: the request id, later CORS and security headers) plus the SSE headers, written at
@@ -56,7 +58,8 @@ const SSE_HEADERS: OutgoingHttpHeaders = {
 export function openSseStream(reply: FastifyReply, options: SseOptions): SseStream {
   const headers: OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(reply.getHeaders())) {
-    if (value !== undefined) {
+    // A length or encoding set earlier would break the chunked, open-ended stream.
+    if (value !== undefined && !FRAMING_HEADERS.has(name.toLowerCase())) {
       headers[name] = value;
     }
   }
@@ -95,6 +98,8 @@ export function openSseStream(reply: FastifyReply, options: SseOptions): SseStre
   };
 
   const ping = setInterval(() => write(PING_FRAME), options.ssePingIntervalMs);
+  // Never what keeps the process alive; the open connection does that.
+  ping.unref();
 
   const onClosed = (): void => {
     if (closed) {
@@ -113,7 +118,10 @@ export function openSseStream(reply: FastifyReply, options: SseOptions): SseStre
   };
   response.on("close", onClosed);
   // A write error is followed by close; it must not become an unhandled error event.
-  response.on("error", () => response.destroy());
+  response.on("error", (error) => {
+    reply.log.debug({ err: error }, "an event stream's connection failed");
+    response.destroy();
+  });
   if (response.destroyed) {
     // The client left before the stream opened (e.g. during admission): its close event has
     // already been emitted.

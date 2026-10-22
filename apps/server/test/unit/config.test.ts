@@ -189,7 +189,7 @@ describe("loadConfig", () => {
     ["RECLAIM_GRACE_MS", "0"],
     ["RECLAIM_GRACE_MS", "-50000"],
     ["SSE_PING_INTERVAL_MS", "0"],
-    ["SSE_PING_INTERVAL_MS", "9"],
+    ["SSE_PING_INTERVAL_MS", "99"],
     ["SSE_BUFFER_LIMIT_BYTES", "16383"],
     ["SSE_BUFFER_LIMIT_BYTES", "67108865"],
   ])("rejects %s=%s", (key, value) => {

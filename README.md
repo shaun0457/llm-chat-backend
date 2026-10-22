@@ -107,7 +107,7 @@ be positive whole numbers of milliseconds, at most one hour.
 | `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                                     |
 | `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown                               |
 | `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead; ≥ statement timeout + 1 s                       |
-| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (10 to one hour)                                         |
+| `SSE_PING_INTERVAL_MS`          | `15000`                      | How often a quiet event stream gets a `: ping` comment (100 ms to one hour)                                     |
 | `SSE_BUFFER_LIMIT_BYTES`        | `262144`                     | Bytes an event stream may have waiting for a slow client before it is closed (16 KiB–64 MiB)                    |
 | `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                       |
 | `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000) |

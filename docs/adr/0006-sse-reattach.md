@@ -96,6 +96,11 @@ completed` with status 200 when the stream ends (integration test `messages-sse`
   deploy overlap) answers `message.detached`, and the client falls back to polling.
 - A user who closes the tab still pays for the answer, which is stored. Stopping a generation
   on purpose is session deletion (#12) for now.
+- The buffer limit applies while the stream is open. Once the server ends a stream, Node
+  hands the rest to the socket and reports the response finished; a client that never reads
+  that rest holds at most the limit's worth of data until the server's keep-alive timeout
+  (Fastify's default, 72 s) closes its idle socket. A local probe confirmed the socket closes
+  shortly after that timeout.
 - Hijacked responses bypass `onSend` hooks: whatever later plugins add there does not reach
   SSE responses unless it sets its headers earlier (in `onRequest`, as the request id does).
 - Some proxies buffer despite these headers; JSON with polling remains the fallback, and

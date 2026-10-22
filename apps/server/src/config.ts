@@ -61,7 +61,7 @@ const envSchema = z.object({
   TERMINAL_STATEMENT_TIMEOUT_MS: timingMs(3_000),
   TERMINAL_WRITE_BUDGET_MS: timingMs(10_000),
   RECLAIM_GRACE_MS: timingMs(50_000),
-  SSE_PING_INTERVAL_MS: z.coerce.number().int().min(10).max(MAX_TIMING_MS).default(15_000),
+  SSE_PING_INTERVAL_MS: z.coerce.number().int().min(100).max(MAX_TIMING_MS).default(15_000),
   // At least one large frame must fit; at most 64 MiB per connection.
   SSE_BUFFER_LIMIT_BYTES: z.coerce.number().int().min(16_384).max(67_108_864).default(262_144),
   MAX_ACTIVE_GENERATIONS: capacityLimit(8),
