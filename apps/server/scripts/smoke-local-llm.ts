@@ -2,11 +2,12 @@
  * Smoke test of one provider through a running API: one question as an event stream and one as
  * JSON, each must end in a completed, non-empty answer without inlined reasoning. With
  * `--limit-check` it also proves the provider's concurrency limit and output cap: `concurrency`
- * long answers at once, one more send that must get 503 provider_busy, and every long answer
- * must stop at the catalog's maxOutputTokens (finish reason `length`).
+ * long answers at once, one more send that must get 503 provider_busy, no long answer past the
+ * catalog's maxOutputTokens, and at least one stopped by it (finish reason `length`).
  *
  * CI's local-llm job runs it against the compose stack with Ollama; it works against any base
- * URL. Plain Node runs it (type stripping), so it imports nothing but Node built-ins.
+ * URL. Plain Node runs it (type stripping): it imports nothing but Node built-ins and uses only
+ * erasable TypeScript syntax (test/unit/smoke-cli.test.ts runs it that way).
  *
  *   node scripts/smoke-local-llm.ts --base-url http://127.0.0.1:3000 --provider ollama
  *
@@ -18,16 +19,18 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 export const QUESTION = "What is 2+2? Answer with one number.";
-/** Far longer than any catalogued output limit, so an answer can only stop at the cap. */
-export const LONG_QUESTION = "Count from 1 to 1000, separated by spaces. Do not skip any number.";
+/** Far longer than any catalogued output limit, so an answer should only stop at the cap. */
+export const LONG_QUESTION =
+  "Write every whole number from 1 to 1000 in order, separated by spaces. Do not skip any " +
+  "number and do not stop before 1000.";
 
 const REASONING_MARKERS = /<\/?(think|thinking|reasoning)>/i;
 const POLL_INTERVAL_MS = 2_000;
+const STATUSES = new Set(["generating", "completed", "failed"]);
 
 type Usage = { promptTokens: number; completionTokens: number } | null;
 
 type AssistantMessage = {
-  id: string;
   status: "generating" | "completed" | "failed";
   content: string;
   finishReason: string | null;
@@ -36,11 +39,7 @@ type AssistantMessage = {
   errorDetail: string | null;
 };
 
-type ProviderInfo = {
-  id: string;
-  defaultModel: string;
-  models: Array<{ id: string; contextWindow: number; maxOutputTokens: number }>;
-};
+type ModelInfo = { id: string; contextWindow: number; maxOutputTokens: number };
 
 export type SmokeOptions = {
   baseUrl: string;
@@ -76,7 +75,10 @@ export type SmokeResult = {
     concurrency: number;
     rejected: { httpStatus: number; code: string | null; retryAfter: string | null };
     answers: Array<AnswerReport & { firstDeltaMs: number | null; totalMs: number }>;
-    /** Every answer had started before any had ended: the provider served them in parallel. */
+    /**
+     * Whether every answer had its first text before any had ended, i.e. the provider served
+     * them in parallel. Reported, not required: the limit protects the API either way.
+     */
     overlapped: boolean;
   };
 };
@@ -89,7 +91,13 @@ export class SmokeError extends Error {
   }
 }
 
-type Context = { baseUrl: string; answerTimeoutMs: number; log: (line: string) => void };
+type Context = {
+  baseUrl: string;
+  answerTimeoutMs: number;
+  log: (line: string) => void;
+  /** Aborted when the run ends, so that no request outlives a failed check. */
+  stop: AbortSignal;
+};
 
 async function call(
   ctx: Context,
@@ -106,11 +114,14 @@ async function call(
         ...init.headers,
       },
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), ctx.stop]),
     });
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
       throw new SmokeError(`${method} ${path}: no answer within ${timeoutMs / 1000} s`);
+    }
+    if (ctx.stop.aborted) {
+      throw new SmokeError(`${method} ${path}: stopped`);
     }
     const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
     const reason = cause instanceof Error ? cause.message : String(cause);
@@ -118,21 +129,59 @@ async function call(
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function bodyOf(response: Response, what: string): Promise<Record<string, unknown>> {
   const text = await response.text();
+  let body: unknown;
   try {
-    return JSON.parse(text) as Record<string, unknown>;
+    body = JSON.parse(text);
   } catch {
+    body = undefined;
+  }
+  if (!isRecord(body)) {
     throw new SmokeError(
-      `${what}: HTTP ${response.status} without a JSON body: ${text.slice(0, 200)}`,
+      `${what}: HTTP ${response.status} without a JSON object: ${text.slice(0, 200)}`,
     );
   }
+  return body;
 }
 
 function problem(status: number, body: Record<string, unknown>, what: string): SmokeError {
   return new SmokeError(
     `${what}: HTTP ${status} ${String(body.code ?? "")}: ${String(body.detail ?? "")}`.trim(),
   );
+}
+
+const nullableString = (value: unknown): string | null =>
+  typeof value === "string" ? value : null;
+
+/** The assistant message fields this script reads, checked; a SmokeError otherwise. */
+function assistantMessage(value: unknown, what: string): AssistantMessage {
+  if (
+    !isRecord(value) ||
+    typeof value.status !== "string" ||
+    !STATUSES.has(value.status) ||
+    typeof value.content !== "string"
+  ) {
+    throw new SmokeError(`${what}: not an assistant message: ${JSON.stringify(value)}`);
+  }
+  const usage = value.usage;
+  return {
+    status: value.status as AssistantMessage["status"],
+    content: value.content,
+    finishReason: nullableString(value.finishReason),
+    usage:
+      isRecord(usage) &&
+      typeof usage.promptTokens === "number" &&
+      typeof usage.completionTokens === "number"
+        ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }
+        : null,
+    errorCode: nullableString(value.errorCode),
+    errorDetail: nullableString(value.errorDetail),
+  };
 }
 
 async function createSession(ctx: Context, provider: string): Promise<string> {
@@ -181,6 +230,20 @@ type StreamOutcome = {
   endedAt: number;
 };
 
+/** `event` and the joined `data` lines of one frame; undefined for a comment (a ping). */
+function parseFrame(frame: string): { event: string; data: string } | undefined {
+  let event: string | undefined;
+  const data: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) {
+      event = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      data.push(line.slice("data:".length).replace(/^ /, ""));
+    }
+  }
+  return event === undefined || data.length === 0 ? undefined : { event, data: data.join("\n") };
+}
+
 /** One send as an event stream; `onCreated` runs when the turn was admitted. */
 async function streamSend(
   ctx: Context,
@@ -204,43 +267,53 @@ async function streamSend(
   let firstDeltaAt: number | null = null;
   let final: AssistantMessage | undefined;
   const seen: string[] = [];
+
+  const handle = (frame: string): void => {
+    const parsed = parseFrame(frame);
+    if (parsed === undefined) {
+      return;
+    }
+    seen.push(parsed.event);
+    if (parsed.event === "message.created") {
+      onCreated();
+    } else if (parsed.event === "delta") {
+      deltas += 1;
+      firstDeltaAt ??= performance.now();
+    } else if (parsed.event === "done" || parsed.event === "error") {
+      const payload: unknown = JSON.parse(parsed.data);
+      final = assistantMessage(
+        isRecord(payload) ? payload.assistantMessage : undefined,
+        `${what} (${parsed.event} event)`,
+      );
+    } else if (parsed.event === "message.detached") {
+      throw new SmokeError(`${what}: the stream was detached from its generation`);
+    }
+  };
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) {
         break;
       }
-      buffer += value;
+      buffer = (buffer + value).replaceAll("\r\n", "\n");
       let end = buffer.indexOf("\n\n");
       while (end !== -1) {
-        const frame = buffer.slice(0, end);
+        handle(buffer.slice(0, end));
         buffer = buffer.slice(end + 2);
         end = buffer.indexOf("\n\n");
-        const event = /^event: (.+)$/m.exec(frame)?.[1];
-        const data = /^data: (.+)$/m.exec(frame)?.[1];
-        if (event === undefined || data === undefined) {
-          continue; // a ping comment
-        }
-        seen.push(event);
-        const payload = JSON.parse(data) as { assistantMessage?: AssistantMessage };
-        if (event === "message.created") {
-          onCreated();
-        } else if (event === "delta") {
-          deltas += 1;
-          firstDeltaAt ??= performance.now();
-        } else if (event === "done" || event === "error") {
-          final = payload.assistantMessage;
-        } else if (event === "message.detached") {
-          throw new SmokeError(`${what}: the stream was detached from its generation`);
-        }
       }
     }
+    // A last frame without its closing blank line.
+    handle(buffer);
   } catch (error) {
     if (error instanceof SmokeError) {
       throw error;
     }
     const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     throw new SmokeError(`${what}: the stream broke after ${seen.length} events (${reason})`);
+  } finally {
+    void reader.cancel().catch(() => {});
   }
   if (final === undefined) {
     throw new SmokeError(
@@ -271,16 +344,22 @@ async function jsonSend(
     timeoutMs: (waitSeconds + 30) * 1000,
   });
   const body = await bodyOf(response, what);
-  let message = body.assistantMessage as AssistantMessage | undefined;
-  if (![200, 202, 502].includes(response.status) || message === undefined) {
+  if (![200, 202, 502].includes(response.status) || body.assistantMessage === undefined) {
     throw problem(response.status, body, what);
   }
+  let message = assistantMessage(body.assistantMessage, what);
   let polls = 0;
   if (response.status === 202) {
     const location = response.headers.get("location");
     if (location === null) {
       throw new SmokeError(`${what}: HTTP 202 without a Location header`);
     }
+    // Only ever polled on the API itself, whatever the header says.
+    const target = new URL(location, `${ctx.baseUrl}/`);
+    if (target.origin !== new URL(ctx.baseUrl).origin) {
+      throw new SmokeError(`${what}: HTTP 202 with a Location on another origin: ${location}`);
+    }
+    const path = `${target.pathname}${target.search}`;
     ctx.log(`JSON send: HTTP 202 after ${Math.round(performance.now() - started)} ms; polling`);
     const deadline = performance.now() + ctx.answerTimeoutMs;
     while (message.status === "generating") {
@@ -289,12 +368,12 @@ async function jsonSend(
       }
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       polls += 1;
-      const poll = await call(ctx, "GET", location);
+      const poll = await call(ctx, "GET", path);
       const polled = await bodyOf(poll, `${what} (poll)`);
       if (poll.status !== 200) {
         throw problem(poll.status, polled, `${what} (poll)`);
       }
-      message = polled as unknown as AssistantMessage;
+      message = assistantMessage(polled, `${what} (poll)`);
     }
   }
   const totalMs = Math.round(performance.now() - started);
@@ -308,28 +387,53 @@ async function limitCheck(
   concurrency: number,
   maxOutputTokens: number,
 ): Promise<NonNullable<SmokeResult["limit"]>> {
-  const sessions = await Promise.all(
+  const [extraSession, ...sessions] = await Promise.all(
     Array.from({ length: concurrency + 1 }, () => createSession(ctx, provider)),
   );
-  const extraSession = sessions.pop() as string;
+  if (extraSession === undefined) {
+    throw new SmokeError("no session for the extra send");
+  }
+  // Set synchronously when a long answer ends, so the checks below see it at once.
   let ended = 0;
-  const streams = sessions.map((sessionId, index) => {
+  let failure: unknown;
+  const admitted: Array<Promise<void>> = [];
+  const outcomes = sessions.map((sessionId, index) => {
+    const what = `long answer ${index + 1}`;
     let created!: () => void;
-    const admitted = new Promise<void>((resolve) => (created = resolve));
-    const outcome = streamSend(ctx, sessionId, LONG_QUESTION, `long answer ${index + 1}`, () =>
-      created(),
-    ).finally(() => (ended += 1));
-    return { admitted, outcome };
+    admitted.push(new Promise<void>((resolve) => (created = resolve)));
+    return streamSend(ctx, sessionId, LONG_QUESTION, what, () => created()).then(
+      (outcome) => {
+        ended += 1;
+        try {
+          checkAnswer(what, outcome.message);
+          const tokens = outcome.message.usage?.completionTokens;
+          if (tokens !== undefined && tokens > maxOutputTokens) {
+            throw new SmokeError(
+              `${what} went past the output limit: ${tokens} tokens > maxOutputTokens ${maxOutputTokens}`,
+            );
+          }
+        } catch (error) {
+          failure ??= error;
+          throw error;
+        }
+        return outcome;
+      },
+      (error: unknown) => {
+        ended += 1;
+        failure ??= error;
+        throw error;
+      },
+    );
   });
-  // Settles every stream even when a check below fails first: no unhandled rejection.
-  const outcomes = Promise.allSettled(streams.map((stream) => stream.outcome));
-  await Promise.race([
-    Promise.all(streams.map((stream) => stream.admitted)),
-    // A stream that fails before it was admitted ends the check with its own error.
-    Promise.all(streams.map((stream) => stream.outcome)).then(() => {}),
-  ]);
+  // Rejects at the first failed answer; runSmoke then stops the others.
+  const all = Promise.all(outcomes);
+  all.catch(() => {});
+
+  await Promise.race([Promise.all(admitted), all]);
+  if (failure !== undefined) {
+    throw failure;
+  }
   if (ended > 0) {
-    await outcomes;
     throw new SmokeError("a long answer ended before the extra send: ask for a longer answer");
   }
 
@@ -344,116 +448,127 @@ async function limitCheck(
     retryAfter: extra.headers.get("retry-after"),
   };
   ctx.log(`extra send while ${concurrency} answers run: ${JSON.stringify(rejected)}`);
-  const stillRunning = ended === 0;
-
-  const settled = await outcomes;
-  const answers = settled.map((result, index) => {
-    if (result.status === "rejected") {
-      throw result.reason;
-    }
-    const what = `long answer ${index + 1}`;
-    const { message } = result.value;
-    checkAnswer(what, message);
-    const tokens = message.usage?.completionTokens;
-    if (tokens !== undefined && tokens > maxOutputTokens) {
-      throw new SmokeError(
-        `${what} went past the output limit: ${tokens} tokens > maxOutputTokens ${maxOutputTokens}`,
-      );
-    }
-    if (message.finishReason !== "length") {
-      throw new SmokeError(
-        `${what} ended with finish reason ${message.finishReason ?? "none"}, not length: ` +
-          "the output limit was not shown to be enforced",
-      );
-    }
-    return {
-      ...report(message),
-      firstDeltaMs: result.value.firstDeltaMs,
-      totalMs: result.value.totalMs,
-    };
-  });
   if (rejected.httpStatus !== 503 || rejected.code !== "provider_busy") {
     throw new SmokeError(
       `the extra send got HTTP ${rejected.httpStatus} ${rejected.code ?? ""}, not 503 provider_busy` +
-        (stillRunning ? "" : " (an answer had ended before it was answered)"),
+        (ended === 0 ? "" : " (a long answer had ended before it was answered)"),
     );
   }
-  const values = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-  const lastStart = Math.max(...values.map((value) => value.firstDeltaAt ?? Infinity));
+
+  const values = await all;
+  if (!values.some((value) => value.message.finishReason === "length")) {
+    throw new SmokeError(
+      `no long answer ended at the output limit (finish reasons: ${values
+        .map((value) => value.message.finishReason ?? "none")
+        .join(", ")}): the limit was not shown to be enforced`,
+    );
+  }
+  const lastFirstDelta = Math.max(...values.map((value) => value.firstDeltaAt ?? Infinity));
   const firstEnd = Math.min(...values.map((value) => value.endedAt));
-  return { concurrency, rejected, answers, overlapped: lastStart < firstEnd };
+  return {
+    concurrency,
+    rejected,
+    answers: values.map((value) => ({
+      ...report(value.message),
+      firstDeltaMs: value.firstDeltaMs,
+      totalMs: value.totalMs,
+    })),
+    overlapped: lastFirstDelta < firstEnd,
+  };
+}
+
+function modelOf(body: Record<string, unknown>, providerId: string, baseUrl: string): ModelInfo {
+  const providers = Array.isArray(body.providers) ? body.providers.filter(isRecord) : [];
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (provider === undefined) {
+    const ids = providers.map((entry) => String(entry.id));
+    throw new SmokeError(
+      `provider "${providerId}" is not enabled at ${baseUrl} ` +
+        `(enabled: ${ids.length === 0 ? "none" : ids.join(", ")})`,
+    );
+  }
+  const models = Array.isArray(provider.models) ? provider.models.filter(isRecord) : [];
+  const model = models.find((entry) => entry.id === provider.defaultModel);
+  if (
+    model === undefined ||
+    typeof model.id !== "string" ||
+    typeof model.contextWindow !== "number" ||
+    typeof model.maxOutputTokens !== "number"
+  ) {
+    throw new SmokeError(`provider "${providerId}" lists no valid entry for its default model`);
+  }
+  return {
+    id: model.id,
+    contextWindow: model.contextWindow,
+    maxOutputTokens: model.maxOutputTokens,
+  };
 }
 
 export async function runSmoke(options: SmokeOptions): Promise<SmokeResult> {
+  const stop = new AbortController();
   const ctx: Context = {
     baseUrl: options.baseUrl.replace(/\/+$/, ""),
     answerTimeoutMs: (options.answerTimeoutSeconds ?? 240) * 1000,
     log: options.log ?? ((line) => process.stdout.write(`${line}\n`)),
+    stop: stop.signal,
   };
   const providerId = options.provider ?? "ollama";
-
-  const listed = await call(ctx, "GET", "/providers");
-  const listedBody = await bodyOf(listed, "GET /providers");
-  if (listed.status !== 200) {
-    throw problem(listed.status, listedBody, "GET /providers");
-  }
-  const providers = (listedBody.providers ?? []) as ProviderInfo[];
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (provider === undefined) {
-    throw new SmokeError(
-      `provider "${providerId}" is not enabled at ${ctx.baseUrl} ` +
-        `(enabled: ${providers.length === 0 ? "none" : providers.map((entry) => entry.id).join(", ")})`,
+  try {
+    const listed = await call(ctx, "GET", "/providers");
+    const listedBody = await bodyOf(listed, "GET /providers");
+    if (listed.status !== 200) {
+      throw problem(listed.status, listedBody, "GET /providers");
+    }
+    const model = modelOf(listedBody, providerId, ctx.baseUrl);
+    ctx.log(
+      `provider ${providerId}, model ${model.id}: context window ${model.contextWindow}, ` +
+        `max output ${model.maxOutputTokens}`,
     );
-  }
-  const model = provider.models.find((entry) => entry.id === provider.defaultModel);
-  if (model === undefined) {
-    throw new SmokeError(`provider "${providerId}" lists no entry for its default model`);
-  }
-  ctx.log(
-    `provider ${providerId}, model ${model.id}: context window ${model.contextWindow}, ` +
-      `max output ${model.maxOutputTokens}`,
-  );
 
-  const streamed = await streamSend(
-    ctx,
-    await createSession(ctx, providerId),
-    QUESTION,
-    "SSE answer",
-  );
-  checkAnswer("SSE answer", streamed.message);
-  const sse = {
-    ...report(streamed.message),
-    deltas: streamed.deltas,
-    firstDeltaMs: streamed.firstDeltaMs,
-    totalMs: streamed.totalMs,
-  };
-  ctx.log(`SSE send: ${JSON.stringify(sse)}`);
-
-  const json = await jsonSend(
-    ctx,
-    await createSession(ctx, providerId),
-    options.jsonWaitSeconds ?? 180,
-  );
-  ctx.log(`JSON send: ${JSON.stringify(json)}`);
-
-  const result: SmokeResult = {
-    provider: providerId,
-    model: model.id,
-    contextWindow: model.contextWindow,
-    maxOutputTokens: model.maxOutputTokens,
-    sse,
-    json,
-  };
-  if (options.limitCheck === true) {
-    result.limit = await limitCheck(
+    const streamed = await streamSend(
       ctx,
-      providerId,
-      options.concurrency ?? 2,
-      model.maxOutputTokens,
+      await createSession(ctx, providerId),
+      QUESTION,
+      "SSE answer",
     );
-    ctx.log(`limit check: ${JSON.stringify(result.limit)}`);
+    checkAnswer("SSE answer", streamed.message);
+    const sse = {
+      ...report(streamed.message),
+      deltas: streamed.deltas,
+      firstDeltaMs: streamed.firstDeltaMs,
+      totalMs: streamed.totalMs,
+    };
+    ctx.log(`SSE send: ${JSON.stringify(sse)}`);
+
+    const json = await jsonSend(
+      ctx,
+      await createSession(ctx, providerId),
+      options.jsonWaitSeconds ?? 180,
+    );
+    ctx.log(`JSON send: ${JSON.stringify(json)}`);
+
+    const result: SmokeResult = {
+      provider: providerId,
+      model: model.id,
+      contextWindow: model.contextWindow,
+      maxOutputTokens: model.maxOutputTokens,
+      sse,
+      json,
+    };
+    if (options.limitCheck === true) {
+      result.limit = await limitCheck(
+        ctx,
+        providerId,
+        options.concurrency ?? 2,
+        model.maxOutputTokens,
+      );
+      ctx.log(`limit check: ${JSON.stringify(result.limit)}`);
+    }
+    return result;
+  } finally {
+    // After a failed check, answers still streaming would keep the process alive.
+    stop.abort();
   }
-  return result;
 }
 
 const USAGE = `Usage: node scripts/smoke-local-llm.ts [options]
@@ -461,13 +576,13 @@ const USAGE = `Usage: node scripts/smoke-local-llm.ts [options]
   --provider ID      the provider to ask (default ollama)
   --json-wait S      Prefer: wait=S for the JSON send (default 180)
   --limit-check      also prove the concurrency limit and the output cap
-  --concurrency N    the provider's limit, for --limit-check (default 2)
+  --concurrency N    the provider's limit, for --limit-check (default 2, at least 1)
 `;
 
-function wholeNumber(value: string, name: string): number {
+function wholeNumber(value: string, name: string, min: number): number {
   const number = Number(value);
-  if (!Number.isInteger(number) || number < 0) {
-    throw new TypeError(`${name} must be a whole number`);
+  if (!Number.isInteger(number) || number < min) {
+    throw new TypeError(`${name} must be a whole number of at least ${min}`);
   }
   return number;
 }
@@ -489,9 +604,9 @@ async function main(argv: string[]): Promise<number> {
     options = {
       baseUrl: values["base-url"],
       provider: values.provider,
-      jsonWaitSeconds: wholeNumber(values["json-wait"], "--json-wait"),
+      jsonWaitSeconds: wholeNumber(values["json-wait"], "--json-wait", 0),
       limitCheck: values["limit-check"],
-      concurrency: wholeNumber(values.concurrency, "--concurrency"),
+      concurrency: wholeNumber(values.concurrency, "--concurrency", 1),
     };
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
@@ -508,10 +623,19 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-const invokedPath = process.argv[1];
-if (
-  invokedPath !== undefined &&
-  import.meta.url === pathToFileURL(realpathSync(invokedPath)).href
-) {
+/** Whether Node runs this file as its entry point (false when a test imports it). */
+function isEntryPoint(): boolean {
+  const invoked = process.argv[1];
+  if (invoked === undefined) {
+    return false;
+  }
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(invoked)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   process.exitCode = await main(process.argv.slice(2));
 }

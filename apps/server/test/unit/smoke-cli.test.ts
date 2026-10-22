@@ -29,6 +29,13 @@ describe("smoke-local-llm command line", () => {
     expect(stderr).toContain("cannot reach http://127.0.0.1:9");
   });
 
+  it("exits 2 on a concurrency below 1", async () => {
+    const { code, stderr } = await runCli(["--concurrency", "0"]);
+
+    expect(code).toBe(2);
+    expect(stderr).toContain("--concurrency");
+  });
+
   it("exits 2 on an unknown option", async () => {
     const { code, stderr } = await runCli(["--nope"]);
 

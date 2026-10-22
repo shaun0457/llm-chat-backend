@@ -98,21 +98,23 @@ describe("smoke-local-llm script", () => {
   });
 
   describe("with the limit check", () => {
-    /** Long answers that stay generating until the third send was answered 503. */
-    function holdUntilRejected(finish: { reason: "stop" | "length"; tokens: number }): void {
+    type Finish = { reason: "stop" | "length"; tokens: number };
+
+    /** Two long answers that stay generating until the third send was answered 503. */
+    function holdUntilRejected(first: Finish, second: Finish = first): void {
       const gate = createGate();
       app.addHook("onResponse", async (_request, reply) => {
         if (reply.statusCode === 503) {
           gate.release();
         }
       });
-      const long = {
+      const long = (finish: Finish) => ({
         deltas: ["1 2 3", " 4 5 6"],
         finishGate: gate.promise,
         finishReason: finish.reason,
         usage: { promptTokens: 20, completionTokens: finish.tokens },
-      };
-      ollama.script({}, {}, long, long);
+      });
+      ollama.script({}, {}, long(first), long(second));
     }
 
     it("proves the limit and the output cap: a third concurrent send gets 503, both answers end at length", async () => {
@@ -129,6 +131,43 @@ describe("smoke-local-llm script", () => {
         ],
         overlapped: true,
       });
+    });
+
+    it("fails at once with the real cause when a long answer fails while the other still runs", async () => {
+      await start(() => {
+        ollama.script(
+          {},
+          {},
+          { deltas: ["1 2 3"], hang: true },
+          { deltas: ["1 2"], throwAfter: 1 },
+        );
+      });
+
+      // The other answer never ends on its own: only stopping it lets the script return.
+      await expect(
+        runSmoke({ baseUrl, provider: "ollama", limitCheck: true, log: quiet }),
+      ).rejects.toThrow(/long answer 2 failed: llm_upstream_error/);
+    });
+
+    it("accepts one long answer that stops early when the other ends at the output limit", async () => {
+      await start(() =>
+        holdUntilRejected({ reason: "stop", tokens: 300 }, { reason: "length", tokens: 512 }),
+      );
+
+      const result = await runSmoke({ baseUrl, provider: "ollama", limitCheck: true, log: quiet });
+
+      expect(result.limit?.answers.map((answer) => answer.finishReason)).toEqual([
+        "stop",
+        "length",
+      ]);
+    });
+
+    it("fails when no long answer ends at the output limit", async () => {
+      await start(() => holdUntilRejected({ reason: "stop", tokens: 300 }));
+
+      await expect(
+        runSmoke({ baseUrl, provider: "ollama", limitCheck: true, log: quiet }),
+      ).rejects.toThrow(/no long answer ended at the output limit/);
     });
 
     it("fails when an answer goes past the catalog's output limit", async () => {
