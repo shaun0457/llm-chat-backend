@@ -126,6 +126,8 @@ export function createJobRegistry(deps: {
           systemPrompt: spec.systemPrompt,
           history,
           userMessage: spec.userMessage,
+          // Trimming is wired to the admitted model next.
+          historyBudget: Number.POSITIVE_INFINITY,
         }),
       };
       for await (const event of spec.provider.stream(request, {
