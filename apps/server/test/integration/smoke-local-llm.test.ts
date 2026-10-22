@@ -156,9 +156,10 @@ describe("smoke-local-llm script", () => {
 
       const result = await runSmoke({ baseUrl, provider: "ollama", limitCheck: true, log: quiet });
 
-      expect(result.limit?.answers.map((answer) => answer.finishReason)).toEqual([
-        "stop",
+      // Either session may reach the provider first, so the order is not fixed.
+      expect(result.limit?.answers.map((answer) => answer.finishReason).sort()).toEqual([
         "length",
+        "stop",
       ]);
     });
 
