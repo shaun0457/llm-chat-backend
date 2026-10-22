@@ -292,12 +292,15 @@ export function createJobRegistry(deps: {
       // A read stuck behind a lock must not hold the job: it stops waiting at the abort, and
       // the database cancels the read itself after one statement timeout at most (or at the
       // deadline, if sooner), so a read abandoned at a shutdown frees its connection in time.
+      // Already stopped (e.g. admitted while the server closes): do not take a connection.
+      controller.signal.throwIfAborted();
       const history = await untilAbort(
         db.tx(async (tx) => {
           const readMs = Math.min(
             timing.terminalStatementTimeoutMs,
             remainingMs(timing.generationDeadlineMs, spec.startedAtMonotonic, clock.monotonicNow()),
           );
+          // At least 1 ms (0 would mean no limit): past the deadline the read fails at once.
           await limitStatements(tx, Math.max(1, readMs));
           return historyBefore(tx, spec.sessionId, spec.userMessage.seq);
         }),

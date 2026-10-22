@@ -65,10 +65,12 @@ export type TerminalWriteLimits = {
  * with doubling backoff, all within one absolute budget measured on `clock`. Each try's
  * statements are limited to the smaller of the statement timeout and what is left of the
  * budget (`SET LOCAL statement_timeout`), and the whole try, including getting a connection
- * and committing, to what is left; the try checks the budget again after every awaited step
- * and before its COMMIT, and rolls back once it ran out. A backoff that could not end within the budget is not
- * started, and an error that would repeat on every try (bad data) ends it at once. Throws
- * TerminalWriteError when it gives up.
+ * and committing, to what is left. The try checks the budget again after every awaited step
+ * and before it starts its COMMIT, and rolls back once the budget ran out; only a COMMIT
+ * already in flight can still land after the caller was told the write failed (the row is
+ * then terminal, and reclaim leaves it alone). A backoff that could not end within the budget
+ * is not started, and an error that would repeat on every try (bad data) ends it at once.
+ * Throws TerminalWriteError when it gives up.
  */
 export async function writeWithinBudget<T>(
   deps: { db: Db; clock: Clock; limits: TerminalWriteLimits },

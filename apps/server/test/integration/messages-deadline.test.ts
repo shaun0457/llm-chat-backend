@@ -324,11 +324,18 @@ async function historyReadsWaitingAfter(ms: number): Promise<number> {
 }
 
 /** `read()`'s value once it is defined. */
-async function eventuallyDefined<T>(read: () => Promise<T> | undefined): Promise<T> {
+async function eventuallyDefined<T>(
+  read: () => Promise<T> | undefined,
+  timeoutMs = 10_000,
+): Promise<T> {
+  const until = performance.now() + timeoutMs;
   for (;;) {
     const value = read();
     if (value !== undefined) {
       return value;
+    }
+    if (performance.now() >= until) {
+      throw new Error(`still undefined after ${timeoutMs} ms`);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
