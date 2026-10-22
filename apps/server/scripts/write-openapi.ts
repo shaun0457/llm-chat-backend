@@ -19,7 +19,9 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   process.stderr.write(
-    `OpenAPI generation failed: ${error instanceof Error ? error.message : "unknown error"}\n`,
+    // The stack too: this script handles no secrets, and a CI failure needs the full trace.
+    `OpenAPI generation failed: ${error instanceof Error ? (error.stack ?? error.message) : "unknown error"}\n`,
   );
-  process.exit(1);
+  // exitCode, not exit(): stderr is flushed before the process ends.
+  process.exitCode = 1;
 });

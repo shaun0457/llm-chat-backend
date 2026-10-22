@@ -1,15 +1,19 @@
 import { makeTestApp } from "../test/helpers/app.js";
 
-/** A copy of `value` whose objects list their keys in sorted order at every depth. */
+/**
+ * A copy of `value` whose objects list their keys in sorted order at every depth. JavaScript
+ * objects always put integer-like keys (HTTP status codes) first, in numeric order; for the
+ * three-digit codes of an OpenAPI document that is the same order as sorting them as text.
+ */
 function withSortedKeys(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(withSortedKeys);
   }
   if (typeof value === "object" && value !== null) {
     return Object.fromEntries(
-      Object.keys(value)
-        .sort()
-        .map((key) => [key, withSortedKeys((value as Record<string, unknown>)[key])]),
+      Object.entries(value)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, child]) => [key, withSortedKeys(child)]),
     );
   }
   return value;
