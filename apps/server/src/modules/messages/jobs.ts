@@ -387,18 +387,23 @@ export function createJobRegistry(deps: {
           },
         )
         .finally(() => {
-          // "finished" must settle whatever happens here, or waiters and shutdown would hang.
-          try {
-            spec.reservation.release();
+          // Each step runs even if another throws, and "finished" settles whatever happens,
+          // or waiters and shutdown would hang.
+          const cleanup = (step: string, fn: () => void): void => {
+            try {
+              fn();
+            } catch (error) {
+              log.error({ err: error, assistantId: spec.assistantId, step }, "job cleanup failed");
+            }
+          };
+          cleanup("release", () => spec.reservation.release());
+          cleanup("leave", () => {
             if (jobs.get(spec.assistantId) === job) {
               jobs.delete(spec.assistantId);
             }
-            bus.close(terminal);
-          } catch (error) {
-            log.error({ err: error, assistantId: spec.assistantId }, "job cleanup failed");
-          } finally {
-            settle(end);
-          }
+          });
+          cleanup("close", () => bus.close(terminal));
+          settle(end);
         });
       return job;
     },

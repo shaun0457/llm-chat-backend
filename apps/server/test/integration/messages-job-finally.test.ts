@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { JobRegistry } from "../../src/modules/messages/jobs.js";
 import { makeTestApp, testJobs } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
@@ -92,5 +93,42 @@ describe("job.finally", () => {
       code: "cancelled",
       assistantMessage: { status: "failed", errorCode: "cancelled", content: "Hel" },
     });
+  });
+
+  it("still leaves the registry and publishes the terminal state when releasing capacity throws", async () => {
+    const inner = testJobs(testDb.db);
+    const jobs: JobRegistry = {
+      ...inner,
+      reserve: () => ({
+        release: () => {
+          throw new Error("a broken reservation");
+        },
+      }),
+    };
+    const fake = new FakeLlmProvider();
+    const gate = createGate();
+    fake.script({ deltas: ["Hel", "lo"], gate: gate.promise, gateAfter: 1 });
+    const fakeApp = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
+    app = fakeApp;
+    const session = await createSession(fakeApp);
+    const response = await send(
+      fakeApp,
+      session.id,
+      { content: "Hi" },
+      { prefer: "respond-async" },
+    );
+    const assistantId: string = response.json().assistantMessage.id;
+    const job = jobs.get(assistantId);
+    if (job === undefined) {
+      throw new Error("expected the generation to be running");
+    }
+    const heard: string[] = [];
+    job.bus.subscribe((event) => heard.push(event.type));
+
+    gate.release();
+
+    expect(await job.finished).toBe("terminal");
+    expect(heard).toEqual(["delta", "terminal"]);
+    expect(jobs.get(assistantId)).toBeUndefined();
   });
 });
