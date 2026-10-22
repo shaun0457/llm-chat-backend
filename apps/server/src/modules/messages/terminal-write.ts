@@ -3,10 +3,20 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import type { Clock } from "../../clock.js";
 import type { Db, Tx } from "../../db/client.js";
+import { pgErrorCode } from "../../db/errors.js";
 import { remainingMs } from "./deadline.js";
 
 /** The first pause between tries; it doubles after every failed try (100, 200, 400 … ms). */
 const FIRST_BACKOFF_MS = 100;
+
+/**
+ * SQLSTATE classes that fail the same way on every try: data exceptions (22), integrity
+ * constraint violations (23) and syntax or access errors (42). Everything else (timeouts,
+ * lost connections, serialization failures, a busy server) is worth another try.
+ */
+const PERMANENT_CLASSES = new Set(["22", "23", "42"]);
+const isPermanent = (error: unknown): boolean =>
+  PERMANENT_CLASSES.has(pgErrorCode(error)?.slice(0, 2) ?? "");
 
 /** Every try failed or the budget ran out; the row is left for stale reclaim. */
 export class TerminalWriteError extends Error {
@@ -56,7 +66,8 @@ export type TerminalWriteLimits = {
  * statements are limited to the smaller of the statement timeout and what is left of the
  * budget (`SET LOCAL statement_timeout`), and the whole try, including getting a connection
  * and committing, to what is left. A backoff that could not end within the budget is not
- * started. Throws TerminalWriteError when the budget runs out.
+ * started, and an error that would repeat on every try (bad data) ends it at once. Throws
+ * TerminalWriteError when it gives up.
  */
 export async function writeWithinBudget<T>(
   deps: { db: Db; clock: Clock; limits: TerminalWriteLimits },
@@ -93,6 +104,9 @@ export async function writeWithinBudget<T>(
       );
     } catch (error) {
       lastError = error;
+      if (isPermanent(error)) {
+        break;
+      }
     }
     // Ends with the last error even if an immediate try might still fit: a backoff that
     // cannot finish within the budget means the next try would have almost no time anyway.

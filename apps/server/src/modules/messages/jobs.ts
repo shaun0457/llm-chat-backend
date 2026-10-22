@@ -347,6 +347,8 @@ export function createJobRegistry(deps: {
       jobLog.info({ stopped }, "generation stopped without a terminal write");
       return undefined;
     }
+    // A stop reason wins over the provider's own error: once aborted, the provider's error is
+    // usually the abort itself, and the deadline or shutdown is what the client should see.
     if (!answered && (stopped === "deadline" || stopped === "shutdown")) {
       jobLog.warn({ stopped }, "generation stopped before the answer was finished");
       const timedOut = stopped === "deadline";
@@ -472,7 +474,9 @@ export function createJobRegistry(deps: {
           cleanup("close", () => bus.close(terminal));
           settle(end);
           changed();
-        });
+        })
+        // Only a throwing logger could get here; nothing is left to clean up.
+        .catch(() => {});
       return job;
     },
 

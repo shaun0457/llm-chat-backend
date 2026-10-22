@@ -48,7 +48,8 @@ describe("terminal-budget", () => {
 
   // Test-only fault injection, limited to answers whose text starts with these markers:
   // "Slow…" makes storing completed sleep far beyond any statement timeout; "Refused…" makes it
-  // take one second and then fail; "Stall…" makes flushing the partial text sleep.
+  // take one second and then fail; "Stall…" makes flushing the partial text sleep; "Invalid…"
+  // makes storing completed fail at once with a constraint violation, as bad data would.
   beforeAll(async () => {
     await testDb.db.pool.query(`
       CREATE FUNCTION terminal_faults() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -58,6 +59,8 @@ describe("terminal-budget", () => {
         ELSIF NEW.status = 'completed' AND NEW.content LIKE 'Refused%' THEN
           PERFORM pg_sleep(1);
           RAISE EXCEPTION 'terminal write refused by the test';
+        ELSIF NEW.status = 'completed' AND NEW.content LIKE 'Invalid%' THEN
+          RAISE EXCEPTION 'invalid by the test' USING ERRCODE = 'check_violation';
         ELSIF NEW.status = 'generating' AND NEW.content LIKE 'Stall%' THEN
           PERFORM pg_sleep(5);
         END IF;
@@ -172,6 +175,22 @@ describe("terminal-budget", () => {
       .entries()
       .find((entry) => entry.level === 50 && entry.assistantId === turn.assistantId);
     expect(failure?.writeAttempts).toBe(2);
+  });
+
+  it("does not retry a write the database rejects as invalid", async () => {
+    const turn = await startTurn(
+      { TERMINAL_STATEMENT_TIMEOUT_MS: "200", TERMINAL_WRITE_BUDGET_MS: "3000" },
+      "Invalid answer",
+    );
+
+    turn.gate.release();
+
+    expect(await turn.job.finished).toBe("write_failed");
+    const failure = turn.logs
+      .entries()
+      .find((entry) => entry.level === 50 && entry.assistantId === turn.assistantId);
+    expect(failure).toMatchObject({ writeAttempts: 1, code: "23514" });
+    expect(turn.held()).toBe(0);
   });
 
   it("answers a waiting JSON client 202, not an error, and polling ends once the turn is reclaimed", async () => {
