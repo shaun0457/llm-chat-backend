@@ -44,6 +44,7 @@ describe("loadConfig", () => {
       maxActiveGenerations: 8,
       maxActivePerProvider: 4,
       nvidiaBaseUrl: "https://integrate.api.nvidia.com/v1",
+      ollamaBaseUrl: "http://localhost:11434/v1",
       operatorKeys: {},
     });
   });
@@ -74,6 +75,7 @@ describe("loadConfig", () => {
       MAX_ACTIVE_PER_PROVIDER: "3",
       NVIDIA_BASE_URL: "http://nim.internal:8000/v1",
       NVIDIA_API_KEY: "operator-key-1",
+      OLLAMA_BASE_URL: "http://ollama:11434/v1",
     });
 
     expect(config).toEqual({
@@ -101,6 +103,7 @@ describe("loadConfig", () => {
       maxActiveGenerations: 16,
       maxActivePerProvider: 3,
       nvidiaBaseUrl: "http://nim.internal:8000/v1",
+      ollamaBaseUrl: "http://ollama:11434/v1",
       operatorKeys: { nvidia: "operator-key-1" },
     });
   });
@@ -126,24 +129,24 @@ describe("loadConfig", () => {
     },
   );
 
-  it("rejects a NVIDIA_BASE_URL with credentials in it, without echoing them", () => {
-    const error = configError({
-      DATABASE_URL,
-      NVIDIA_BASE_URL: "https://user:pw0rd@nim.internal/v1",
-    });
+  it.each(["NVIDIA_BASE_URL", "OLLAMA_BASE_URL"])(
+    "rejects a %s with credentials in it, without echoing them",
+    (key) => {
+      const error = configError({ DATABASE_URL, [key]: "https://user:pw0rd@llm.internal/v1" });
 
-    expect(error.message).toContain("NVIDIA_BASE_URL");
-    expect(error.message).not.toContain("pw0rd");
-  });
-
-  it.each(["ftp://nim.internal/v1", "not a url"])(
-    "rejects a NVIDIA_BASE_URL that is not an http(s) URL: %s",
-    (url) => {
-      expect(configError({ DATABASE_URL, NVIDIA_BASE_URL: url }).message).toContain(
-        "NVIDIA_BASE_URL",
-      );
+      expect(error.message).toContain(key);
+      expect(error.message).not.toContain("pw0rd");
     },
   );
+
+  it.each([
+    ["NVIDIA_BASE_URL", "ftp://nim.internal/v1"],
+    ["NVIDIA_BASE_URL", "not a url"],
+    ["OLLAMA_BASE_URL", "ftp://ollama/v1"],
+    ["OLLAMA_BASE_URL", "not a url"],
+  ])("rejects a %s that is not an http(s) URL: %s", (key, url) => {
+    expect(configError({ DATABASE_URL, [key]: url }).message).toContain(key);
+  });
 
   it("requires DATABASE_URL", () => {
     expect(configError({}).message).toContain("DATABASE_URL");
