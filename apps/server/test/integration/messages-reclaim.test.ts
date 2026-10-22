@@ -221,5 +221,51 @@ describe("stale reclaim", () => {
         expect(await stored(session.id, assistant.id)).toEqual(reclaimed);
       },
     );
+
+    it("a worker that finishes after its row was reclaimed reports the stored state, not nothing", async () => {
+      const fake = new FakeLlmProvider();
+      const gate = createGate();
+      // The answer is complete once the gate opens: no further flush, only the terminal write.
+      fake.script({ deltas: ["Hel"], gate: gate.promise, gateAfter: 1 });
+      const jobs = testJobs(testDb.db);
+      app = makeTestApp({ db: testDb.db, jobs, ...testProviders({ llm: fake }) });
+      const session = await createSession(app);
+      const response = await send(app, session.id, { content: "Hi" }, { prefer: "respond-async" });
+      const assistantId: string = response.json().assistantMessage.id;
+      await eventually(
+        () => stored(session.id, assistantId),
+        (message) => message.content === "Hel",
+      );
+      const job = jobs.get(assistantId);
+      if (job === undefined) {
+        throw new Error("expected the generation to be running");
+      }
+      const heard: Array<{ type: string; status?: string; errorCode?: string | null }> = [];
+      job.bus.subscribe((event) =>
+        heard.push(
+          event.type === "terminal"
+            ? {
+                type: event.type,
+                status: event.message.status,
+                errorCode: event.message.errorCode,
+              }
+            : { type: event.type },
+        ),
+      );
+      await age(testDb.db, assistantId, STALE_SECONDS);
+      await getMessage(app, session.id, assistantId);
+
+      gate.release();
+
+      // Its fenced completed write matches no row; the row it finds is this attempt's final
+      // state, which subscribers receive like any other terminal.
+      expect(await job.finished).toBe("terminal");
+      expect(heard).toEqual([{ type: "terminal", status: "failed", errorCode: "interrupted" }]);
+      expect(await stored(session.id, assistantId)).toMatchObject({
+        status: "failed",
+        errorCode: "interrupted",
+        content: "Hel",
+      });
+    });
   });
 });

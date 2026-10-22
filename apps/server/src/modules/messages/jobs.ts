@@ -9,7 +9,13 @@ import type { LlmFinishReason, LlmProvider, LlmUsage } from "../../llm/port.js";
 import { type MessageBus, createBus } from "./bus.js";
 import { assembleContext } from "./context.js";
 import { remainingMs } from "./deadline.js";
-import { completeAssistant, failAssistant, flushContent, historyBefore } from "./repository.js";
+import {
+  completeAssistant,
+  failAssistant,
+  findMessage,
+  flushContent,
+  historyBefore,
+} from "./repository.js";
 import type { Message } from "./schemas.js";
 import { TerminalWriteError, writeWithinBudget } from "./terminal-write.js";
 
@@ -78,9 +84,9 @@ export type JobSpec = {
 };
 
 /**
- * How a job ended. `terminal`: it wrote completed or failed (or found its row gone or
- * superseded when it tried). `aborted`: it wrote no terminal state on purpose, because its row
- * was deleted or superseded. `write_failed`: storing the terminal state did not succeed within
+ * How a job ended. `terminal`: its row holds this attempt's final state (written by the job,
+ * or already there, e.g. after stale reclaim). `aborted`: it wrote no terminal state, because
+ * its row was deleted or superseded. `write_failed`: storing the terminal state did not succeed within
  * the terminal-write budget, so the row is left generating for stale reclaim.
  */
 export type JobEnd = "terminal" | "aborted" | "write_failed";
@@ -130,9 +136,28 @@ export function createJobRegistry(deps: {
   async function run(spec: JobSpec, job: RunningJob): Promise<Message | undefined> {
     const fence = { id: spec.assistantId, attempt: spec.attempt };
     const jobLog = log.child({ assistantId: spec.assistantId, attempt: spec.attempt });
-    /** Every terminal write goes through the budget; it throws TerminalWriteError. */
-    const store = (write: (tx: Tx) => Promise<Message | undefined>) =>
-      writeWithinBudget(
+    /**
+     * This attempt's final state when it is already stored: by an earlier try whose commit
+     * reached the database although the job saw it fail, or by stale reclaim. Undefined when
+     * the row is gone, belongs to a newer attempt, or is still generating.
+     */
+    const storedFinalState = async (): Promise<Message | undefined> => {
+      try {
+        const row = await findMessage(db.drizzle, spec.sessionId, spec.assistantId);
+        return row?.attempt === spec.attempt && row.status !== "generating" ? row : undefined;
+      } catch (error) {
+        jobLog.warn({ code: pgErrorCode(error) }, "could not read the final state back");
+        return undefined;
+      }
+    };
+    /**
+     * Every terminal write goes through the budget; it throws TerminalWriteError. When the
+     * fence no longer matches, the row's own final state (if this attempt has one) is reported.
+     */
+    const store = async (
+      write: (tx: Tx) => Promise<Message | undefined>,
+    ): Promise<Message | undefined> => {
+      const written = await writeWithinBudget(
         {
           db,
           clock,
@@ -143,6 +168,8 @@ export function createJobRegistry(deps: {
         },
         write,
       );
+      return written ?? (await storedFinalState());
+    };
     const { controller, bus } = job;
     let fenceLost = false;
     let flushed = "";
