@@ -19,8 +19,9 @@ export type SseOptions = Readonly<{ ssePingIntervalMs: number; sseBufferLimitByt
 /** One open event stream to one client. */
 export interface SseStream {
   /**
-   * Writes one event. False when nothing was written: the stream is closed or ending, or this
-   * frame would have exceeded the connection's buffer limit, which closes the connection.
+   * Writes one event. False when nothing was written: the stream is closed or ending, or bytes
+   * were still waiting and this frame would have taken them past the connection's buffer
+   * limit, which closes the connection.
    */
   send(event: string, data: unknown): boolean;
   /** Ends the response after everything written so far. Idempotent. */
@@ -52,8 +53,9 @@ const FRAMING_HEADERS: ReadonlySet<string> = new Set(["content-length", "transfe
  * the stream ends. Call only after every check that can answer with problem details.
  *
  * Pending bytes are the response's `writableLength`: what Node holds for this connection and
- * has not yet handed to the operating system (V3 in ADR 0006). A frame that would take them
- * past `sseBufferLimitBytes` is not written; the connection is destroyed instead.
+ * has not yet handed to the operating system (V3 in ADR 0006). While some are waiting, a frame
+ * that would take them past `sseBufferLimitBytes` is not written; the connection is destroyed
+ * instead. A frame written to an empty buffer always goes out, however large.
  */
 export function openSseStream(reply: FastifyReply, options: SseOptions): SseStream {
   const headers: OutgoingHttpHeaders = {};
@@ -85,9 +87,12 @@ export function openSseStream(reply: FastifyReply, options: SseOptions): SseStre
       return false;
     }
     const pendingBytes = response.writableLength;
-    if (pendingBytes + Buffer.byteLength(frame, "utf8") > options.sseBufferLimitBytes) {
+    const frameBytes = Buffer.byteLength(frame, "utf8");
+    // Only a backlog marks a slow client: a frame written to an empty buffer always goes out,
+    // however large (one big message.created or done is not the client's fault).
+    if (pendingBytes > 0 && pendingBytes + frameBytes > options.sseBufferLimitBytes) {
       reply.log.warn(
-        { pendingBytes, limitBytes: options.sseBufferLimitBytes },
+        { pendingBytes, frameBytes, limitBytes: options.sseBufferLimitBytes },
         "closing an event stream whose client does not keep up",
       );
       ending = true;

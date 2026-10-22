@@ -47,6 +47,33 @@ describe("openSseStream", () => {
     expect(stream.send("delta", { text: "x" })).toBe(false);
   });
 
+  it("sends a frame larger than the limit when nothing is waiting: one big event is not a slow client", async () => {
+    let opened!: (result: { sent: boolean; closed: boolean }) => void;
+    const result = new Promise<{ sent: boolean; closed: boolean }>((resolve) => {
+      opened = resolve;
+    });
+    // Like a done event for a 16,000-character answer in CJK text, at the smallest limit.
+    const content = "語".repeat(16_000);
+    app = Fastify({ logger: false });
+    app.get("/stream", async (_request, reply) => {
+      const stream = openSseStream(reply, {
+        ssePingIntervalMs: 10_000,
+        sseBufferLimitBytes: 16_384,
+      });
+      const sent = stream.send("done", { content });
+      opened({ sent, closed: stream.closed });
+      stream.end();
+      return reply;
+    });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as AddressInfo;
+
+    const body = await (await fetch(`http://127.0.0.1:${port}/stream`)).text();
+
+    expect(await result).toEqual({ sent: true, closed: false });
+    expect(body).toBe(`event: done\ndata: ${JSON.stringify({ content })}\n\n`);
+  });
+
   it("reports an event as not sent once the connection is destroyed, before close is emitted", async () => {
     let opened!: (result: { afterDestroy: boolean; closed: boolean }) => void;
     const result = new Promise<{ afterDestroy: boolean; closed: boolean }>((resolve) => {
