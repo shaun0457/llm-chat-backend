@@ -48,7 +48,7 @@ describe("terminal-budget", () => {
 
   // Test-only fault injection, limited to answers whose text starts with these markers:
   // "Slow…" makes storing completed sleep far beyond any statement timeout; "Refused…" makes it
-  // take one second and then fail.
+  // take one second and then fail; "Stall…" makes flushing the partial text sleep.
   beforeAll(async () => {
     await testDb.db.pool.query(`
       CREATE FUNCTION terminal_faults() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -58,6 +58,8 @@ describe("terminal-budget", () => {
         ELSIF NEW.status = 'completed' AND NEW.content LIKE 'Refused%' THEN
           PERFORM pg_sleep(1);
           RAISE EXCEPTION 'terminal write refused by the test';
+        ELSIF NEW.status = 'generating' AND NEW.content LIKE 'Stall%' THEN
+          PERFORM pg_sleep(5);
         END IF;
         RETURN NEW;
       END $$;
@@ -251,4 +253,30 @@ describe("terminal-budget", () => {
       await small.close();
     }
   });
+
+  it("does not wait for a stalled flush longer than one statement timeout", async () => {
+    const turn = await startTurn(
+      { TERMINAL_STATEMENT_TIMEOUT_MS: "200", TERMINAL_WRITE_BUDGET_MS: "500" },
+      "Stalled answer",
+    );
+    // The first flush of the partial text is now sleeping in the database for 5 s.
+    await eventually(
+      async () =>
+        (
+          await testDb.db.pool.query<{ n: number }>(
+            "SELECT count(*)::int AS n FROM pg_stat_activity WHERE wait_event = 'PgSleep'",
+          )
+        ).rows[0]?.n ?? 0,
+      (sleeping) => sleeping > 0,
+    );
+
+    const started = performance.now();
+    turn.gate.release();
+    const end = await turn.job.finished;
+
+    // Without the bound the job would sit behind the 5 s flush.
+    expect(performance.now() - started).toBeLessThan(2_500);
+    expect(end).toBe("write_failed");
+    expect(turn.held()).toBe(0);
+  }, 15_000);
 });

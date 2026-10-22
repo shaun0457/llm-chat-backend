@@ -66,6 +66,21 @@ function describeFailure(error: unknown): { code: string | undefined; reason: st
   return { code: pgErrorCode(error), reason };
 }
 
+/** Waits until `pending` (which never rejects) settles or `ms` pass, whichever comes first. */
+async function settledWithin(pending: Promise<void> | undefined, ms: number): Promise<void> {
+  if (pending === undefined) {
+    return;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    pending,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
 /** Everything a job needs, frozen at admission. */
 export type JobSpec = {
   assistantId: string;
@@ -260,7 +275,10 @@ export function createJobRegistry(deps: {
     } finally {
       clearTimeout(deadline);
       clearInterval(timer);
-      await flushing;
+      // A stalled database must not hold the job here past its deadline and budget. A flush
+      // still running afterwards is fenced on `generating`, so it can never overwrite the
+      // terminal state, which carries the full text anyway.
+      await settledWithin(flushing, timing.terminalStatementTimeoutMs);
     }
 
     // A complete answer is stored below even if the job was stopped meanwhile (unless its

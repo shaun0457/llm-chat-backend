@@ -34,7 +34,8 @@ describe("flush-fencing", () => {
 
   /**
    * The running job of a message. Once its `finished` has settled, the job has stopped its
-   * timers and awaited its last write: nothing it does can change the row any more.
+   * timers and awaited its last write (a flush gets up to one statement timeout, far more than
+   * these need): nothing it does can change the row any more.
    */
   function jobOf(id: string): Job {
     const job = jobs.get(id);
