@@ -97,6 +97,32 @@ describe("rate limits", () => {
       );
     });
 
+    it("never counts OPTIONS requests while CORS is on: CORS answers them before the limit", async () => {
+      start({ RATE_LIMIT_GENERAL_PER_MIN: "1", CORS_ORIGINS: "https://a.example" });
+      const preflight = { "access-control-request-method": "GET" };
+
+      // A listed origin's preflight, an unlisted origin's, and a bare OPTIONS (not a valid
+      // preflight, so 400).
+      const statuses: number[] = [];
+      for (const headers of [
+        { origin: "https://a.example", ...preflight },
+        { origin: "https://b.example", ...preflight },
+        {},
+      ]) {
+        const response = await app.inject({
+          method: "OPTIONS",
+          url: "/providers",
+          remoteAddress: "198.51.100.30",
+          headers,
+        });
+        statuses.push(response.statusCode);
+      }
+
+      expect(statuses).toEqual([204, 204, 400]);
+      expect((await get("/providers", "198.51.100.30")).statusCode).toBe(200);
+      expectRateLimited(await get("/providers", "198.51.100.30"));
+    });
+
     describe("with TRUST_PROXY=10.0.0.1", () => {
       it("keys a request from the trusted proxy by the address it forwarded, not the leftmost value", async () => {
         start({ RATE_LIMIT_GENERAL_PER_MIN: "3", TRUST_PROXY: "10.0.0.1" });
@@ -115,18 +141,17 @@ describe("rate limits", () => {
 
       it("ignores the forwarding header of an untrusted socket and keys it by the socket", async () => {
         start({ RATE_LIMIT_GENERAL_PER_MIN: "3", TRUST_PROXY: "10.0.0.1" });
-        for (const forwarded of ["1.1.1.1, 2.2.2.2", "1.1.1.1, 3.3.3.3", "1.1.1.1, 4.4.4.4"]) {
-          await spend(1, "10.0.0.2", { "x-forwarded-for": forwarded });
+        const viaProxy = { "x-forwarded-for": "1.1.1.1, 2.2.2.2" };
+        // 2.2.2.2 has one request left, through the trusted proxy.
+        await spend(2, "10.0.0.1", viaProxy);
+        for (let request = 0; request < 3; request += 1) {
+          await spend(1, "10.0.0.2", viaProxy);
         }
 
-        expectRateLimited(
-          await get("/providers", "10.0.0.2", { "x-forwarded-for": "1.1.1.1, 5.5.5.5" }),
-        );
-        // The forwarded address itself was never charged.
-        expect(
-          (await get("/providers", "10.0.0.1", { "x-forwarded-for": "1.1.1.1, 2.2.2.2" }))
-            .statusCode,
-        ).toBe(200);
+        expectRateLimited(await get("/providers", "10.0.0.2", viaProxy));
+        // The untrusted socket's header charged 2.2.2.2 nothing: its last request is still there.
+        expect((await get("/providers", "10.0.0.1", viaProxy)).statusCode).toBe(200);
+        expectRateLimited(await get("/providers", "10.0.0.1", viaProxy));
       });
     });
   });
