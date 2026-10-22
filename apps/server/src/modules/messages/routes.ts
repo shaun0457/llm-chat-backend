@@ -49,7 +49,8 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           "messages when it " +
           "completed, 502 problem details with both messages when it failed, 202 with both " +
           "messages when it is still being generated. Generation continues unless the " +
-          "server shuts down; the wait only decides the response. 404 session_not_found; 409 session_busy while " +
+          "server shuts down (the answer then fails as cancelled); the wait only decides the " +
+          "response. 404 session_not_found; 409 session_busy while " +
           "an earlier answer in the session is still being generated; 422 " +
           "provider_unavailable or model_not_supported when the session's settings no longer " +
           "resolve; 503 server_busy (Retry-After) while the server is shutting down.",
@@ -66,9 +67,9 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
           202: {
             description:
               "Admitted; the answer is still being generated. Poll Location until its status " +
-              "is completed or failed. Also returned when the server shuts down during the " +
-              "wait; that generation is stopped and the message stays generating until the " +
-              "server marks it failed.",
+              "is completed or failed. A message whose generation was lost (a crash, or a " +
+              "final state that could not be stored) is failed as interrupted within a few " +
+              "minutes.",
             headers: {
               "Location": {
                 type: "string",

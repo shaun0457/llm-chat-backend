@@ -58,7 +58,14 @@ export const messageResponse = z
       .positive()
       .nullable()
       .describe("Assistant: 1 for the first answer, +1 per retry. User: null"),
-    errorCode: z.string().nullable().describe("Failed assistant messages, e.g. llm_upstream_error"),
+    errorCode: z
+      .string()
+      .nullable()
+      .describe(
+        "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline " +
+          "passed), cancelled (the server shut down), interrupted (the generation was lost, " +
+          "e.g. in a crash, and was failed later)",
+      ),
     errorDetail: z.string().nullable().describe("A safe description of the failure"),
     provider: z.string().nullable().describe("Assistant: the provider frozen for this turn"),
     model: z.string().nullable().describe("Assistant: the model frozen for this turn"),

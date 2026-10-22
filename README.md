@@ -50,24 +50,29 @@ formatter: `pnpm --filter server start | pnpm --filter server exec pino-pretty`.
 
 Environment variables, validated at startup. An invalid value stops the process and names the
 variable, never its value. Blank values count as unset. `JSON_DEFAULT_WAIT_MS` must not
-exceed `JSON_MAX_WAIT_MS`.
+exceed `JSON_MAX_WAIT_MS`. The four timing keys of [failure handling](#failure-handling) must
+be positive whole numbers of milliseconds, at most one hour.
 
-| Variable                | Default                      | Meaning                                                                                         |
-| ----------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`          | (required)                   | `postgres://` or `postgresql://` connection URL                                                 |
-| `PORT`                  | `3000`                       | Listening port                                                                                  |
-| `HOST`                  | `0.0.0.0`                    | Listening address                                                                               |
-| `LOG_LEVEL`             | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                  |
-| `NODE_ENV`              | `production`                 | `development`, `test` or `production`                                                           |
-| `MODEL_CATALOG_PATH`    | bundled `config/models.json` | Model catalog file (see below)                                                                  |
-| `PROVIDERS_ENABLED`     | `demo`                       | Comma-separated provider ids; each must be in the catalog                                       |
-| `DEFAULT_PROVIDER`      | `demo`                       | Provider for sessions created without one; must be enabled                                      |
-| `DEFAULT_MODEL`         | the provider's default       | Model for sessions created without one, or with only `DEFAULT_PROVIDER`; must be in the catalog |
-| `DEFAULT_SYSTEM_PROMPT` | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                  |
-| `FLUSH_INTERVAL_MS`     | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)             |
-| `DEMO_DELAY_MS`         | `50`                         | Pause between the demo provider's chunks (0–10,000)                                             |
-| `JSON_DEFAULT_WAIT_MS`  | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                    |
-| `JSON_MAX_WAIT_MS`      | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout              |
+| Variable                        | Default                      | Meaning                                                                                         |
+| ------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                  | (required)                   | `postgres://` or `postgresql://` connection URL                                                 |
+| `PORT`                          | `3000`                       | Listening port                                                                                  |
+| `HOST`                          | `0.0.0.0`                    | Listening address                                                                               |
+| `LOG_LEVEL`                     | `info`                       | `fatal`, `error`, `warn`, `info`, `debug`, `trace` or `silent`                                  |
+| `NODE_ENV`                      | `production`                 | `development`, `test` or `production`                                                           |
+| `MODEL_CATALOG_PATH`            | bundled `config/models.json` | Model catalog file (see below)                                                                  |
+| `PROVIDERS_ENABLED`             | `demo`                       | Comma-separated provider ids; each must be in the catalog                                       |
+| `DEFAULT_PROVIDER`              | `demo`                       | Provider for sessions created without one; must be enabled                                      |
+| `DEFAULT_MODEL`                 | the provider's default       | Model for sessions created without one, or with only `DEFAULT_PROVIDER`; must be in the catalog |
+| `DEFAULT_SYSTEM_PROMPT`         | (none)                       | System prompt for turns of sessions without their own (up to 8,000 characters)                  |
+| `FLUSH_INTERVAL_MS`             | `1000`                       | How often a generating answer's partial text is written to the database (10–60,000)             |
+| `DEMO_DELAY_MS`                 | `50`                         | Pause between the demo provider's chunks (0–10,000)                                             |
+| `JSON_DEFAULT_WAIT_MS`          | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                    |
+| `JSON_MAX_WAIT_MS`              | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout              |
+| `GENERATION_DEADLINE_MS`        | `180000`                     | Hard limit of one generation attempt, from admission; then it fails as `llm_timeout`            |
+| `TERMINAL_STATEMENT_TIMEOUT_MS` | `3000`                       | Limit of each statement that stores an answer's final state                                     |
+| `TERMINAL_WRITE_BUDGET_MS`      | `10000`                      | Limit of storing the final state, retries included; also bounds graceful shutdown               |
+| `RECLAIM_GRACE_MS`              | `50000`                      | Margin before a generating row with no live job counts as dead (see below)                      |
 
 The model catalog lists, per provider, whether it needs an API key, its default model and its
 models with context window and maximum output tokens. Unknown fields are rejected, so provider
@@ -138,19 +143,19 @@ Index `(last_activity_at DESC, id DESC)` serves the session list.
 
 ## Query support
 
-| Endpoint                          | Behaviour                                                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /sessions`                  | 201 + `Location`. Provider/model default to the configuration                                                                                                                                                                                                                                                                                                                          |
-| `GET /sessions`                   | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`                                                                                                                                                                                                                                                                                                                |
-| `GET /sessions/:id`               | 404 `session_not_found` if missing, 400 for a malformed id                                                                                                                                                                                                                                                                                                                             |
-| `PATCH /sessions/:id`             | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt                                                                                                                                                                                                                                                                                                     |
-| `DELETE /sessions/:id`            | 204, then 404                                                                                                                                                                                                                                                                                                                                                                          |
-| `POST /sessions/:id/messages`     | `{ "content" }` (1–16,000 characters, not blank; unknown fields are a 400). Waits a bounded time (see below): 200 `{ userMessage, assistantMessage }`, 502 problem details with both messages when it failed, 202 with both messages while it is still generating. 409 `session_busy` while the session's previous answer is generating; 503 `server_busy` while the server shuts down |
-| `GET /sessions/:id/messages`      | `?limit=` 1–200 (default 50), `?before=` a message id of this session; newest page first, ascending `seq` within a page                                                                                                                                                                                                                                                                |
-| `GET /sessions/:id/messages/:mid` | One message, including the partial text of an answer being generated; `Cache-Control: no-store`; 404 `message_not_found` outside this session                                                                                                                                                                                                                                          |
-| `GET /providers`                  | Enabled providers, whether they need a key, their catalogued models                                                                                                                                                                                                                                                                                                                    |
-| `GET /health`                     | Liveness, no dependencies                                                                                                                                                                                                                                                                                                                                                              |
-| `GET /health/ready`               | 200 when the database answers and its migrations match this build                                                                                                                                                                                                                                                                                                                      |
+| Endpoint                          | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /sessions`                  | 201 + `Location`. Provider/model default to the configuration                                                                                                                                                                                                                                                                                                                                                               |
+| `GET /sessions`                   | `?limit=` 1–100 (default 20), `?cursor=` from the previous `nextCursor`                                                                                                                                                                                                                                                                                                                                                     |
+| `GET /sessions/:id`               | 404 `session_not_found` if missing, 400 for a malformed id                                                                                                                                                                                                                                                                                                                                                                  |
+| `PATCH /sessions/:id`             | Any of `title`, `provider`, `model`, `systemPrompt`; `null` clears title or prompt                                                                                                                                                                                                                                                                                                                                          |
+| `DELETE /sessions/:id`            | 204, then 404                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `POST /sessions/:id/messages`     | `{ "content" }` (1–16,000 characters, not blank; unknown fields are a 400). Waits a bounded time (see below): 200 `{ userMessage, assistantMessage }`, 502 problem details with both messages when it failed (`code` is the answer's `errorCode`), 202 with both messages while it is still generating. 409 `session_busy` while the session's previous answer is generating; 503 `server_busy` while the server shuts down |
+| `GET /sessions/:id/messages`      | `?limit=` 1–200 (default 50), `?before=` a message id of this session; newest page first, ascending `seq` within a page                                                                                                                                                                                                                                                                                                     |
+| `GET /sessions/:id/messages/:mid` | One message, including the partial text of an answer being generated; `Cache-Control: no-store`; 404 `message_not_found` outside this session                                                                                                                                                                                                                                                                               |
+| `GET /providers`                  | Enabled providers, whether they need a key, their catalogued models                                                                                                                                                                                                                                                                                                                                                         |
+| `GET /health`                     | Liveness, no dependencies                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `GET /health/ready`               | 200 when the database answers and its migrations match this build                                                                                                                                                                                                                                                                                                                                                           |
 
 A message list page holds the newest `limit` messages below `before` (or the newest overall),
 in ascending `seq`. `nextBefore` is the id of the page's first item when older messages exist,
@@ -175,16 +180,21 @@ POST /sessions/:id/messages
   │  validate the body (no database access)
   ▼
 admission transaction ── lock the session row (404)
+  │                      stale reclaim: fail this session's dead generating turns
   │                      resolve its provider and model (422)
   │                      a turn still generating? (409 session_busy)
   │                      reserve capacity
-  │                      insert user + generating assistant, advance next_seq,
+  │                      t0 = monotonic clock; insert user + generating assistant
+  │                      (started_at = clock_timestamp()), advance next_seq,
   │                      bump last_activity_at, title an untitled session
   ▼ commit
-job (in process) ── context: system prompt + earlier completed turns + the new message
+job (in process) ── no time left of GENERATION_DEADLINE_MS since t0? → failed (llm_timeout)
+  │                context: system prompt + earlier completed turns + the new message
   │                provider.stream() → deltas into the message's event bus
   │                every FLUSH_INTERVAL_MS: fenced UPDATE of the partial text
+  │                deadline → failed (llm_timeout); shutdown → failed (cancelled)
   │                finish → fenced UPDATE to completed; error → failed (llm_upstream_error)
+  │                every final state: retried within TERMINAL_WRITE_BUDGET_MS
   ▼ finally: release capacity, leave the job map, close the bus
 JSON response ── waits for the job's end or the effective wait, whichever is first,
                  then reads both rows: 200, 502 problem details, or 202 + Location
@@ -217,8 +227,9 @@ for it, and the client chooses how long with the standard `Prefer` header (RFC 7
 The answer decides the status: **200** completed, **502** failed (problem details with both
 messages), **202** still being generated. A 202 carries both messages, `Location` (the
 assistant message), `Retry-After: 2` and `Cache-Control: no-store`; generation goes on
-(unless the server shuts down), and polling `Location` returns the message's current state (partial text while generating), never
-from a cache, until its status is `completed` or `failed`. `respond-async` means "do not wait",
+(unless the server shuts down: then the answer fails as `cancelled`), and polling `Location`
+returns the message's current state (partial text while generating), never from a cache,
+until its status is `completed` or `failed`. `respond-async` means "do not wait",
 not "always 202": an answer already known to be finished is still 200 or 502.
 
 ```sh
@@ -231,10 +242,50 @@ curl -i -X POST localhost:3000/sessions/<id>/messages -H 'content-type: applicat
 curl -i localhost:3000/sessions/<id>/messages/<assistant id>   # poll until completed or failed
 ```
 
-Always handle 202, even with a long `wait`: the server may shut down meanwhile, and a proxy in
-front of it may time out before the configured maximum (lower `JSON_MAX_WAIT_MS` below it).
+Always handle 202, even with a long `wait`: a proxy in front of the server may time out before
+the configured maximum (lower `JSON_MAX_WAIT_MS` below it), and an answer whose final state
+could not be stored stays `generating` until it is reclaimed (see below). A maximum wait
+shorter than `GENERATION_DEADLINE_MS + TERMINAL_WRITE_BUDGET_MS` is allowed; the server logs a
+notice at startup that long answers will then end in 202.
 `Preference-Applied` reports which preferences were honoured; it promises neither completion
 nor an exact wait. See [ADR 0004](docs/adr/0004-async-request-reply.md).
+
+## Failure handling
+
+Every rule below is decided by the database, not by memory, so it also holds after a crash.
+See [ADR 0005](docs/adr/0005-deadline-reclaim.md).
+
+| What goes wrong                                     | What the client sees                                                                                      |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The model never finishes                            | After `GENERATION_DEADLINE_MS` (180 s, counted from admission): failed / `llm_timeout`, partial text kept |
+| Admission took the whole deadline (slow database)   | failed / `llm_timeout` at once; the model is not called                                                   |
+| The provider fails                                  | failed / `llm_upstream_error`, partial text kept                                                          |
+| The server shuts down gracefully                    | failed / `cancelled`, partial text kept; a waiting JSON client gets that 502                              |
+| The final state cannot be stored (database trouble) | The row stays `generating`; a waiting JSON client gets 202; then as for a crash                           |
+| The process crashes or is killed                    | Within 240 s of the start: failed / `interrupted`, partial text kept                                      |
+
+- **Deadline.** Each attempt is bounded by `GENERATION_DEADLINE_MS`, measured on a monotonic
+  clock from just before the insert that records its `started_at`.
+- **Final writes.** Storing `completed` or `failed` gets `TERMINAL_STATEMENT_TIMEOUT_MS` (3 s)
+  per statement and `TERMINAL_WRITE_BUDGET_MS` (10 s) in total, retries with backoff
+  included. If that is not enough the job logs it (assistant id, attempt, number of tries) and
+  gives up.
+- **Stale reclaim.** An answer still `generating` `GENERATION_DEADLINE_MS +
+TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot have a live job
+  any more. The next request that touches its session (reading the session, its messages or
+  one message, changing the session, or sending a message) first fails such answers as
+  `interrupted`; the comparison uses the database clock only. So after a crash a turn shows
+  `generating` for up to four minutes, then the session takes new messages again. There is no
+  background sweeper, lease or heartbeat: a session nobody touches keeps its dead row
+  invisibly until somebody does.
+- **Late writers.** A job that is somehow still running after its answer was reclaimed (a
+  paused process, for example) is fenced: its next write matches no row and it stops without
+  changing anything.
+- **Graceful shutdown** (SIGTERM, SIGINT) stops admitting (503 `server_busy`), aborts the
+  running answers, waits up to `TERMINAL_WRITE_BUDGET_MS` + 1 s for them to store `cancelled`,
+  and forces exit 1 after `TERMINAL_WRITE_BUDGET_MS` + 5 s (15 s) or on a second signal. Give
+  the platform a longer stop grace period (compose uses 20 s). Answers not stored in time are
+  reclaimed later.
 
 ## Test
 
