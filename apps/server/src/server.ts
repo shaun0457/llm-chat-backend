@@ -11,8 +11,9 @@ import { type ProviderRegistry, createRegistry } from "./llm/registry.js";
 const CLOSE_MARGIN_MS = 4_000;
 
 /**
- * The forced-exit timeout: the jobs' wait (terminal-write budget + stop grace) plus a margin,
- * so that aborted generations can store their final state first (15 s by default). A
+ * The forced-exit timeout: the jobs' wait (stop grace + one statement timeout + terminal-write
+ * budget) plus a margin, so that aborted generations can store their final state first (18 s
+ * by default). A
  * platform's stop grace period must be longer, or it kills the process first.
  */
 export function shutdownTimeoutMs(config: AppConfig): number {

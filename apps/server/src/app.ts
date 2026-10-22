@@ -40,12 +40,15 @@ const REQUEST_ID_HEADER = "x-request-id";
 const JOB_STOP_GRACE_MS = 1_000;
 
 /**
- * How long closing the app waits for aborted generations to store their final state: the
- * terminal-write budget plus a grace for providers to stop. server.ts's forced-exit timeout is
- * longer still. Rows not stored in time are left for stale reclaim.
+ * How long closing the app waits for aborted generations to store their final state: a grace
+ * for providers to stop, one statement timeout for a flush still in flight, and the whole
+ * terminal-write budget. server.ts's forced-exit timeout is longer still. Rows not stored in
+ * time are left for stale reclaim.
  */
-export function jobShutdownWaitMs(config: Pick<AppConfig, "terminalWriteBudgetMs">): number {
-  return config.terminalWriteBudgetMs + JOB_STOP_GRACE_MS;
+export function jobShutdownWaitMs(
+  config: Pick<AppConfig, "terminalStatementTimeoutMs" | "terminalWriteBudgetMs">,
+): number {
+  return JOB_STOP_GRACE_MS + config.terminalStatementTimeoutMs + config.terminalWriteBudgetMs;
 }
 const VALID_REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 

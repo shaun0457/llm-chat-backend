@@ -65,8 +65,9 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (180 + 10 + 50 = 240 s) after its `
   more.
 - **Graceful shutdown** aborts every job with reason `shutdown`. A job whose answer is not
   finished stores failed / `cancelled` within the terminal budget; one that has its finish event
-  stores `completed`. Closing waits the terminal budget plus a 1 s grace for providers to stop;
-  the process's forced-exit timeout adds 4 s for closing the server and the pool (15 s in all).
+  stores `completed`. Closing waits a 1 s grace for providers to stop, one statement timeout for
+  a flush still in flight and the terminal budget (14 s); the process's forced-exit timeout
+  adds 4 s for closing the server and the pool (18 s in all).
   Rows not stored in time are reclaimed later. Waiting JSON clients receive the stored outcome.
 
 ## Consequences
@@ -85,7 +86,7 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (180 + 10 + 50 = 240 s) after its `
 - **A failed final write now answers 202**, not 500, to a JSON client waiting for it: the turn
   is honestly still unresolved, and polling ends once reclaim fails it.
 - **Shutdown cannot guarantee the cancelled write** (the database may be the reason for the
-  shutdown); reclaim is the backstop. A platform's stop grace period must exceed the 15 s
+  shutdown); reclaim is the backstop. A platform's stop grace period must exceed the 18 s
   forced-exit timeout (compose sets 20 s).
 - **A deploy overlap stays correct.** The old process's jobs either finish, hit their deadline,
   or are fenced by a newer write; the new process reclaims whatever the old one left.

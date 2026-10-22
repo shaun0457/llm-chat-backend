@@ -49,8 +49,8 @@ services:
       TERMINAL_STATEMENT_TIMEOUT_MS: ${TERMINAL_STATEMENT_TIMEOUT_MS:-3000}
       TERMINAL_WRITE_BUDGET_MS: ${TERMINAL_WRITE_BUDGET_MS:-10000}
       RECLAIM_GRACE_MS: ${RECLAIM_GRACE_MS:-50000}
-    # Longer than the API's forced-exit timeout (terminal-write budget + 5 s, 15 s by default),
-    # so that generations stopped by a shutdown can store their cancelled state.
+    # Longer than the API's forced-exit timeout (statement timeout + terminal-write budget + 5 s,
+    # 18 s by default), so that generations stopped by a shutdown can store their cancelled state.
     stop_grace_period: 20s
     # Loopback only: this file is a local stack with default credentials, not a deployment.
     ports:

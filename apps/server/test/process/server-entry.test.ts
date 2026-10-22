@@ -96,12 +96,16 @@ describe("server entry (built dist/index.js)", () => {
     });
 
     /**
-     * Starts the server with the shortest forced-exit timeout (terminal budget 1 ms + 1 s stop
-     * grace + 4 s margin) and holds one request open by never sending all of its body, so
-     * closing waits for it.
+     * Starts the server with a short forced-exit timeout (1 s stop grace + 1 ms statement
+     * timeout + 1 ms terminal budget + 4 s margin) and holds one request open by never sending
+     * all of its body, so closing waits for it.
      */
     async function serverHeldOpen() {
-      const server = startServer({ NODE_ENV: "production", TERMINAL_WRITE_BUDGET_MS: "1" });
+      const server = startServer({
+        NODE_ENV: "production",
+        TERMINAL_STATEMENT_TIMEOUT_MS: "1",
+        TERMINAL_WRITE_BUDGET_MS: "1",
+      });
       running = server.child;
       const url = new URL(await waitForUrl(server));
       socket = connect(Number(url.port), url.hostname);

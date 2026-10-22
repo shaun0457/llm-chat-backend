@@ -282,8 +282,9 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot hav
   paused process, for example) is fenced: its next write matches no row and it stops without
   changing anything.
 - **Graceful shutdown** (SIGTERM, SIGINT) stops admitting (503 `server_busy`), aborts the
-  running answers, waits up to `TERMINAL_WRITE_BUDGET_MS` + 1 s for them to store `cancelled`,
-  and forces exit 1 after `TERMINAL_WRITE_BUDGET_MS` + 5 s (15 s) or on a second signal. Give
+  running answers, waits up to 1 s + `TERMINAL_STATEMENT_TIMEOUT_MS` +
+  `TERMINAL_WRITE_BUDGET_MS` (14 s) for them to store `cancelled`, and forces exit 1 four
+  seconds later (18 s) or on a second signal. Give
   the platform a longer stop grace period (compose uses 20 s). Answers not stored in time are
   reclaimed later.
 
