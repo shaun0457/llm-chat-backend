@@ -39,7 +39,7 @@ export type Attach = {
    * Then ends the stream. `known` is the turn as the caller just read or admitted it. Never
    * throws: a failure after the stream started is logged and ends the stream.
    */
-  sse(stream: SseStream, assistantId: string, attempt: number, known?: Turn): Promise<void>;
+  sse(stream: SseStream, assistantId: string, attempt: number, known: Turn): Promise<void>;
 };
 
 const GENERIC_FAILURE_DETAIL = "The answer could not be generated.";
@@ -158,7 +158,7 @@ export function createAttach(deps: {
 
     async sse(stream, assistantId, attempt, known) {
       try {
-        let turn = known ?? (await readTurn(assistantId));
+        let turn: Turn | undefined = known;
         let job = localJob(assistantId, attempt);
         if (job === undefined && turn?.assistantMessage.status === "generating") {
           // The job may have ended (and stored the final state) since the turn was read.
