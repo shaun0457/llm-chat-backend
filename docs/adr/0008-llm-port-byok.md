@@ -209,9 +209,10 @@ retries:
 
 - `nvidia/nemotron-3-ultra-550b-a55b` is the only `nvidia` model and its default, with a
   262,144-token context window and 4,096 output tokens (V1, V2 below). Text only.
-- **Reasoning is filtered out.** The adapter reads only `choices[0].delta.content`; the
-  reasoning side fields (`reasoning_content`, `reasoning`) are never read, so reasoning is never
-  stored, returned, streamed, logged or sent as history. The API does not change: no new field
+- **Reasoning is filtered out.** Only `choices[0].delta.content` becomes text; the reasoning
+  side fields (`reasoning_content`, `reasoning`) are checked only for presence, to tell an
+  answer lost to reasoning from an empty one, so reasoning is never kept: never stored,
+  returned, streamed, logged or sent as history. The API does not change: no new field
   and no new event. While the model reasons, an event stream shows only `message.created` and
   `: ping` comments, and a JSON client waits as usual. Showing reasoning is out of scope.
 - **No request options.** The model card says reasoning is on by default ("Reasoning ON

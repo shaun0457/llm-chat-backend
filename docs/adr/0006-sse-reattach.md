@@ -115,6 +115,7 @@ completed` with status 200 when the stream ends (integration test `messages-sse`
   shortly after that timeout.
 - Hijacked responses bypass `onSend` hooks: whatever later plugins add there does not reach
   SSE responses unless it sets its headers earlier (in `onRequest`, as the request id does).
-- Some proxies buffer despite these headers; JSON with polling remains the fallback, and
-  whether the public deployment delivers live is recorded with it (#14).
+- Some proxies buffer despite these headers; JSON with polling remains the fallback. The
+  service is not deployed (#14 was closed), so live delivery through a platform proxy is
+  unverified (#25).
 - Replays (#10) and retries (#13) reuse `attach()` for both modes.
