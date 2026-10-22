@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 import { z } from "zod";
 
+import { COMMON_PROBLEMS, problemResponses } from "../../http/problem-details.js";
 import type { ProviderRegistry } from "../../llm/registry.js";
 
 const providersResponse = z.object({
@@ -30,7 +31,7 @@ export const providersRoutes: FastifyPluginAsyncZod<{ registry: ProviderRegistry
       schema: {
         summary: "List enabled providers and their catalogued models",
         tags: ["providers"],
-        response: { 200: providersResponse },
+        response: { 200: providersResponse, ...problemResponses(COMMON_PROBLEMS) },
       },
     },
     async () => ({

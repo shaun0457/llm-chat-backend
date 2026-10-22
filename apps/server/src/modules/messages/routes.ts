@@ -2,7 +2,12 @@ import type { FastifyPluginAsyncZod } from "fastify-type-provider-zod";
 
 import { prefersEventStream } from "../../http/accept.js";
 import { rateLimitPolicy } from "../../http/plugins.js";
-import { ProblemError } from "../../http/problem-details.js";
+import {
+  BODY_PROBLEMS,
+  COMMON_PROBLEMS,
+  ProblemError,
+  problemResponses,
+} from "../../http/problem-details.js";
 import { type SseOptions, openSseStream } from "../../http/sse.js";
 import { type WaitConfig, effectiveWaitMs, parsePrefer, preferenceApplied } from "./prefer.js";
 import {
@@ -141,6 +146,24 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
             headers: { "Preference-Applied": preferenceAppliedHeader, "Vary": varyHeader },
             content: { "application/problem+json": { schema: failedTurnProblem } },
           },
+          ...problemResponses({
+            400: "validation_error: a malformed id, body or X-LLM-Api-Key (never echoed)",
+            404:
+              "session_not_found (also when the session was deleted while a JSON send " +
+              "waited); message_not_found when the turn is gone but the session still exists",
+            409: "session_busy: an earlier answer in this session is still being generated",
+            422:
+              "message_id_conflict, provider_unavailable, model_not_supported, " +
+              "input_too_long or llm_credential_missing; nothing is stored",
+            ...BODY_PROBLEMS,
+            ...COMMON_PROBLEMS,
+            503: {
+              description:
+                "server_busy (active-answer limit or shutting down) or provider_busy (the " +
+                "turn's provider is at its limit); nothing is stored",
+              retryAfter: true,
+            },
+          }),
         },
       },
     },
@@ -214,7 +237,14 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
         tags: ["messages"],
         params: sessionIdParams,
         querystring: listMessagesQuery,
-        response: { 200: messagePage },
+        response: {
+          200: messagePage,
+          ...problemResponses({
+            400: "validation_error: a malformed id, limit or before",
+            404: "session_not_found, or message_not_found when before is not in this session",
+            ...COMMON_PROBLEMS,
+          }),
+        },
       },
     },
     async (request) => service.list(request.params.id, request.query),
@@ -237,6 +267,11 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
             headers: { "Cache-Control": noStoreHeader },
             content: { "application/json": { schema: messageResponse } },
           },
+          ...problemResponses({
+            400: "validation_error: an id is not a UUID",
+            404: "message_not_found: no such message in this session (or no such session)",
+            ...COMMON_PROBLEMS,
+          }),
         },
       },
     },
@@ -270,6 +305,13 @@ export const messagesRoutes: FastifyPluginAsyncZod<{
             description: "The answer as an event stream",
             content: { "text/event-stream": { schema: sseResponse } },
           },
+          ...problemResponses({
+            400: "validation_error: an id is not a UUID",
+            404:
+              "session_not_found, or message_not_found unless it is an assistant message of " +
+              "this session",
+            ...COMMON_PROBLEMS,
+          }),
         },
       },
     },

@@ -65,8 +65,8 @@ no-store` (also on its 404), so no cache serves an old state of an answer that i
 ## Consequences
 
 - Clients must always handle 202, even with a long `wait`: the server may shut down during the
-  wait, and the platform proxy may still be shorter than the configured maximum (the
-  deployment lowers `JSON_MAX_WAIT_MS` below its proxy timeout).
+  wait, and a proxy in front of it may time out before the configured maximum (a deployment
+  lowers `JSON_MAX_WAIT_MS` below its proxy timeout).
 - Waiting is cheap: a waiting request holds no database connection, only a timer and a
   promise.
 - A turn that is generating in another process (or whose process died) is reported as

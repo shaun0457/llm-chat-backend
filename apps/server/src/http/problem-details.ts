@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger, FastifyError, FastifyInstance, FastifyReply } from "fastify";
 import { STATUS_CODES } from "node:http";
+import { z } from "zod";
 
 /** Extra members of one problem type (RFC 9457 §3.2); they never replace the standard ones. */
 export type ProblemExtensions = Readonly<Record<string, unknown>>;
@@ -43,6 +44,68 @@ export function problem(
     ...(detail === undefined ? {} : { detail }),
   };
 }
+
+/**
+ * The problem shape, for the OpenAPI document only: sendProblem sends problems as finished
+ * JSON text, which Fastify never passes through a response schema.
+ */
+const problemSchema = z
+  .looseObject({
+    type: z.literal("about:blank"),
+    title: z.string().describe("The HTTP status text"),
+    status: z.number().int(),
+    code: z.string().describe("Stable, machine-readable error code"),
+    detail: z.string().optional().describe("A safe, human-readable explanation"),
+  })
+  .describe("RFC 9457 problem details");
+
+/** One documented error response: its description, and whether it carries Retry-After. */
+export type ProblemDoc = string | { readonly description: string; readonly retryAfter: true };
+
+/**
+ * Route schema `response` entries for error statuses, each RFC 9457 problem details (see
+ * problemSchema). A route spreads them next to its success responses.
+ */
+export function problemResponses(docs: Readonly<Record<number, ProblemDoc>>): Record<
+  number,
+  {
+    description: string;
+    headers?: Record<string, { type: string; description: string }>;
+    content: { "application/problem+json": { schema: typeof problemSchema } };
+  }
+> {
+  return Object.fromEntries(
+    Object.entries(docs).map(([status, doc]) => [
+      status,
+      {
+        description: typeof doc === "string" ? doc : doc.description,
+        ...(typeof doc === "string"
+          ? {}
+          : {
+              headers: {
+                "Retry-After": { type: "integer", description: "Seconds to wait before retrying" },
+              },
+            }),
+        content: { "application/problem+json": { schema: problemSchema } },
+      },
+    ]),
+  );
+}
+
+/** The error responses every rate-limited route can give. */
+export const COMMON_PROBLEMS = {
+  429: {
+    description: "rate_limited: this client address has used up its request budget",
+    retryAfter: true,
+  },
+  500: "internal_error: an unexpected failure, logged on the server",
+} as const satisfies Record<number, ProblemDoc>;
+
+/** The error responses of a route with a JSON body, besides its own validation errors. */
+export const BODY_PROBLEMS = {
+  413: "request_error: the body is larger than 128 KiB",
+  415: "request_error: a body content type the API does not accept",
+} as const satisfies Record<number, ProblemDoc>;
 
 export function sendProblem(reply: FastifyReply, body: Problem): FastifyReply {
   return reply.code(body.status).type("application/problem+json").send(JSON.stringify(body));
