@@ -114,8 +114,9 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     # Image build (~2 min), at most two JSON sends of a 150 s wait and 60 s of polling each,
-    # and one streamed send of at most 200 s.
-    timeout-minutes: 20
+    # one streamed send of at most 200 s, and two memory turns of at most two sends each
+    # (100 s plus 60 s of polling per send).
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -308,6 +309,101 @@ jobs:
           fi
           resume
           echo "::error::The event stream did not end with done and a completed, non-empty answer."
+          exit 1
+      - name: Remember a name across two turns
+        # The second answer can only name Ada if the first turn was sent to the model as history.
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          api=http://127.0.0.1:3000
+          out="$RUNNER_TEMP/live-e2e"
+          status=$(curl -sS -o "$out/memory-session.json" -w '%{http_code}' --max-time 30 \
+            -X POST "$api/sessions" -H 'content-type: application/json' \
+            -d '{"provider":"nvidia"}') || status=000
+          if [ "$status" != 201 ]; then
+            echo "::error::POST /sessions answered $status"
+            exit 1
+          fi
+          session=$(jq -er .id "$out/memory-session.json")
+          # Model output must not be read as workflow commands; resume them on every exit path.
+          stop_token="live-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          resume() {
+            if [ -n "$stop_token" ]; then echo "::$stop_token::"; stop_token=""; fi
+          }
+          trap resume EXIT
+          echo "::stop-commands::$stop_token"
+          # One turn as a JSON send, with the JSON step's retry rule. Leaves the final assistant
+          # message in $out/<label>-answer.json; succeeds only when it is completed and non-empty.
+          send_turn() {
+            local label=$1 payload=$2 attempt status body message mid
+            message="$out/$label-answer.json"
+            for attempt in 1 2; do
+              body="$out/$label-send-$attempt.json"
+              status=$(curl -sS -o "$body" -w '%{http_code}' --max-time 100 \
+                -X POST "$api/sessions/$session/messages" \
+                -H 'content-type: application/json' -H 'Prefer: wait=75' \
+                -d "$payload") || status=000
+              echo "$label, attempt $attempt: the send answered HTTP $status"
+              case "$status" in
+                200 | 202 | 502) jq -e .assistantMessage "$body" > "$message" || echo '{}' > "$message" ;;
+                *) echo '{}' > "$message" ;;
+              esac
+              if [ "$status" = 202 ] && jq -e .id "$message" > /dev/null; then
+                # Still generating: poll the assistant message for up to 60 s.
+                mid=$(jq -er .id "$message")
+                for _ in $(seq 1 12); do
+                  sleep 5
+                  if curl -sSf --max-time 30 -o "$message.poll" \
+                    "$api/sessions/$session/messages/$mid"; then
+                    mv "$message.poll" "$message"
+                  else
+                    echo "a poll request failed; trying again"
+                  fi
+                  if [ "$(jq -r .status "$message" 2> /dev/null || echo unknown)" != generating ]; then
+                    break
+                  fi
+                done
+                if [ "$(jq -r .status "$message" 2> /dev/null || echo unknown)" = failed ]; then
+                  status=502
+                fi
+              fi
+              # The answer text and usage only; never request headers.
+              jq -c '{status, model, finishReason, usage, errorCode, answer: .content}' "$message"
+              if jq -e '.status == "completed" and (.content | length > 0)' "$message" > /dev/null; then
+                return 0
+              fi
+              # One more attempt only after a 429 or 5xx that a new try could fix.
+              case "$status" in
+                429 | 5??)
+                  if jq -e '.errorCode == "llm_auth_failed" or .errorCode == "llm_context_overflow"' \
+                    "$message" > /dev/null; then
+                    return 1
+                  fi
+                  ;;
+                *) return 1 ;;
+              esac
+            done
+            return 1
+          }
+          if ! send_turn turn-1 '{"content":"My name is Ada. Reply with OK."}'; then
+            resume
+            echo "::error::The first turn did not complete."
+            exit 1
+          fi
+          if ! send_turn turn-2 '{"content":"What is my name? Answer with one word."}'; then
+            resume
+            echo "::error::The second turn did not complete."
+            exit 1
+          fi
+          if jq -e '.content | test("ada"; "i")' "$out/turn-2-answer.json" > /dev/null; then
+            resume
+            echo "The second turn named Ada: the first turn was sent as history."
+            exit 0
+          fi
+          resume
+          echo "::error::The second answer does not contain Ada."
           exit 1
       - name: Responses and logs hold no key
         id: scan

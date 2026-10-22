@@ -632,7 +632,9 @@ starts the built image with `docker compose`, the server's key and a CI-only cat
 caps answers at 32 tokens, creates an `nvidia` session and asks one question through
 `POST /sessions/:id/messages` (JSON, `Prefer: wait=150`), then once more as an event stream
 (`Accept: text/event-stream`), which must end with `done`. It passes only with a completed,
-non-empty answer each way, prints just the answers and their usage, and fails if a response or
+non-empty answer each way. In a second session it sends "My name is Ada" and then asks for the
+name, and the second answer must contain "Ada", which shows the first turn reached the model
+as history. It prints just the answers and their usage, and fails if a response or
 the container logs (which must not be empty) contain a key-shaped string. It runs after the
 adapter job, so the two never call NVIDIA at the same time. Neither job is a required check.
 
