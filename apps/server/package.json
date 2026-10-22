@@ -44,6 +44,7 @@
     "db:check": "drizzle-kit check",
     "db:generate": "drizzle-kit generate",
     "dev": "tsup ./src/index.ts ./src/migrate.ts --format esm --watch --onSuccess \"pnpm run start\"",
+    "docs:openapi": "tsup ./scripts/write-openapi.ts --format esm --out-dir .openapi-build --clean --silent && node .openapi-build/write-openapi.js ../../docs/openapi.json",
     "format": "prettier --write .",
     "lint": "eslint --fix .",
     "lint:ci": "eslint . --max-warnings 0",

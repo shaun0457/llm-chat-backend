@@ -29,6 +29,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "docs:openapi": "pnpm --filter server docs:openapi",
     "format": "turbo run format",
     "lint": "turbo run lint",
     "lint:ci": "turbo run lint:ci",
