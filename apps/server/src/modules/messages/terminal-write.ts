@@ -38,12 +38,16 @@ class BudgetExhausted extends Error {
   }
 }
 
-/** `promise`, or a BudgetExhausted rejection once `ms` have passed first. */
-async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+/**
+ * `promise`, or a BudgetExhausted rejection once `ms` have passed first; `abandon` is then
+ * called before the rejection, so the try can see that it must not write or commit any more.
+ */
+async function within<T>(promise: Promise<T>, ms: number, abandon: () => void): Promise<T> {
   // A try abandoned here still ends on its own (at its statement timeout, V2); withTimeout
   // keeps its later rejection from surfacing as unhandled.
   const result = await withTimeout(promise, ms);
   if (result === TIMED_OUT) {
+    abandon();
     throw new BudgetExhausted();
   }
   return result;
@@ -61,7 +65,8 @@ export type TerminalWriteLimits = {
  * with doubling backoff, all within one absolute budget measured on `clock`. Each try's
  * statements are limited to the smaller of the statement timeout and what is left of the
  * budget (`SET LOCAL statement_timeout`), and the whole try, including getting a connection
- * and committing, to what is left. A backoff that could not end within the budget is not
+ * and committing, to what is left; the try checks the budget again after every awaited step
+ * and before its COMMIT, and rolls back once it ran out. A backoff that could not end within the budget is not
  * started, and an error that would repeat on every try (bad data) ends it at once. Throws
  * TerminalWriteError when it gives up.
  */
@@ -82,19 +87,31 @@ export async function writeWithinBudget<T>(
       break;
     }
     attempts += 1;
+    // Set when the race below gives up on this try: from then on it rolls back.
+    let abandoned = false;
+    // Checked after every awaited step and before the write and the COMMIT: a try whose
+    // budget ran out while it waited (for a connection, for the setup to answer, for the write)
+    // must not start writing or commit after its failure may have been reported.
+    const ensureTimeLeft = (): number => {
+      const ms = abandoned ? 0 : left();
+      if (ms === 0) {
+        throw new BudgetExhausted();
+      }
+      return ms;
+    };
     try {
       return await within(
         db.tx(async (tx) => {
-          // Measured again once the try has its connection: a try the race below abandoned
-          // while it waited for one must not write after the budget (it rolls back instead).
-          const statementMs = Math.min(limits.statementTimeoutMs, left());
-          if (statementMs === 0) {
-            throw new BudgetExhausted();
-          }
-          await limitStatements(tx, statementMs);
-          return write(tx);
+          await limitStatements(tx, Math.min(limits.statementTimeoutMs, ensureTimeLeft()));
+          ensureTimeLeft();
+          const result = await write(tx);
+          ensureTimeLeft();
+          return result;
         }),
         available,
+        () => {
+          abandoned = true;
+        },
       );
     } catch (error) {
       lastError = error;

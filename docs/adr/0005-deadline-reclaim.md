@@ -47,7 +47,9 @@ The last option.
 - **Terminal-write budget.** Storing the final state gets `TERMINAL_WRITE_BUDGET_MS` (10 s) in
   total. Each try is a short transaction with `SET LOCAL statement_timeout` set to the smaller
   of `TERMINAL_STATEMENT_TIMEOUT_MS` (3 s) and what is left of the budget, and the whole try,
-  including getting a connection and committing, is raced against what is left. Failed tries
+  including getting a connection and committing, is raced against what is left. A try checks
+  the budget again after every awaited step and before its `COMMIT`, and rolls back once it
+  ran out, so no write starts after the failure is reported. Failed tries
   are retried after 100, 200, 400 … ms, but a backoff that could not end within the budget is
   not started. When the budget runs out the job logs the assistant id, attempt and number of
   tries, releases its capacity, and leaves the row.
