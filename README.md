@@ -400,12 +400,17 @@ curl -N localhost:3000/sessions/<id>/messages/<assistant id>/events   # re-attac
   message left `generating` by a crashed process gets `message.detached` until stale reclaim
   fails it as `interrupted` (after that, `error`). There is no `Last-Event-ID`: a reconnect
   always starts from a fresh snapshot.
-- **Proxies.** A `: ping` comment every 15 s keeps idle connections open; responses carry
+- **Proxies.** A `: ping` comment every 15 s (`SSE_PING_INTERVAL_MS`) keeps idle connections
+  open; responses carry
   `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`, and the API never
   compresses them. Proxies that still buffer deliver the events late; JSON with polling works
   everywhere.
-- **Slow clients** that stop reading are disconnected once 256 KiB would be waiting for them
-  (`SSE_BUFFER_LIMIT_BYTES`); the answer is still stored.
+- **Slow clients** that stop reading are disconnected once more than 256 KiB would be waiting
+  for them (`SSE_BUFFER_LIMIT_BYTES`); the answer is still stored. A single event written while
+  nothing is waiting always goes out, however large.
+- **Configurable.** The ping interval (`SSE_PING_INTERVAL_MS`, 15 s by default) and the buffer
+  limit (`SSE_BUFFER_LIMIT_BYTES`, 256 KiB by default) are set in the environment; see
+  [Configuration](#configuration).
 
 See [ADR 0006](docs/adr/0006-sse-reattach.md).
 

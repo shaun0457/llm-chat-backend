@@ -69,8 +69,10 @@ text/event-stream; charset=utf-8`, `Cache-Control: no-cache, no-transform`,
   generation goes on too.
 - **Slow consumers.** Before any frame (snapshot, delta, final event, ping) is written, the
   response's pending bytes plus the frame's UTF-8 length are compared with
-  `SSE_BUFFER_LIMIT_BYTES` (256 KiB). A frame that would exceed it is not written: that
-  connection is destroyed and unsubscribed. Every subscriber is checked on its own, and the
+  `SSE_BUFFER_LIMIT_BYTES` (256 KiB). While bytes are still waiting, a frame that would exceed
+  it is not written: that connection is destroyed and unsubscribed. A frame written to an empty
+  buffer always goes out, however large, so one big `message.created` or `done` never counts
+  as a slow client, even at the 16 KiB minimum. Every subscriber is checked on its own, and the
   generation is never touched.
 
 ## Verification findings
