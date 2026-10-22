@@ -7,6 +7,7 @@ import { loadConfig } from "../../src/config.js";
 import { createRetention } from "../../src/modules/sessions/retention.js";
 import { createSessionsService } from "../../src/modules/sessions/service.js";
 import { TEST_ENV, makeTestApp, testJobs } from "../helpers/app.js";
+import { insertCrashedTurn } from "../helpers/crash.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { type LogCapture, captureLogs } from "../helpers/log-capture.js";
 import { allMessages, createSession, eventually, send } from "../helpers/messages.js";
@@ -38,6 +39,7 @@ function sessionsService() {
     registry,
     staleThresholdMs: loadConfig(TEST_ENV).staleThresholdMs,
     jobs: testJobs(testDb.db),
+    jobEndWaitMs: 1_000,
   });
 }
 
@@ -69,6 +71,27 @@ describe("retention.toctou", () => {
     expect(outcome).toBe("skipped");
     expect(await exists(app, session.id)).toBe(true);
     expect(await allMessages(app, session.id)).toHaveLength(2);
+  });
+
+  it("reclaims a stale turn of a candidate it skips, as any locked write does", async () => {
+    app = makeTestApp({ db: testDb.db });
+    const session = await createSession(app);
+    const cutoff = await databaseNow();
+    // A turn left by a crashed process, then activity after the cutoff.
+    const { assistantId } = await insertCrashedTurn(testDb.db, session.id, 86_400);
+    await testDb.db.drizzle.execute(
+      sql`UPDATE sessions SET last_activity_at = clock_timestamp() WHERE id = ${session.id}`,
+    );
+
+    const outcome = await sessionsService().deleteSession(session.id, { inactiveBefore: cutoff });
+
+    expect(outcome).toBe("skipped");
+    // Read directly: an API read would reclaim the turn itself.
+    const { rows } = await testDb.db.pool.query(
+      "SELECT status, error_code FROM messages WHERE id = $1",
+      [assistantId],
+    );
+    expect(rows).toEqual([{ status: "failed", error_code: "interrupted" }]);
   });
 
   it("deletes a candidate that stayed inactive since it was selected", async () => {
@@ -297,5 +320,57 @@ describe("retention.run", () => {
 
     expect(runs).toBeGreaterThan(0);
     expect(retentionLogs(logs)).toHaveLength(runs);
+  });
+});
+
+describe("retention.shutdown", () => {
+  it("never delays the jobs' shutdown while a retention candidate waits on a lock", async () => {
+    const realJobs = testJobs(testDb.db);
+    let shutdownCalledAt: number | undefined;
+    const jobs: typeof realJobs = {
+      ...realJobs,
+      shutdown: (waitMs) => {
+        shutdownCalledAt = performance.now();
+        return realJobs.shutdown(waitMs);
+      },
+    };
+    const app = makeTestApp({
+      db: testDb.db,
+      jobs,
+      config: loadConfig({ ...TEST_ENV, RETENTION_DAYS: "7" }),
+    });
+    const old = await createSession(app);
+    await age(old.id, 8);
+    // Another transaction holds the candidate's row, so its delete waits.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let lockTaken!: () => void;
+    const taken = new Promise<void>((resolve) => {
+      lockTaken = resolve;
+    });
+    const holder = testDb.db.tx(async (tx) => {
+      await tx.execute(sql`SELECT id FROM sessions WHERE id = ${old.id} FOR UPDATE`);
+      lockTaken();
+      await held;
+    });
+    await taken;
+    const run = app.retention?.runOnce();
+    await sleep(200);
+    // Ends the wait in any case, so a regression fails instead of hanging.
+    const fallback = setTimeout(release, 1_500);
+
+    const closeStartedAt = performance.now();
+    const closing = app.close();
+    await eventually(
+      async () => shutdownCalledAt,
+      (at) => at !== undefined,
+    );
+    release();
+    await Promise.all([closing, holder, run]);
+    clearTimeout(fallback);
+
+    expect((shutdownCalledAt ?? Infinity) - closeStartedAt).toBeLessThan(500);
   });
 });

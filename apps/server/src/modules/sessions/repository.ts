@@ -97,19 +97,19 @@ export async function updateSession(
 
 /**
  * Locks the row until the transaction ends and tells whether the session was active at or
- * after `since` (an ISO timestamp, compared at the database's precision); undefined when the
- * session does not exist.
+ * after `since` (an ISO timestamp, compared at the database's precision; never, without one);
+ * undefined when the session does not exist.
  */
 export async function lockSessionActiveSince(
   tx: Tx,
   id: string,
-  since: string,
+  since: string | undefined,
 ): Promise<{ active: boolean } | undefined> {
-  const [row] = await tx
-    .select({ active: sql<boolean>`${sessions.lastActivityAt} >= ${since}::timestamptz` })
-    .from(sessions)
-    .where(eq(sessions.id, id))
-    .for("update");
+  const active =
+    since === undefined
+      ? sql<boolean>`false`
+      : sql<boolean>`${sessions.lastActivityAt} >= ${since}::timestamptz`;
+  const [row] = await tx.select({ active }).from(sessions).where(eq(sessions.id, id)).for("update");
   return row;
 }
 

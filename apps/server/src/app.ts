@@ -51,6 +51,8 @@ const REQUEST_ID_HEADER = "x-request-id";
 export const BODY_LIMIT_BYTES = 131_072;
 /** Time for providers to honour the abort before the job's terminal write starts. */
 const JOB_STOP_GRACE_MS = 1_000;
+/** On top of the terminal statement timeout, for a deleted session's aborted jobs to end. */
+const JOB_END_MARGIN_MS = 500;
 
 /**
  * How long closing the app waits for aborted generations to store their final state: a grace
@@ -169,7 +171,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       log: app.log,
       capacity: capacityFor(config, catalog),
     });
-  const sessions = createSessionsService({ db, registry, staleThresholdMs, jobs });
+  const sessions = createSessionsService({
+    db,
+    registry,
+    staleThresholdMs,
+    jobs,
+    // An aborted job's in-flight flush gets one terminal statement timeout; a margin on top.
+    jobEndWaitMs: config.terminalStatementTimeoutMs + JOB_END_MARGIN_MS,
+  });
   void app.register(sessionsRoutes, { service: sessions });
 
   const retention =
@@ -187,9 +196,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // Only a listening server runs it: tests and the OpenAPI script build apps that never do.
     app.addHook("onListen", async () => {
       retention.start();
-    });
-    app.addHook("preClose", async () => {
-      await retention.stop();
     });
   }
 
@@ -214,9 +220,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     sendsPerMinute: config.rateLimitSendPerMin,
   });
   // Before the server stops accepting: running generations are aborted and store failed /
-  // cancelled, so waiting responses finish instead of holding the close open.
+  // cancelled, so waiting responses finish instead of holding the close open. Retention stops
+  // at the same time: a candidate waiting on a lock must not eat the jobs' shutdown budget.
   app.addHook("preClose", async () => {
-    await jobs.shutdown(jobShutdownWaitMs(config));
+    await Promise.all([jobs.shutdown(jobShutdownWaitMs(config)), retention?.stop()]);
   });
 
   return app;

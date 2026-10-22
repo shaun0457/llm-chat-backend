@@ -1,8 +1,11 @@
 import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
+import type { Job } from "../../src/modules/messages/jobs.js";
+import { createSessionsService } from "../../src/modules/sessions/service.js";
 import { TEST_ENV, makeTestApp } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider } from "../helpers/fake-llm.js";
@@ -151,5 +154,51 @@ describe("delete.running", () => {
     expect(deleted.statusCode).toBe(204);
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ code: "session_not_found" });
+  });
+});
+
+describe("delete.wait", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  /** A sessions service whose delete "aborts" one job that ends when `finished` settles. */
+  function serviceAborting(finished: Promise<unknown>, jobEndWaitMs: number) {
+    const { registry } = testProviders();
+    const job = { finished } as unknown as Job;
+    return createSessionsService({
+      db: testDb.db,
+      registry,
+      staleThresholdMs: loadConfig(TEST_ENV).staleThresholdMs,
+      jobs: { abortSession: () => [job] },
+      jobEndWaitMs,
+    });
+  }
+
+  it("waits for an aborted job held by an in-flight flush, longer than a second", async () => {
+    app = makeTestApp({ db: testDb.db });
+    const session = await createSession(app);
+    let ended = false;
+    const finished = sleep(1_500).then(() => {
+      ended = true;
+    });
+
+    const outcome = await serviceAborting(finished, 3_000).deleteSession(session.id);
+
+    expect(outcome).toBe("deleted");
+    expect(ended).toBe(true);
+  });
+
+  it("stops waiting at its bound for a job that never ends", async () => {
+    app = makeTestApp({ db: testDb.db });
+    const session = await createSession(app);
+    const started = performance.now();
+
+    const outcome = await serviceAborting(new Promise(() => {}), 300).deleteSession(session.id);
+
+    expect(outcome).toBe("deleted");
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 });

@@ -19,13 +19,6 @@ import {
 } from "./repository.js";
 import type { CreateSessionInput, Session, SessionPage, UpdateSessionInput } from "./schemas.js";
 
-/**
- * How long a delete waits for the generations it aborted to end and free their capacity. An
- * aborted job stops at once (a provider that ignores the signal is not waited for), so this
- * only bounds a flush still in flight.
- */
-const JOB_END_WAIT_MS = 1_000;
-
 export type SessionsService = {
   createSession(input: CreateSessionInput): Promise<Session>;
   /** Throws 404 session_not_found. */
@@ -67,8 +60,14 @@ export function createSessionsService(deps: {
   staleThresholdMs: number;
   /** A deleted session's running generations are stopped through it. */
   jobs: Pick<JobRegistry, "abortSession">;
+  /**
+   * How long a delete waits for the generations it aborted to end and free their capacity.
+   * An aborted job stops at once (a provider that ignores the signal is not waited for) but
+   * may wait for a flush still in flight, up to the terminal statement timeout.
+   */
+  jobEndWaitMs: number;
 }): SessionsService {
-  const { db, registry, staleThresholdMs, jobs } = deps;
+  const { db, registry, staleThresholdMs, jobs, jobEndWaitMs } = deps;
 
   return {
     async createSession(input) {
@@ -121,15 +120,12 @@ export function createSessionsService(deps: {
     async deleteSession(id, options = {}) {
       const { inactiveBefore } = options;
       const outcome = await db.tx(async (tx) => {
-        const locked =
-          inactiveBefore === undefined
-            ? await lockSession(tx, id)
-            : await lockSessionActiveSince(tx, id, inactiveBefore);
+        const locked = await lockSessionActiveSince(tx, id, inactiveBefore);
         if (locked === undefined) {
           return "not_found" as const;
         }
         await reclaimStale(tx, id, staleThresholdMs);
-        if ("active" in locked && locked.active) {
+        if (locked.active) {
           return "skipped" as const;
         }
         await deleteSessionRow(tx, id);
@@ -146,7 +142,7 @@ export function createSessionsService(deps: {
       // its admission commits, before this delete could lock the session, so none is missed.
       const aborted = jobs.abortSession(id, "deleted");
       if (aborted.length > 0) {
-        await withTimeout(Promise.all(aborted.map((job) => job.finished)), JOB_END_WAIT_MS);
+        await withTimeout(Promise.all(aborted.map((job) => job.finished)), jobEndWaitMs);
       }
       return outcome;
     },
