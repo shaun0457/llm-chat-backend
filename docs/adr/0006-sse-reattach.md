@@ -27,8 +27,16 @@ reader must never make the server buffer without bound.
 
 SSE, generation independent of the connection, and snapshot re-attach.
 
-- **Negotiation.** `POST /sessions/:id/messages` streams when `Accept` lists
-  `text/event-stream` (a `q=0` refuses it), otherwise it answers JSON (ADR 0004). Everything
+- **Negotiation.** `POST /sessions/:id/messages` compares q-values. It streams only when
+  `Accept` lists `text/event-stream` by name with a q above 0 and strictly above the q of
+  `application/json`. JSON's q is that of its most specific matching range: `application/json`,
+  then `application/*`, then `*/*`; 0 when none matches. Ranges that match the event stream
+  only by wildcard (`text/*`, `*/*`) never select it, a range with a malformed q is ignored, and
+  a tie or a missing or empty `Accept` answers JSON (ADR 0004). So `text/event-stream` streams;
+  `application/json, text/event-stream;q=0.5` and `text/event-stream, */*` answer JSON. Every
+  response of the route, including its problem responses and the stream, carries
+  `Vary: Accept`. The header is set before validation and copied into the stream's head when
+  the reply is hijacked. The rule is a small local parser rather than a dependency. Everything
   found before the stream starts (validation, 404, 409, 422, 503) is an ordinary problem
   response with its status. Once the stream started, the status is 200 and a generation
   failure is the `error` event. `GET /sessions/:id/messages/:mid/events` always streams; it

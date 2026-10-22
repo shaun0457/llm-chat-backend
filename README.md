@@ -360,6 +360,16 @@ generated. Refusals found before the stream starts (400, 404, 409, 422, 503) are
 problem details; once the stream has started the status is 200 and a failed answer is the
 `error` event.
 
+The server compares q-values. It streams only when `text/event-stream` is listed by name with
+a q above 0 and above the q of `application/json`, which `application/*` and `*/*` also match.
+A tie, a wildcard alone, or no `Accept` answers JSON:
+
+- `text/event-stream` and `text/event-stream, application/json;q=0.9` stream;
+- `application/json, text/event-stream;q=0.5`, `text/event-stream, */*` and
+  `text/event-stream;q=0` answer JSON.
+
+Every response of the send route carries `Vary: Accept`.
+
 ```sh
 curl -N -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
   -H 'Accept: text/event-stream' -d '{"content":"Hello"}'
