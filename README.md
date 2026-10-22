@@ -17,21 +17,31 @@ so run it only where you trust everyone who can reach it
 
 ### Where the assignment's items are answered
 
-| Assignment item (paraphrased)                                        | Status   | README section                                                                                             |
-| -------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| Manage many chat sessions: create, list, read, update, delete        | done     | [Query support](#query-support)                                                                            |
-| Send a message, get the model's answer, keep the history             | done     | [Sending a message](#sending-a-message), [Database schema](#database-schema)                               |
-| Talk to a real LLM provider                                          | done     | [Providers and API keys](#providers-and-api-keys)                                                          |
-| Start everything with one command                                    | done     | [Run with Docker](#run-with-docker)                                                                        |
-| An architecture diagram                                              | done     | [Architecture](#architecture)                                                                              |
-| How to run it                                                        | done     | [Run with Docker](#run-with-docker), [Run locally](#run-locally), [Configuration](#configuration)          |
-| How to run the tests, and how the code is tested (LLM mocking too)   | done     | [Test](#test), [Testing approach](#testing-approach)                                                       |
-| The database schema, and how it supports session and message queries | done     | [Database schema](#database-schema), [How the schema serves each query](#how-the-schema-serves-each-query) |
-| Two or three build-versus-reuse decisions with their trade-offs      | done     | [Build vs reuse](#build-vs-reuse)                                                                          |
-| Where the API documentation is                                       | done     | [API documentation](#api-documentation)                                                                    |
-| Bonus: streaming answers                                             | done     | [Streaming (SSE)](#streaming-sse)                                                                          |
-| Bonus: a local model                                                 | done     | [Local model (Ollama)](#local-model-ollama)                                                                |
-| Bonus: a public deployment                                           | not done | [How I would deploy it](#how-i-would-deploy-it)                                                            |
+Requirements, in the assignment's order:
+
+| #   | Assignment item (paraphrased)                                                                                                 | Status   | README section                                                           |
+| --- | ----------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------ |
+| 1   | Several chat sessions: create one, list them, read a session's messages, send a message and get the model's reply, delete one | done     | [Query support](#query-support), [Sending a message](#sending-a-message) |
+| 2   | Send the user's message to an LLM and return its answer                                                                       | done     | [Providers and API keys](#providers-and-api-keys)                        |
+| 2.1 | Bonus: a small model running on your own machine                                                                              | done     | [Local model (Ollama)](#local-model-ollama)                              |
+| 2.2 | Bonus: the answer arrives piece by piece while it is generated                                                                | done     | [Streaming (SSE)](#streaming-sse)                                        |
+| 3   | Sessions and messages kept in a database that runs locally                                                                    | done     | [Run with Docker](#run-with-docker) (PostgreSQL 17 in compose)           |
+| 3   | Its tables and fields                                                                                                         | done     | [Database schema](#database-schema)                                      |
+| 3   | Which index or constraint serves each session and message query                                                               | done     | [How the schema serves each query](#how-the-schema-serves-each-query)    |
+| 4   | API documentation                                                                                                             | done     | [API documentation](#api-documentation)                                  |
+| 5   | Every service built as a Docker image and started with Docker                                                                 | done     | [Run with Docker](#run-with-docker)                                      |
+| 6   | Automated tests: how to run them, what they cover, how the LLM and other outside services are faked                           | done     | [Test](#test), [Testing approach](#testing-approach)                     |
+| 7   | Bonus: a public deployment with its address and endpoints                                                                     | not done | [How I would deploy it](#how-i-would-deploy-it)                          |
+| —   | Two or three build-versus-reuse decisions with their trade-offs                                                               | done     | [Build vs reuse](#build-vs-reuse)                                        |
+
+Also asked for in the submission:
+
+| Submission item (paraphrased)    | Where                                                                                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| An architecture diagram          | [Architecture](#architecture)                                                                     |
+| How to start and run the project | [Run with Docker](#run-with-docker), [Run locally](#run-locally), [Configuration](#configuration) |
+| A public deployment URL, if any  | none: not publicly deployed (see above)                                                           |
+| The files a deployment needs     | [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml)                            |
 
 **Beyond the assignment:** answers that take minutes without holding a request open
 ([Long-running answers](#long-running-answers-json-clients)), sends that are safe to repeat
