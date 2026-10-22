@@ -97,6 +97,108 @@ describe("logging", () => {
 
       expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
     });
+
+    it("redacts apiKey fields wherever a log line carries them", async () => {
+      app = makeLoggingApp();
+      app.get("/test/log-key", async (request) => {
+        request.log.info({ apiKey: SENTINEL, job: { apiKey: SENTINEL } }, "with keys");
+        return { ok: true };
+      });
+
+      await app.inject({ method: "GET", url: "/test/log-key" });
+
+      const logged = logs.entries().find((entry) => entry.msg === "with keys");
+      expect(logged).toMatchObject({ apiKey: "[REDACTED]", job: { apiKey: "[REDACTED]" } });
+      expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
+    });
+  });
+
+  describe("error serializer", () => {
+    function throwing(error: unknown): FastifyInstance {
+      app = makeLoggingApp();
+      app.get("/test/throw", async () => {
+        throw error;
+      });
+      return app;
+    }
+
+    // The serializer cannot know the key; SENTINEL has the sk- format the scrubber recognises.
+    it("logs only allowlisted fields of an SDK-style error, scrubbing its message", async () => {
+      const error = Object.assign(new Error(`401 key ${SENTINEL} rejected`), {
+        status: 401,
+        code: "invalid_api_key",
+        headers: { authorization: `Bearer ${SENTINEL}` },
+        config: { headers: { "Authorization": `Bearer ${SENTINEL}`, "x-api-key": SENTINEL } },
+        request: { headers: { authorization: `Bearer ${SENTINEL}` }, body: SENTINEL },
+        error: { message: SENTINEL },
+      });
+      await throwing(error).inject({ method: "GET", url: "/test/throw" });
+
+      const entry = logs.entries().find((candidate) => candidate.msg === "unhandled error");
+      expect(entry?.err).toEqual({
+        type: "Error",
+        message: expect.stringContaining("401 key"),
+        stack: expect.any(String),
+        status: 401,
+        code: "invalid_api_key",
+      });
+      expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
+    });
+
+    it("removes bearer tokens from messages along the cause chain", async () => {
+      const error = new Error("outer", {
+        cause: new Error(`upstream said Authorization: Bearer ${SENTINEL}`, {
+          cause: Object.assign(new Error("innermost"), { config: { apiKey: SENTINEL } }),
+        }),
+      });
+      await throwing(error).inject({ method: "GET", url: "/test/throw" });
+
+      const entry = logs.entries().find((candidate) => candidate.msg === "unhandled error");
+      expect(entry?.err).toMatchObject({
+        message: "outer",
+        cause: {
+          message: "upstream said Authorization: Bearer [REDACTED]",
+          cause: { message: "innermost" },
+        },
+      });
+      expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
+    });
+
+    it("never logs the parameters of a failed database query", async () => {
+      // What drizzle throws for a failed query: its message and `params` carry the values.
+      const pgError = Object.assign(new Error("duplicate key value violates unique constraint"), {
+        code: "23505",
+        constraint: "messages_pkey",
+        table: "messages",
+        detail: `Key (id)=(${SENTINEL}) already exists.`,
+        where: SENTINEL,
+      });
+      const queryError = Object.assign(
+        new Error(`Failed query: insert into "messages" values ($1)\nparams: ${SENTINEL}`, {
+          cause: pgError,
+        }),
+        { query: 'insert into "messages" values ($1)', params: [SENTINEL] },
+      );
+      await throwing(queryError).inject({ method: "GET", url: "/test/throw" });
+
+      const entry = logs.entries().find((candidate) => candidate.msg === "unhandled error");
+      expect(entry?.err).toMatchObject({
+        message: 'Failed query: insert into "messages" values ($1)\nparams: [omitted]',
+        cause: { code: "23505", constraint: "messages_pkey", table: "messages" },
+      });
+      expect(logs.lines().filter((line) => line.includes(SENTINEL))).toEqual([]);
+    });
+
+    it("survives a cause chain that loops back on itself", async () => {
+      const error = new Error("loop");
+      (error as Error & { cause: unknown }).cause = error;
+
+      const response = await throwing(error).inject({ method: "GET", url: "/test/throw" });
+
+      expect(response.statusCode).toBe(500);
+      const entry = logs.entries().find((candidate) => candidate.msg === "unhandled error");
+      expect(entry?.err).toMatchObject({ message: "loop" });
+    });
   });
 
   describe("request id", () => {
