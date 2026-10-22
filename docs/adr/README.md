@@ -1,8 +1,8 @@
 # Architecture decision records
 
 Each record states the context, the options considered, the decision, what was verified and the
-consequences. All are accepted; later changes are added as dated amendments at the end of a
-record rather than in a new one.
+consequences. All are accepted; later decisions are added as dated amendments at the end of a
+record rather than in a new one, and small factual corrections are made in place.
 
 | ADR                                         | Status                                 | Decision in one line                                                                                                                                          |
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |

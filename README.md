@@ -842,13 +842,15 @@ follows:
   limits and live streams are per process ([ADR 0003](docs/adr/0003-single-process-db-truth.md)).
 - **Managed PostgreSQL 17**, with `node dist/migrate.js` as the platform's pre-deploy step and
   `node dist/index.js` as the start command; the API never migrates.
-- **`TRUST_PROXY`** set to the proxy's documented address range, so that rate limits count
-  each client rather than the proxy.
+- **`TRUST_PROXY`** set to the narrowest documented address range of a proxy that overwrites
+  `X-Forwarded-For`, so that rate limits count each client rather than the proxy, and no other
+  tenant of a shared range can claim an address.
 - **`CORS_ORIGINS`** set for a browser client, and **`RETENTION_DAYS=7`**, so that data left
   by anonymous users does not accumulate.
 - **Health checks**: readiness on `/health/ready` (database reachable, migrations applied),
   liveness on `/health`; a stop grace period of at least 20 s
-  ([Failure handling](#failure-handling)).
+  ([Failure handling](#failure-handling)). `/health/ready` is not rate limited and queries the
+  database, so the proxy would expose only `/health` publicly.
 - **No server key**: only providers that need no key (`demo`) or the caller's own
   `X-LLM-Api-Key` (bring your own key), so no one can spend an operator's key.
 - **`JSON_MAX_WAIT_MS`** below the proxy's request timeout, so that long answers end in 202 and
