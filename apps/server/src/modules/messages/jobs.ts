@@ -66,6 +66,45 @@ function describeFailure(error: unknown): { code: string | undefined; reason: st
   return { code: pgErrorCode(error), reason };
 }
 
+/**
+ * The provider's events until `signal` aborts. Providers must honour the signal (see the
+ * port), but one that does not cannot hold a job past its deadline or a shutdown: every event
+ * is raced against the abort, which then ends the iteration with the abort reason, and the
+ * provider's stream is asked to end without being waited for.
+ */
+async function* untilAborted<T>(events: AsyncIterable<T>, signal: AbortSignal): AsyncGenerator<T> {
+  const iterator = events[Symbol.asyncIterator]();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  aborted.catch(() => {});
+  let exhausted = false;
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const next = iterator.next();
+      // A next() that loses the race may still reject later; that is no longer of interest.
+      next.catch(() => {});
+      const result = await Promise.race([next, aborted]);
+      if (result.done === true) {
+        exhausted = true;
+        return;
+      }
+      yield result.value;
+    }
+  } finally {
+    if (onAbort !== undefined) {
+      signal.removeEventListener("abort", onAbort);
+    }
+    if (!exhausted) {
+      // Not awaited: a provider that ignores the signal may never settle it.
+      Promise.resolve(iterator.return?.()).catch(() => {});
+    }
+  }
+}
+
 /** Waits until `pending` (which never rejects) settles or `ms` pass, whichever comes first. */
 async function settledWithin(pending: Promise<void> | undefined, ms: number): Promise<void> {
   if (pending === undefined) {
@@ -272,10 +311,11 @@ export function createJobRegistry(deps: {
       };
       // Stopped already (e.g. admitted while the server closes): do not call the provider.
       controller.signal.throwIfAborted();
-      for await (const event of spec.provider.stream(request, {
+      const events = spec.provider.stream(request, {
         signal: controller.signal,
         apiKey: spec.apiKey,
-      })) {
+      });
+      for await (const event of untilAborted(events, controller.signal)) {
         if (controller.signal.aborted) {
           break;
         }

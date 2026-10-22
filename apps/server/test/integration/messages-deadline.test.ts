@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadConfig } from "../../src/config.js";
+import type { LlmProvider } from "../../src/llm/port.js";
 import { TEST_ENV, makeTestApp } from "../helpers/app.js";
 import { clockJumpingAfterFirstReading } from "../helpers/clock.js";
 import { useTestDatabase } from "../helpers/db.js";
@@ -98,5 +99,27 @@ describe("deadline", () => {
     });
     expect(fake.requests).toHaveLength(0);
     expect((await send(app, session.id, { content: "Again" })).statusCode).toBe(200);
+  });
+
+  it("deadline.expiry also ends a generation whose provider ignores the abort signal", async () => {
+    const config = loadConfig({ ...TEST_ENV, GENERATION_DEADLINE_MS: "300" });
+    const deaf: LlmProvider = {
+      id: "deaf",
+      async *stream() {
+        yield { type: "delta", text: "Deaf" };
+        // Never continues and never looks at its signal.
+        await new Promise(() => {});
+      },
+    };
+    app = makeTestApp({ db: testDb.db, config, ...testProviders({ llm: deaf }) });
+    const session = await createSession(app);
+
+    const response = await send(app, session.id, { content: "Hi" });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({
+      code: "llm_timeout",
+      assistantMessage: { status: "failed", errorCode: "llm_timeout", content: "Deaf" },
+    });
   });
 });
