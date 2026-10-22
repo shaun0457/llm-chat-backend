@@ -19,15 +19,25 @@ exits 0), and only then starts the API. The defaults need no `.env`; copy `.env.
 `.env` to change the database credentials, the host port (`API_PORT`) or the server settings.
 PostgreSQL is not published to the host. `docker compose down -v` removes the data volume.
 
-Check it:
+Check it with a hosted model. Enable it in `.env` with `PROVIDERS_ENABLED=demo,nvidia`, and
+either set the server's key there (`NVIDIA_API_KEY=...`) or bring your own key per request in
+the `X-LLM-Api-Key` header (see [Providers and API keys](#providers-and-api-keys)):
 
 ```sh
 curl localhost:3000/health/ready
-curl -X POST localhost:3000/sessions -H 'content-type: application/json' -d '{"title":"Hello"}'
+curl -X POST localhost:3000/sessions -H 'content-type: application/json' \
+  -d '{"title":"Hello","provider":"nvidia"}'
 curl localhost:3000/sessions
+# with NVIDIA_API_KEY set on the server:
 curl -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
-  -d '{"content":"Hello"}'   # the demo provider answers without any API key
+  -d '{"content":"Hello"}'
+# or with your own key, used for this one answer and never stored:
+curl -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
+  -H "X-LLM-Api-Key: $MY_NVIDIA_KEY" -d '{"content":"Hello"}'
 ```
+
+Without any key, create the session without `provider`: the built-in demo provider answers at
+once with a fixed sentence.
 
 ## Run locally
 
@@ -68,6 +78,8 @@ exceed `JSON_MAX_WAIT_MS`.
 | `DEMO_DELAY_MS`         | `50`                         | Pause between the demo provider's chunks (0–10,000)                                             |
 | `JSON_DEFAULT_WAIT_MS`  | `30000`                      | How long a JSON send waits for its answer without `Prefer: wait` (0–600,000)                    |
 | `JSON_MAX_WAIT_MS`      | `195000`                     | The longest a JSON send ever waits (0–600,000); keep it below your proxy's timeout              |
+| `NVIDIA_BASE_URL`       | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL  |
+| `<PROVIDER>_API_KEY`    | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)       |
 
 The model catalog lists, per provider, whether it needs an API key, its default model and its
 models with context window and maximum output tokens. Unknown fields are rejected, so provider
@@ -176,6 +188,7 @@ POST /sessions/:id/messages
   ▼
 admission transaction ── lock the session row (404)
   │                      resolve its provider and model (422)
+  │                      decide the API key (422 llm_credential_missing)
   │                      a turn still generating? (409 session_busy)
   │                      reserve capacity
   │                      insert user + generating assistant, advance next_seq,
@@ -184,8 +197,9 @@ admission transaction ── lock the session row (404)
 job (in process) ── context: system prompt + earlier completed turns + the new message
   │                provider.stream() → deltas into the message's event bus
   │                every FLUSH_INTERVAL_MS: fenced UPDATE of the partial text
-  │                finish → fenced UPDATE to completed; error → failed (llm_upstream_error)
-  ▼ finally: release capacity, leave the job map, close the bus
+  │                finish → fenced UPDATE to completed; error → failed with its llm_* code
+  │                (the key is passed to the provider call only)
+  ▼ finally: drop the key, release capacity, leave the job map, close the bus
 JSON response ── waits for the job's end or the effective wait, whichever is first,
                  then reads both rows: 200, 502 problem details, or 202 + Location
 ```
@@ -236,6 +250,70 @@ front of it may time out before the configured maximum (lower `JSON_MAX_WAIT_MS`
 `Preference-Applied` reports which preferences were honoured; it promises neither completion
 nor an exact wait. See [ADR 0004](docs/adr/0004-async-request-reply.md).
 
+## Providers and API keys
+
+| Provider | Needs a key | Models (`config/models.json`)                  | Enable with                     |
+| -------- | ----------- | ---------------------------------------------- | ------------------------------- |
+| `demo`   | no          | `demo`: a fixed sentence, for trying the API   | (on by default)                 |
+| `nvidia` | yes         | `meta/llama-3.2-11b-vision-instruct` (default) | `PROVIDERS_ENABLED=demo,nvidia` |
+
+`nvidia` talks to NVIDIA's hosted OpenAI-compatible API through the official `openai` SDK; any
+other OpenAI-compatible server can be added the same way. Only non-reasoning models are
+catalogued, and only the answer content becomes text: reasoning side fields are ignored.
+`GET /providers` lists the enabled providers, their models and `requiresKey`; it never says
+whether the server has a key of its own.
+
+**Live-verified.** Every catalogued NVIDIA model is checked against the real API by the
+`live-llm` workflow before it is listed. Its result line on 2026-10-22
+([run 39718461460](https://github.com/shaun0457/llm-chat-backend/actions/runs/39718461460)),
+for "What is the capital of France?" with "Answer in one short sentence.":
+
+```text
+LIVE_RESULT {"model":"meta/llama-3.2-11b-vision-instruct","finishReason":"stop","usage":{"promptTokens":60,"completionTokens":8},"answer":"The capital of France is Paris."}
+```
+
+NVIDIA's hosted API queues requests to busy models; that call took about 60 s. Models that
+answered 404 for the key's account, timed out, or reason before answering were left out
+(ADR 0008, V3).
+
+**Bring your own key.** Send your key in the `X-LLM-Api-Key` header of
+`POST /sessions/:id/messages`. For each new turn the server uses, in this order: the header;
+the server's own `<PROVIDER>_API_KEY` for the turn's provider; no key for a provider that
+needs none; otherwise **422 `llm_credential_missing`**, before anything is stored. A malformed
+header (not 1–512 visible ASCII characters) is a 400 that does not echo it.
+
+```sh
+curl -X POST localhost:3000/sessions -H 'content-type: application/json' \
+  -d '{"provider":"nvidia"}'
+curl -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
+  -H "X-LLM-Api-Key: $NVIDIA_API_KEY" -d '{"content":"Hello"}'
+```
+
+**What happens to the key.** It is used for that one generation and then dropped. It is never
+written to the database, never logged and never returned: it travels only inside the in-memory
+job (in a holder that serialises as `[REDACTED]`), is passed to the provider call, and is
+cleared when the job ends. Logs redact the `X-LLM-Api-Key` and `Authorization` headers and
+`apiKey` fields, and write errors through an allowlist (no request options, headers, query
+parameters or database error details). Upstream error text is scrubbed of the key, bearer
+tokens and key query parameters before it is stored, returned or logged. Sentinel tests check
+that a key appears in no log line, no database row and no response, also when the upstream
+echoes it back. While a generation runs, its key is necessarily in process memory. A restart
+loses running generations together with their keys; such an answer is retried with the key
+sent again.
+
+**Failures** are stored on the assistant message and answered with 502 in JSON mode:
+
+| `errorCode`            | When                                                                  |
+| ---------------------- | --------------------------------------------------------------------- |
+| `llm_auth_failed`      | the provider rejected the key (401/403); never retried                |
+| `llm_context_overflow` | the provider said the input is too long for the model's context       |
+| `llm_timeout`          | no response headers within 60 s, on each of three attempts            |
+| `llm_upstream_error`   | 429, 5xx, a connection error, a malformed stream, or no finish reason |
+
+429, 5xx, connection errors and timeouts are retried twice by the SDK before they fail.
+`errorDetail` is a short, scrubbed message (at most 500 characters), for example
+`The model provider answered HTTP 401: …`. See [ADR 0008](docs/adr/0008-llm-port-byok.md).
+
 ## Test
 
 ```sh
@@ -244,6 +322,18 @@ pnpm typecheck   # tsc --noEmit
 pnpm test:unit   # unit and lint tests only; no Docker needed
 pnpm test        # everything; Docker must be running (testcontainers)
 ```
+
+The test suite never calls a real LLM provider; the boundary is faked at two levels. Service and
+integration tests inject `FakeLlmProvider` (`test/helpers/fake-llm.ts`), a scriptable
+implementation of the provider port: deltas, delays, gates, hangs, failures, a missing finish
+event, and usage, while it records the requests, abort signals and API keys it received. The
+OpenAI-compatible adapter itself is tested from the other side of the port, against an
+[msw](https://mswjs.io/)-mocked upstream HTTP API (`test/helpers/msw-openai.ts`): chunk
+arrangements, reasoning fields, 401/403, 429 then success, persistent 5xx, context overflow
+and timeouts. The sentinel tests combine the real adapter with msw. Separately, an opt-in live check
+calls every catalogued NVIDIA model: `LLM_LIVE_TESTS=1 NVIDIA_API_KEY=… pnpm test:unit`. It is
+skipped otherwise. In CI only the `live-llm` workflow runs it, with the repository secret: on
+pushes to `main`, by hand, or on a pull request labelled `live-llm`.
 
 Integration tests start one PostgreSQL 17 container per run, migrate a template database once,
 and give every test file its own copy, so files run in parallel without seeing each other's

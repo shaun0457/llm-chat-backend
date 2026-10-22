@@ -4,6 +4,17 @@
       "defaultModel": "demo",
       "requiresKey": false,
       "models": [{ "id": "demo", "contextWindow": 8192, "maxOutputTokens": 1024 }]
+    },
+    "nvidia": {
+      "defaultModel": "meta/llama-3.2-11b-vision-instruct",
+      "requiresKey": true,
+      "models": [
+        {
+          "id": "meta/llama-3.2-11b-vision-instruct",
+          "contextWindow": 32768,
+          "maxOutputTokens": 2048
+        }
+      ]
     }
   }
 }

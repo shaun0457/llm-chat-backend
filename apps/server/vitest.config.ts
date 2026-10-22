@@ -9,7 +9,11 @@ export default defineConfig({
         extends: true,
         test: {
           name: "unit",
-          include: ["test/unit/**/*.test.ts", "test/lint/**/*.test.ts"],
+          include: [
+            "test/unit/**/*.test.ts",
+            "test/adapters/**/*.test.ts",
+            "test/lint/**/*.test.ts",
+          ],
           sequence: { groupOrder: 0 },
         },
       },
