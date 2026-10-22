@@ -4,7 +4,8 @@ import { type ProviderRegistry, createRegistry } from "../../src/llm/registry.js
 
 /**
  * Three catalogued providers: "demo" (keyless, default), "other" (needs a key, two models) and
- * "off" (catalogued but not enabled). `defaultProvider` / `defaultModel` replace
+ * "off" (catalogued but not enabled). makeTestApp() gives "other" an operator key
+ * (TEST_OPERATOR_KEY) unless a test passes `operatorKeys`, e.g. `{}` for "no key at all". `defaultProvider` / `defaultModel` replace
  * DEFAULT_PROVIDER / DEFAULT_MODEL; `llm` (e.g. a FakeLlmProvider) serves both enabled providers.
  */
 export function testProviders(

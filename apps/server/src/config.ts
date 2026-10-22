@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { API_KEY_PATTERN } from "./credentials/api-key.js";
 import { DEFAULT_MODEL_CATALOG_PATH } from "./paths.js";
 
 const logLevels = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
@@ -17,10 +18,8 @@ const commaList = z
   .pipe(z.array(z.string()).min(1));
 
 const MAX_JSON_WAIT_MS = 600_000;
-const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-/** The same rule as the X-LLM-Api-Key header: 1–512 visible ASCII characters. */
-export const API_KEY_PATTERN = /^[\x21-\x7e]{1,512}$/;
 const DEFAULT_JSON_WAIT_MS = 30_000;
+const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),

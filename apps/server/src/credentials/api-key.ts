@@ -2,6 +2,9 @@ import { inspect } from "node:util";
 
 const REDACTED = "[REDACTED]";
 
+/** A well-formed API key, from the X-LLM-Api-Key header or the environment: 1–512 visible ASCII. */
+export const API_KEY_PATTERN = /^[\x21-\x7e]{1,512}$/;
+
 /**
  * The key of one generation, decided at admission. It lives in a private field, so logging,
  * JSON serialisation or inspecting whatever holds it never shows the value; `reveal()` is the

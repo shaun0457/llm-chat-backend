@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { API_KEY_PATTERN } from "../../config.js";
+import { API_KEY_PATTERN } from "../../credentials/api-key.js";
 
 // Lengths count UTF-16 code units (JavaScript string length), as for sessions. PostgreSQL text
 // cannot hold U+0000, so it is rejected here rather than failing the insert.
