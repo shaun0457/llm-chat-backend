@@ -89,6 +89,21 @@ describe("docker-compose.yml", () => {
       expect(networks(service("migrate"))).toEqual(["default"]);
     });
 
+    it("is one command: local-llm.env turns on the profile and enables ollama next to demo", () => {
+      const envFile = readFileSync(new URL("../../../../local-llm.env", import.meta.url), "utf8");
+      const settings = Object.fromEntries(
+        envFile
+          .split("\n")
+          .filter((line) => /^[A-Z_]+=/.test(line))
+          .map((line) => line.split("=") as [string, string]),
+      );
+
+      expect(settings).toEqual({
+        COMPOSE_PROFILES: "local-llm",
+        PROVIDERS_ENABLED: "demo,ollama",
+      });
+    });
+
     it("points the api at the ollama service but keeps demo the only provider enabled by default", () => {
       const api = service("api");
 
