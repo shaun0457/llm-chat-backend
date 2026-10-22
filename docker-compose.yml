@@ -68,6 +68,8 @@ services:
     # Loopback only: this file is a local stack with default credentials, not a deployment.
     ports:
       - "127.0.0.1:${API_PORT:-3000}:3000"
+    # The only service on both networks: postgres and ollama never share one.
+    networks: [default, llm]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -80,13 +82,15 @@ services:
   ollama:
     image: ollama/ollama:0.35.1@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
     profiles: ["local-llm"]
+    networks: [llm]
     environment:
       # Two answers at a time, the same as the catalog's maxConcurrency for ollama: a third send
       # gets 503 provider_busy at once instead of queueing here until its deadline.
       OLLAMA_NUM_PARALLEL: "2"
-      # Tokens per answer, the catalog's contextWindow for the model. Memory grows with
-      # OLLAMA_NUM_PARALLEL × OLLAMA_CONTEXT_LENGTH.
-      OLLAMA_CONTEXT_LENGTH: "4096"
+      # Tokens per answer: twice the catalog's contextWindow (4,096). Ollama silently drops the
+      # start of a longer prompt instead of failing, so this absorbs a token estimate that is
+      # too low. Memory grows with OLLAMA_NUM_PARALLEL × OLLAMA_CONTEXT_LENGTH.
+      OLLAMA_CONTEXT_LENGTH: "8192"
       OLLAMA_MAX_LOADED_MODELS: "1"
     volumes:
       - ollama-models:/root/.ollama
@@ -101,6 +105,7 @@ services:
   ollama-pull:
     image: ollama/ollama:0.35.1@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
     profiles: ["local-llm"]
+    networks: [llm]
     entrypoint: ["ollama"]
     command: ["pull", "qwen2.5:0.5b"]
     environment:
@@ -109,6 +114,11 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+
+networks:
+  default:
+  # Ollama and its pull job, plus the api; the model download needs internet access.
+  llm:
 
 volumes:
   postgres-data:

@@ -43,14 +43,18 @@ describe("docker-compose.yml", () => {
     const ollamaEntry = loadCatalog(DEFAULT_MODEL_CATALOG_PATH).provider("ollama");
     const model = ollamaEntry?.models.find((entry) => entry.id === ollamaEntry.defaultModel);
 
-    it("runs a pinned Ollama image in the profile only, unpublished, as parallel as the catalog limit", () => {
+    it("runs a pinned Ollama image in the profile only, unpublished, as parallel as the catalog limit, with twice the catalogued context", () => {
       const ollama = service("ollama");
 
       expect(ollama).toMatch(/\n {4}profiles: \["local-llm"\]\n/);
       expect(ollama).toMatch(/\n {4}image: ollama\/ollama:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}\n/);
       expect(ollama).not.toContain("ports:");
       expect(environment(ollama, "OLLAMA_NUM_PARALLEL")).toBe(String(ollamaEntry?.maxConcurrency));
-      expect(environment(ollama, "OLLAMA_CONTEXT_LENGTH")).toBe(String(model?.contextWindow));
+      // Ollama cuts a prompt longer than its context silently, without an error; the headroom
+      // absorbs where the history budget's token estimate is too low.
+      expect(Number(environment(ollama, "OLLAMA_CONTEXT_LENGTH"))).toBe(
+        2 * (model?.contextWindow ?? NaN),
+      );
       expect(ollama).toContain("healthcheck:");
     });
 
@@ -69,6 +73,20 @@ describe("docker-compose.yml", () => {
       expect(api).toMatch(
         /\n {6}ollama-pull:\n {8}condition: service_completed_successfully\n {8}required: false\n/,
       );
+    });
+
+    it("keeps postgres off the network ollama is on; only the api joins both", () => {
+      const networks = (block: string): string[] =>
+        /\n {4}networks: \[([^\]]*)\]\n/
+          .exec(block)?.[1]
+          ?.split(",")
+          .map((name) => name.trim()) ?? ["default"];
+
+      expect(networks(service("ollama"))).toEqual(["llm"]);
+      expect(networks(service("ollama-pull"))).toEqual(["llm"]);
+      expect(networks(service("api"))).toEqual(["default", "llm"]);
+      expect(networks(service("postgres"))).toEqual(["default"]);
+      expect(networks(service("migrate"))).toEqual(["default"]);
     });
 
     it("points the api at the ollama service but keeps demo the only provider enabled by default", () => {
