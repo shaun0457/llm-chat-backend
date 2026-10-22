@@ -6,7 +6,7 @@ import { TEST_ENV, makeTestApp } from "../helpers/app.js";
 import { useTestDatabase } from "../helpers/db.js";
 import { FakeLlmProvider, createGate } from "../helpers/fake-llm.js";
 import { type LogCapture, captureLogs } from "../helpers/log-capture.js";
-import { type Message, createSession } from "../helpers/messages.js";
+import { type Message, createSession, send } from "../helpers/messages.js";
 import { testProviders } from "../helpers/providers.js";
 import { type SseConnection, eventsOf, listen, openSse } from "../helpers/sse-client.js";
 
@@ -128,4 +128,90 @@ describe("SSE sends", () => {
       expect(completed[0]?.res).toMatchObject({ statusCode: 200 });
     });
   });
+
+  describe("sse.error", () => {
+    it("sends an error event with code, detail and the failed message after the deltas; the status stays 200", async () => {
+      await start();
+      fake.script({ deltas: ["par", "tial", "never"], throwAfter: 2 });
+      const session = await createSession(app);
+
+      const stream = await streamSend(session.id, "Hi");
+      const { frames, error } = await stream.drain();
+
+      expect(stream.status).toBe(200);
+      expect(error).toBeUndefined();
+      const events = eventsOf(frames);
+      const created = events[0]?.data as TurnBody;
+      // The fake throws before its third chunk; how much text the snapshot already holds
+      // depends on timing, so only the whole is fixed.
+      const deltas = events.filter(({ event }) => event === "delta");
+      expect(created.assistantMessage.content + deltas.map(({ data }) => text(data)).join("")).toBe(
+        "partial",
+      );
+      const last = events.at(-1);
+      expect(events.map(({ event }) => event)).toEqual([
+        "message.created",
+        ...deltas.map(() => "delta"),
+        "error",
+      ]);
+      expect(last?.data).toEqual({
+        code: "llm_upstream_error",
+        detail: expect.any(String),
+        assistantMessage: expect.objectContaining({
+          id: created.assistantMessage.id,
+          status: "failed",
+          content: "partial",
+          errorCode: "llm_upstream_error",
+        }),
+      });
+      const { detail, assistantMessage } = last?.data as {
+        detail: string;
+        assistantMessage: Message;
+      };
+      expect(detail).toBe(assistantMessage.errorDetail);
+    });
+
+    it("answers a busy session with 409 problem details instead of a stream", async () => {
+      await start();
+      holdGeneration(["Hel", "lo"]);
+      const session = await createSession(app);
+      expect(
+        (await send(app, session.id, { content: "First" }, { prefer: "respond-async" })).statusCode,
+      ).toBe(202);
+
+      const response = await send(
+        app,
+        session.id,
+        { content: "Second" },
+        { accept: "text/event-stream" },
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.headers["content-type"]).toContain("application/problem+json");
+      expect(response.json()).toMatchObject({ status: 409, code: "session_busy" });
+    });
+
+    it("answers an invalid body and an unknown session with problem details instead of a stream", async () => {
+      await start();
+      const session = await createSession(app);
+
+      const invalid = await send(app, session.id, { content: "" }, { accept: "text/event-stream" });
+      const unknown = await send(
+        app,
+        "0190f5a0-0000-7000-8000-00000000dead",
+        { content: "Hi" },
+        { accept: "text/event-stream" },
+      );
+
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({ code: "validation_error" });
+      expect(unknown.statusCode).toBe(404);
+      expect(unknown.headers["content-type"]).toContain("application/problem+json");
+      expect(unknown.json()).toMatchObject({ code: "session_not_found" });
+    });
+  });
 });
+
+function text(data: unknown): string {
+  return (data as { text: string }).text;
+}
