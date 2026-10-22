@@ -268,7 +268,10 @@ export async function findMessage(
 }
 
 /** The message with this id, in whichever session it is. */
-export async function findAnyMessage(db: Executor, messageId: string): Promise<Message | undefined> {
+export async function findAnyMessage(
+  db: Executor,
+  messageId: string,
+): Promise<Message | undefined> {
   const [row] = await selectMessages(db).where(eq(messages.id, messageId));
   return row === undefined ? undefined : toMessage(row);
 }
