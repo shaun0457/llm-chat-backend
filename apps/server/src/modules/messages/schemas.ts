@@ -38,14 +38,19 @@ const model = z
       "provider, or of the session's provider when none is given",
   );
 
-const NIL_OR_MAX_UUID = /^(0{8}-0{4}-0{4}-0{4}-0{12}|f{8}-f{4}-f{4}-f{4}-f{12})$/i;
+// A regex check, unlike a refine, is exported to the OpenAPI document; no flags, because
+// JSON Schema patterns carry none.
+const NOT_NIL_OR_MAX_UUID =
+  /^(?!(?:0{8}-0{4}-0{4}-0{4}-0{12}|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$)/;
 
 /** Strict: unknown fields are a 400, so later fields cannot be sent to a server ignoring them. */
 export const sendMessageBody = z.strictObject({
   id: z
     .uuid()
     // Ids are global: a placeholder like the nil UUID would be taken by its first user.
-    .refine((value) => !NIL_OR_MAX_UUID.test(value), "must not be the nil or max UUID")
+    .regex(NOT_NIL_OR_MAX_UUID, "must not be the nil or max UUID")
+    // Zod leaves the format out of the document once a string has two patterns.
+    .meta({ format: "uuid" })
     .optional()
     .describe(
       "Your own id for the user message (any UUID version, not the nil or max UUID; " +

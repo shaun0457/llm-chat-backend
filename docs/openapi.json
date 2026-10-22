@@ -922,9 +922,16 @@
                     "type": "string"
                   },
                   "id": {
+                    "allOf": [
+                      {
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "pattern": "^(?!(?:0{8}-0{4}-0{4}-0{4}-0{12}|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$)"
+                      }
+                    ],
                     "description": "Your own id for the user message (any UUID version, not the nil or max UUID; generate it at random), which makes the send safe to repeat: the same id with identical content (and, when given, the same provider and model) in the same session returns the stored turn instead of admitting a new one. Ids are global: one used by another message gives 422 message_id_conflict. Case does not matter; ids are returned in lower case. Without it the server generates a UUIDv7 and identical sends are not deduplicated",
                     "format": "uuid",
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
                     "type": "string"
                   },
                   "model": {

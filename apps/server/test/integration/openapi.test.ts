@@ -114,6 +114,28 @@ describe("API documentation", () => {
     expect(sendDescription).toContain("provider/model for this turn only");
   });
 
+  it("documents a send's id as a UUID in any case, except the nil and max UUID", async () => {
+    app = makeTestApp();
+
+    const { paths } = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+
+    const id: { format?: string; pattern?: string; allOf?: Array<{ pattern?: string }> } =
+      paths["/sessions/{id}/messages"].post.requestBody.content["application/json"].schema
+        .properties.id;
+    expect(id.format).toBe("uuid");
+    // JSON Schema patterns are ECMA-262 regular expressions, matched without anchoring.
+    const patterns = [id.pattern, ...(id.allOf ?? []).map((part) => part.pattern)]
+      .filter((pattern): pattern is string => pattern !== undefined)
+      .map((pattern) => new RegExp(pattern, "u"));
+    expect(patterns.length).toBeGreaterThan(0);
+    const allowed = (value: string): boolean => patterns.every((pattern) => pattern.test(value));
+    expect(allowed("6f1c2b9e-3d4a-4c5b-9e8f-0a1b2c3d4e5f")).toBe(true);
+    expect(allowed("6F1C2B9E-3D4A-4C5B-9E8F-0A1B2C3D4E5F")).toBe(true);
+    expect(allowed("00000000-0000-0000-0000-000000000000")).toBe(false);
+    expect(allowed("ffffffff-ffff-ffff-ffff-ffffffffffff")).toBe(false);
+    expect(allowed("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")).toBe(false);
+  });
+
   it("documents Prefer, the three send outcomes and their headers, and the uncached poll target", async () => {
     app = makeTestApp();
 
