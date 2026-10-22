@@ -201,6 +201,7 @@ describe("re-attaching with the events endpoint", () => {
         expect(response.json()).toMatchObject({ code: "message_not_found" });
       }
       expect(noSession.response.statusCode).toBe(404);
+      expect(noSession.response.headers["content-type"]).toContain("application/problem+json");
       expect(noSession.response.json()).toMatchObject({ code: "session_not_found" });
     });
   });

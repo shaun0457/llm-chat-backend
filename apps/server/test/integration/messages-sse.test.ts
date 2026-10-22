@@ -349,10 +349,12 @@ describe("SSE sends", () => {
         (response) => response.json().status !== "generating",
         30_000,
       );
-      const { frames } = await stream.drain();
+      const { frames, error } = await stream.drain();
 
       expect(stored.json().status).toBe("completed");
-      expect(stored.json().content).toHaveLength(piece.length * count);
+      expect(stored.json().content).toBe(piece.repeat(count));
+      // Destroyed: the chunked body never got its terminating chunk, unlike a stream that ended.
+      expect(error).toBeDefined();
       const events = eventsOf(frames);
       expect(events.length).toBeLessThan(count);
       expect(events.map(({ event }) => event)).not.toContain("done");
@@ -360,8 +362,15 @@ describe("SSE sends", () => {
         .entries()
         .filter((entry) => entry.msg === "closing an event stream whose client does not keep up");
       expect(closing).toHaveLength(1);
-      expect(closing[0]).toMatchObject({ limitBytes: 262_144 });
-      expect(closing[0]?.pendingBytes).toBeLessThanOrEqual(262_144);
+      const { pendingBytes, frameBytes, limitBytes } = closing[0] as {
+        pendingBytes: number;
+        frameBytes: number;
+        limitBytes: number;
+      };
+      expect(limitBytes).toBe(262_144);
+      // The refused frame found a backlog and would have taken it past the limit.
+      expect(pendingBytes).toBeGreaterThan(0);
+      expect(pendingBytes + frameBytes).toBeGreaterThan(limitBytes);
     }, 60_000);
   });
 });
