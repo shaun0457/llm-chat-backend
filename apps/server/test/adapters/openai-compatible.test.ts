@@ -8,6 +8,7 @@ import {
   errorOf,
   rawStream,
   slow,
+  stallAfter,
   streamOf,
   useUpstream,
 } from "../helpers/msw-openai.js";
@@ -264,6 +265,31 @@ describe("OpenAiCompatibleProvider", () => {
         expect(upstream.requests).toHaveLength(3);
       },
     );
+
+    it(
+      "fails with llm_timeout when an accepted stream stops sending",
+      { timeout: 10_000 },
+      async () => {
+        upstream.reply(stallAfter([{ content: "par" }]));
+        const seen: LlmEvent[] = [];
+
+        await expect(collect(stream({ timeoutMs: 200 }), seen)).rejects.toMatchObject({
+          name: "LlmError",
+          code: "llm_timeout",
+        });
+        expect(seen).toEqual([{ type: "delta", text: "par" }]);
+      },
+    );
+
+    it("keeps the message of a long JSON error body", async () => {
+      upstream.reply(
+        errorOf(400, { object: "error", message: `Bad request: ${"y".repeat(5000)}` }),
+      );
+
+      await expect(collect(stream())).rejects.toMatchObject({
+        detail: expect.stringMatching(/^The model provider answered HTTP 400: Bad request: y+/),
+      });
+    });
 
     it("maps an error event inside the stream to llm_upstream_error", async () => {
       upstream.reply(rawStream('data: {"error":{"message":"worker crashed"}}\n\n'));

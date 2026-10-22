@@ -110,6 +110,20 @@ export function endlessErrorOf(status: number): Responder {
     );
 }
 
+/** Sends these chunks, then keeps the connection open without sending anything more. */
+export function stallAfter(chunks: readonly ChunkSpec[]): Responder {
+  const text = chunks.map((spec) => `data: ${JSON.stringify(chunk(spec))}\n\n`).join("");
+  return () =>
+    new HttpResponse(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(text));
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+}
+
 /** Never answers within `ms`: for the SDK's request timeout. */
 export function slow(ms: number): Responder {
   return async () => {

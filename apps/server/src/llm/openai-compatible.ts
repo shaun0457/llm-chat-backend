@@ -15,7 +15,7 @@ export type OpenAiCompatibleOptions = Readonly<{
   id: string;
   /** Server configuration only; never taken from a request. */
   baseUrl: string;
-  /** Per HTTP attempt, until the response headers arrive. Default 60 s. */
+  /** Per HTTP attempt until the response headers arrive, then between chunks. Default 60 s. */
   timeoutMs?: number;
   /** SDK retries on 408/409/429/5xx and connection errors; never on 401/403. Default 2. */
   maxRetries?: number;
@@ -140,6 +140,15 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       logLevel: "off",
     });
 
+    // The SDK timeout ends once the headers arrive. Afterwards the same bound applies to the
+    // gap between chunks, so a stream that stops sending cannot hold a generation forever.
+    const idle = new AbortController();
+    let idleTimer: NodeJS.Timeout | undefined;
+    const armIdleTimer = (): void => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => idle.abort(), this.#timeoutMs);
+    };
+
     try {
       const chunks = await client.chat.completions.create(
         {
@@ -149,13 +158,15 @@ export class OpenAiCompatibleProvider implements LlmProvider {
           stream: true,
           stream_options: { include_usage: true },
         },
-        { signal },
+        { signal: AbortSignal.any([signal, idle.signal]) },
       );
+      armIdleTimer();
 
       // Finish reason and usage are accumulated separately: usage may come in a later chunk.
       let reason: LlmFinishReason | undefined;
       let usage: LlmUsage | null = null;
       for await (const chunk of chunks) {
+        armIdleTimer();
         // Compatible servers do not always send every field the SDK's types promise.
         const choice = chunk.choices?.[0];
         // Only answer content becomes text; reasoning side fields are ignored.
@@ -186,7 +197,12 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       if (signal.aborted) {
         throw signal.reason;
       }
+      if (idle.signal.aborted) {
+        throw new LlmError("llm_timeout", "The model provider stopped sending the answer.");
+      }
       throw toLlmError(error, apiKey, errorBody);
+    } finally {
+      clearTimeout(idleTimer);
     }
   }
 }
