@@ -232,9 +232,7 @@ describe("loadConfig", () => {
       "https://user@a.example",
       "https://a.example?x=1",
     ])("rejects %s: only * alone or http(s) origins without a path", (value) => {
-      expect(configError({ DATABASE_URL, CORS_ORIGINS: value }).message).toContain(
-        "CORS_ORIGINS",
-      );
+      expect(configError({ DATABASE_URL, CORS_ORIGINS: value }).message).toContain("CORS_ORIGINS");
     });
   });
 

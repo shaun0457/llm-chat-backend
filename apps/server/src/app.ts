@@ -21,8 +21,8 @@ import { findTurn } from "./modules/messages/repository.js";
 import { messagesRoutes } from "./modules/messages/routes.js";
 import { createMessagesService } from "./modules/messages/service.js";
 import { providersRoutes } from "./modules/providers/routes.js";
-import { sessionsRoutes } from "./modules/sessions/routes.js";
 import { type Retention, createRetention } from "./modules/sessions/retention.js";
+import { sessionsRoutes } from "./modules/sessions/routes.js";
 import { createSessionsService } from "./modules/sessions/service.js";
 import { MIGRATIONS_FOLDER } from "./paths.js";
 

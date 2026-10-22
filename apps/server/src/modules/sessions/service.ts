@@ -17,6 +17,7 @@ import {
   lockSessionActiveSince,
   updateSession,
 } from "./repository.js";
+import type { CreateSessionInput, Session, SessionPage, UpdateSessionInput } from "./schemas.js";
 
 /**
  * How long a delete waits for the generations it aborted to end and free their capacity. An
@@ -24,7 +25,6 @@ import {
  * only bounds a flush still in flight.
  */
 const JOB_END_WAIT_MS = 1_000;
-import type { CreateSessionInput, Session, SessionPage, UpdateSessionInput } from "./schemas.js";
 
 export type SessionsService = {
   createSession(input: CreateSessionInput): Promise<Session>;

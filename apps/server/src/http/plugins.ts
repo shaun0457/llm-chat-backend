@@ -62,7 +62,10 @@ const PREFLIGHT_MAX_AGE_SECONDS = 600;
  * left out, since the API is also served over plain HTTP (locally and in compose), where it
  * would send the page's assets to an HTTPS port that does not exist.
  */
-export function registerSecurityHeaders(app: FastifyInstance, corsOrigins: readonly string[]): void {
+export function registerSecurityHeaders(
+  app: FastifyInstance,
+  corsOrigins: readonly string[],
+): void {
   if (corsOrigins.length > 0) {
     void app.register(fastifyCors, {
       origin: corsOrigins[0] === "*" ? "*" : [...corsOrigins],
