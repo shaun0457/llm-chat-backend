@@ -85,6 +85,27 @@ describe("API documentation", () => {
     expect(message.properties).not.toHaveProperty("systemPrompt");
   });
 
+  it("names every assistant error code in the errorCode description", async () => {
+    app = makeTestApp();
+
+    const { paths } = (await app.inject({ method: "GET", url: "/openapi.json" })).json();
+
+    const message =
+      paths["/sessions/{id}/messages/{mid}"].get.responses["200"].content["application/json"]
+        .schema;
+    const description: string = message.properties.errorCode.description;
+    for (const code of [
+      "llm_auth_failed",
+      "llm_upstream_error",
+      "llm_timeout",
+      "llm_context_overflow",
+      "interrupted",
+      "cancelled",
+    ]) {
+      expect(description).toContain(code);
+    }
+  });
+
   it("states the provider-only rule for PATCH /sessions/:id and for a send", async () => {
     app = makeTestApp();
 

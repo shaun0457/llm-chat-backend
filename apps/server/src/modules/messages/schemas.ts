@@ -131,9 +131,12 @@ export const messageResponse = z
       .string()
       .nullable()
       .describe(
-        "Failed assistant messages: llm_upstream_error, llm_timeout (the generation deadline " +
-          "passed), cancelled (the server shut down), interrupted (the generation was lost, " +
-          "e.g. in a crash, and was failed later)",
+        "Failed assistant messages: llm_auth_failed (the provider rejected the key), " +
+          "llm_upstream_error (any other provider failure, including no answer text), " +
+          "llm_timeout (no response in time, or the generation deadline passed), " +
+          "llm_context_overflow (the provider said the input is too long for the model), " +
+          "cancelled (the server shut down), interrupted (the generation was lost, e.g. in a " +
+          "crash, and was failed later)",
       ),
     errorDetail: z.string().nullable().describe("A safe description of the failure"),
     provider: z.string().nullable().describe("Assistant: the provider frozen for this turn"),
