@@ -8,11 +8,17 @@ const COMPLETIONS_URL = `${UPSTREAM_BASE_URL}/chat/completions`;
 
 export type UpstreamUsage = { prompt_tokens: number; completion_tokens: number };
 
+/** The two delta fields OpenAI-compatible servers stream reasoning in (#36). */
+export const REASONING_FIELDS = ["reasoning_content", "reasoning"] as const;
+export type ReasoningField = (typeof REASONING_FIELDS)[number];
+
 /** One `chat.completion.chunk`, in the OpenAI wire format. */
 export type ChunkSpec = {
   content?: string;
-  /** A provider-specific reasoning side field (`reasoning_content`) on the delta. */
+  /** A provider-specific reasoning side field on the delta (`reasoning_content` by default). */
   reasoning?: string;
+  /** The side field `reasoning` travels in: providers use either name. */
+  reasoningField?: ReasoningField;
   finishReason?: string;
   usage?: UpstreamUsage;
   /** A usage-only chunk: `choices` is empty. */
@@ -25,7 +31,7 @@ export function chunk(spec: ChunkSpec): Record<string, unknown> {
     delta.content = spec.content;
   }
   if (spec.reasoning !== undefined) {
-    delta.reasoning_content = spec.reasoning;
+    delta[spec.reasoningField ?? "reasoning_content"] = spec.reasoning;
   }
   return {
     id: "chatcmpl-test",

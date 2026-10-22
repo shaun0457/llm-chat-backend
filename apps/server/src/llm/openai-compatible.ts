@@ -165,13 +165,17 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       // Finish reason and usage are accumulated separately: usage may come in a later chunk.
       let reason: LlmFinishReason | undefined;
       let usage: LlmUsage | null = null;
+      let answered = false;
       for await (const chunk of chunks) {
+        // Reasoning chunks also count as progress: a model may reason for a while first.
         armIdleTimer();
         // Compatible servers do not always send every field the SDK's types promise.
         const choice = chunk.choices?.[0];
-        // Only answer content becomes text; reasoning side fields are ignored.
+        // Only answer content becomes text. Reasoning side fields (`reasoning_content`,
+        // `reasoning`) are never read, so they cannot be stored, streamed or logged.
         const text = choice?.delta?.content;
         if (typeof text === "string" && text.length > 0) {
+          answered = true;
           yield { type: "delta", text };
         }
         if (typeof choice?.finish_reason === "string") {
@@ -188,6 +192,16 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         throw new LlmError(
           "llm_upstream_error",
           "The model provider ended the answer without a finish reason.",
+        );
+      }
+      if (!answered) {
+        // An empty answer is never a completed one: typically a reasoning model spent the
+        // whole output budget reasoning.
+        throw new LlmError(
+          "llm_upstream_error",
+          reason === "length"
+            ? "The model used its whole output budget before it started the answer."
+            : "The model provider finished without any answer text.",
         );
       }
       yield { type: "finish", reason, usage };

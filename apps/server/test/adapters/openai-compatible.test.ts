@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { OpenAiCompatibleProvider } from "../../src/llm/openai-compatible.js";
 import type { LlmEvent, LlmRequest } from "../../src/llm/port.js";
 import {
+  REASONING_FIELDS,
   UPSTREAM_BASE_URL,
   endlessErrorOf,
   errorOf,
@@ -341,26 +342,66 @@ describe("OpenAiCompatibleProvider", () => {
   });
 
   describe("contract.reasoning", () => {
-    it("never turns a reasoning side field into text, and keeps finish reason and usage", async () => {
-      upstream.reply(
-        streamOf([
-          { reasoning: "secret thoughts " },
-          { reasoning: "more thoughts", content: "" },
-          { content: "Answer" },
-          {
-            reasoning: "late thought",
-            finishReason: "stop",
-            usage: { prompt_tokens: 4, completion_tokens: 9 },
-          },
-        ]),
-      );
+    it.each(REASONING_FIELDS)(
+      "never turns reasoning in %s into text, and keeps finish reason and usage",
+      async (reasoningField) => {
+        upstream.reply(
+          streamOf([
+            { reasoningField, reasoning: "secret thoughts " },
+            { reasoningField, reasoning: "more thoughts", content: "" },
+            { content: "Ans" },
+            { content: "wer" },
+            {
+              reasoningField,
+              reasoning: "late thought",
+              finishReason: "stop",
+              usage: { prompt_tokens: 4, completion_tokens: 9 },
+            },
+          ]),
+        );
 
-      const events = await collect(stream());
+        const events = await collect(stream());
 
-      expect(events).toEqual([
-        { type: "delta", text: "Answer" },
-        { type: "finish", reason: "stop", usage: { promptTokens: 4, completionTokens: 9 } },
-      ]);
+        expect(events).toEqual([
+          { type: "delta", text: "Ans" },
+          { type: "delta", text: "wer" },
+          { type: "finish", reason: "stop", usage: { promptTokens: 4, completionTokens: 9 } },
+        ]);
+      },
+    );
+
+    it.each(REASONING_FIELDS)(
+      "fails with llm_upstream_error, not an empty answer, when the output budget ends in %s",
+      async (reasoningField) => {
+        upstream.reply(
+          streamOf([
+            { reasoningField, reasoning: "thinking " },
+            { reasoningField, reasoning: "still thinking", content: "" },
+            { finishReason: "length", usage: { prompt_tokens: 4, completion_tokens: 256 } },
+          ]),
+        );
+        const seen: LlmEvent[] = [];
+
+        const failure = await collect(stream(), seen).catch((error: unknown) => error);
+
+        expect(failure).toMatchObject({
+          name: "LlmError",
+          code: "llm_upstream_error",
+          detail: "The model used its whole output budget before it started the answer.",
+        });
+        expect(seen).toEqual([]);
+        expect(String((failure as Error).message)).not.toContain("thinking");
+      },
+    );
+
+    it("fails with llm_upstream_error when a stream finishes without any answer text", async () => {
+      upstream.reply(streamOf([{ content: "" }, { finishReason: "stop" }]));
+
+      await expect(collect(stream())).rejects.toMatchObject({
+        name: "LlmError",
+        code: "llm_upstream_error",
+        detail: "The model provider finished without any answer text.",
+      });
     });
   });
 });
