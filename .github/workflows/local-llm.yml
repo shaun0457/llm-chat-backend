@@ -1,0 +1,256 @@
+name: Local LLM check
+
+# Starts the compose stack with the local-llm profile on a GitHub runner (CPU only): Ollama,
+# a one-shot pull of the catalogued model, then the API. The smoke script asks one question
+# over SSE and one as JSON through the API, then proves the ollama limit (a third concurrent
+# send gets 503) and that long answers stop at the catalog's output limit. It is slow (model
+# download, CPU inference), so it runs on pushes to main, on pull requests that touch provider,
+# catalog or compose files, on pull requests labelled `local-llm` (this repository's own
+# branches only), and by hand. It uses no secrets. It starts the stack with the README's command,
+# `docker compose --env-file local-llm.env up`.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22.23.3"
+
+jobs:
+  scope:
+    name: Decide whether the local-LLM check runs
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Decide
+        id: decide
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'local-llm') }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=false
+          if [ "$EVENT" != pull_request ]; then
+            run=true
+          elif [ "$ACTION" = labeled ]; then
+            # Only this label, and only for this repository's own branches.
+            if [ "$LABEL" = local-llm ] && [ "$SAME_REPO" = true ]; then run=true; fi
+          elif [ "$HAS_LABEL" = true ] && [ "$SAME_REPO" = true ]; then
+            run=true
+          else
+            # Into a variable first: grep -q may exit before git diff has written everything.
+            changed=$(git diff --name-only "$BASE...$HEAD")
+            if grep -qE '^(docker-compose\.yml|Dockerfile|pnpm-lock\.yaml|apps/server/package\.json|apps/server/config/|apps/server/src/llm/|apps/server/src/modules/messages/|apps/server/src/http/|apps/server/src/(app|config|server)\.ts|apps/server/scripts/smoke-local-llm\.ts|\.github/workflows/local-llm\.yml)' <<< "$changed"; then
+              run=true
+            fi
+          fi
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+
+  local-llm:
+    name: Local model (Ollama) answers through the API
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
+    # At job level, so a skipped run (another label) never displaces a pending one.
+    concurrency:
+      group: local-llm-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: local-llm
+      # The README's command: this file turns on the profile and enables ollama.
+      LOCAL_LLM_ENV: local-llm.env
+      # `ollama list` ID of the catalogued model as verified (V2, V3); a retagged model fails.
+      OLLAMA_MODEL_ID: a8b0c5157701
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On a PR, the commit that was pushed or labelled.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Runner resources (V1)
+        shell: bash
+        run: |
+          echo "CPUs: $(nproc)"
+          free -h
+          df -h /
+          docker compose version
+      - name: Catalogued model
+        id: model
+        shell: bash
+        run: |
+          name=$(jq -er '.providers.ollama.defaultModel' apps/server/config/models.json)
+          if ! [[ $name =~ ^[A-Za-z0-9._:/-]+$ ]]; then
+            echo "::error::unexpected model name in the catalog"
+            exit 1
+          fi
+          echo "name=$name" | tee -a "$GITHUB_OUTPUT"
+          # The CI-only override: the models directory is a host folder, so it can be cached.
+          MODELS_DIR="$RUNNER_TEMP/ollama-models"
+          echo "MODELS_DIR=$MODELS_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$MODELS_DIR"
+          printf '%s\n' \
+            'services:' \
+            '  ollama:' \
+            '    volumes:' \
+            "      - \"$MODELS_DIR:/root/.ollama/models\"" \
+            > "$RUNNER_TEMP/compose.local-llm.yml"
+          echo "COMPOSE_FILE=docker-compose.yml:$RUNNER_TEMP/compose.local-llm.yml" >> "$GITHUB_ENV"
+      - name: Restore the model from the cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.MODELS_DIR }}
+          key: ollama-models-${{ steps.model.outputs.name }}-${{ env.OLLAMA_MODEL_ID }}
+      - name: Build the image
+        run: docker compose --env-file "$LOCAL_LLM_ENV" build
+      - name: Start ollama → ollama-pull → postgres → migrate → api
+        id: up
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit == 'true' }}
+        run: |
+          start=$(date +%s)
+          # The README's command (detached, image already built). One more try when the model
+          # download fails: a registry hiccup, not our code.
+          if ! docker compose --env-file "$LOCAL_LLM_ENV" up -d --no-build; then
+            echo "::warning::the first start failed; trying once more"
+            stop_token="pull-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+            echo "::stop-commands::$stop_token"
+            docker compose --env-file "$LOCAL_LLM_ENV" logs --no-color ollama-pull | tail -n 20 || true
+            echo "::$stop_token::"
+            docker compose --env-file "$LOCAL_LLM_ENV" up -d --no-build
+          fi
+          echo "up returned after $(( $(date +%s) - start )) s (cache hit: $CACHE_HIT)"
+      - name: Wait for /health/ready (90 s)
+        shell: bash
+        run: |
+          for _ in $(seq 1 90); do
+            if curl -sf --max-time 5 http://127.0.0.1:3000/health/ready; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "::error::/health/ready did not answer 200 within 90 s"
+          exit 1
+      - name: The one-shot pull exited 0 before the API started (AC2)
+        shell: bash
+        env:
+          MODEL: ${{ steps.model.outputs.name }}
+        run: |
+          compose() { docker compose --env-file "$LOCAL_LLM_ENV" "$@"; }
+          pull=$(compose ps -aq ollama-pull | tail -n 1)
+          api=$(compose ps -aq api)
+          test -n "$pull" && test -n "$api"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$pull")" = 0
+          pull_started=$(docker inspect -f '{{.State.StartedAt}}' "$pull")
+          pull_finished=$(docker inspect -f '{{.State.FinishedAt}}' "$pull")
+          api_started=$(docker inspect -f '{{.State.StartedAt}}' "$api")
+          echo "ollama-pull: $pull_started → $pull_finished; api started $api_started"
+          echo "pull took $(( $(date -d "$pull_finished" +%s) - $(date -d "$pull_started" +%s) )) s (V1)"
+          if [ "$(date -d "$api_started" +%s%N)" -lt "$(date -d "$pull_finished" +%s%N)" ]; then
+            echo "::error::the api started before the pull finished"
+            exit 1
+          fi
+          list=$(compose exec -T ollama ollama list)
+          echo "$list"
+          id=$(awk -v m="$MODEL" '$1 == m { print $2 }' <<< "$list")
+          if [ "$id" != "$OLLAMA_MODEL_ID" ]; then
+            echo "::error::$MODEL has ID ${id:-none}, not the verified $OLLAMA_MODEL_ID: verify the new model (V2, V3) before changing OLLAMA_MODEL_ID"
+            exit 1
+          fi
+      - name: Save the model to the cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$MODELS_DIR"
+      - name: Save the model to the cache (upload)
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.MODELS_DIR }}
+          key: ollama-models-${{ steps.model.outputs.name }}-${{ env.OLLAMA_MODEL_ID }}
+      - name: Model details (V2, V3)
+        shell: bash
+        env:
+          MODEL: ${{ steps.model.outputs.name }}
+        run: |
+          # The model's metadata (license, system prompt) must not be read as workflow commands.
+          stop_token="show-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$stop_token"
+          status=0
+          docker compose --env-file "$LOCAL_LLM_ENV" exec -T ollama ollama show "$MODEL" || status=$?
+          echo "::$stop_token::"
+          exit "$status"
+      - name: Smoke test through the API (AC3, AC4, V3, V4, V5)
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          # Model output must not be read as workflow commands.
+          stop_token="smoke-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$stop_token"
+          status=0
+          node apps/server/scripts/smoke-local-llm.ts \
+            --base-url http://127.0.0.1:3000 --provider ollama --limit-check 2>&1 \
+            | tee "$RUNNER_TEMP/smoke.log" || status=$?
+          echo "::$stop_token::"
+          exit "$status"
+      - name: Effective context and parallelism (V3, V5)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          docker compose --env-file "$LOCAL_LLM_ENV" exec -T ollama ollama ps || true
+          docker compose --env-file "$LOCAL_LLM_ENV" logs --no-color ollama 2>&1 \
+            | grep -E 'OLLAMA_NUM_PARALLEL|OLLAMA_CONTEXT_LENGTH|n_ctx|n_seq_max|parallel|context' \
+            | sed -E 's/::/: :/g' | tail -n 40 || true
+      - name: Summary
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          {
+            echo "### Local LLM check"
+            echo
+            echo '```text'
+            # Model text must not close the code block or add markup.
+            grep -E '^(provider |SSE send|JSON send|extra send|limit check|SMOKE_RESULT|SMOKE FAILED)' \
+              "$RUNNER_TEMP/smoke.log" 2> /dev/null | tr '`<>' "'()" || echo "no smoke output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Collect logs
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/local-llm-logs"
+          docker compose --env-file "$LOCAL_LLM_ENV" ps -a > "$RUNNER_TEMP/local-llm-logs/ps.txt" 2>&1 || true
+          docker compose --env-file "$LOCAL_LLM_ENV" logs --no-color --timestamps \
+            > "$RUNNER_TEMP/local-llm-logs/compose.log" 2>&1 || true
+          cp "$RUNNER_TEMP/smoke.log" "$RUNNER_TEMP/local-llm-logs/" 2> /dev/null || true
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: local-llm-logs
+          path: ${{ runner.temp }}/local-llm-logs
+          retention-days: 7
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file "$LOCAL_LLM_ENV" down -v || true

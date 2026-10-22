@@ -1,5 +1,9 @@
 # One command: postgres (healthy) → migrate (one-shot, exits 0) → api on http://localhost:3000.
 # Defaults work without a .env file; copy .env.example to .env to change them.
+#
+# Profile local-llm (README "Local model (Ollama)") adds ollama (healthy) → ollama-pull (one-shot)
+# before the api starts; local-llm.env turns on the profile and enables the provider:
+#   docker compose --env-file local-llm.env up --build
 
 x-app: &app
   build: .
@@ -47,6 +51,8 @@ services:
       JSON_MAX_WAIT_MS: ${JSON_MAX_WAIT_MS:-195000}
       NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      # Used only when PROVIDERS_ENABLED includes ollama (profile local-llm).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       GENERATION_DEADLINE_MS: ${GENERATION_DEADLINE_MS:-180000}
       TERMINAL_STATEMENT_TIMEOUT_MS: ${TERMINAL_STATEMENT_TIMEOUT_MS:-3000}
       TERMINAL_WRITE_BUDGET_MS: ${TERMINAL_WRITE_BUDGET_MS:-10000}
@@ -62,9 +68,58 @@ services:
     # Loopback only: this file is a local stack with default credentials, not a deployment.
     ports:
       - "127.0.0.1:${API_PORT:-3000}:3000"
+    # The only service on both networks: postgres and ollama never share one.
+    networks: [default, llm]
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # Only with the local-llm profile; without it the api starts as before.
+      ollama-pull:
+        condition: service_completed_successfully
+        required: false
+
+  # Profile local-llm: a CPU-only local model. Not published to the host; only the api reaches it.
+  ollama:
+    image: ollama/ollama:0.35.1@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
+    profiles: ["local-llm"]
+    networks: [llm]
+    environment:
+      # Two answers at a time, the same as the catalog's maxConcurrency for ollama: a third send
+      # gets 503 provider_busy at once instead of queueing here until its deadline.
+      OLLAMA_NUM_PARALLEL: "2"
+      # Tokens per answer: twice the catalog's contextWindow (4,096). Ollama silently drops the
+      # start of a longer prompt instead of failing, so this absorbs a token estimate that is
+      # too low. Memory grows with OLLAMA_NUM_PARALLEL × OLLAMA_CONTEXT_LENGTH.
+      OLLAMA_CONTEXT_LENGTH: "8192"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # The image has no curl; the CLI asks the server on 127.0.0.1:11434.
+      test: ["CMD", "ollama", "list"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # One-shot: pulls the catalog's ollama model into the volume (a no-op once it is there).
+  ollama-pull:
+    image: ollama/ollama:0.35.1@sha256:292ee7945dfc3d5840a181f3ab86fedb1e66703e02c8af98b50f4da56b7e278c
+    profiles: ["local-llm"]
+    networks: [llm]
+    entrypoint: ["ollama"]
+    command: ["pull", "qwen2.5:0.5b"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+networks:
+  default:
+  # Ollama and its pull job, plus the api; the model download needs internet access.
+  llm:
 
 volumes:
   postgres-data:
+  ollama-models:

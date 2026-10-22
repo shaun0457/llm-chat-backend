@@ -31,6 +31,19 @@ const timingMs = (fallback: number) =>
 const capacityLimit = (fallback: number) =>
   z.coerce.number().int().min(1).max(10_000).default(fallback);
 const DEFAULT_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+/** Ollama's own default address; docker compose points it at the `ollama` service instead. */
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
+
+/** An OpenAI-compatible API's base URL: http(s), without credentials in it. */
+const providerBaseUrl = (fallback: string) =>
+  z
+    .url({ protocol: /^https?$/ })
+    .refine((value) => {
+      // Runs after a failed URL check too: only judge what parses.
+      const url = URL.canParse(value) ? new URL(value) : undefined;
+      return url === undefined || (url.username === "" && url.password === "");
+    }, "must not contain credentials")
+    .default(fallback);
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
@@ -68,14 +81,8 @@ const envSchema = z.object({
   MAX_ACTIVE_GENERATIONS: capacityLimit(8),
   MAX_ACTIVE_PER_PROVIDER: capacityLimit(4),
   // Server configuration only: clients can never choose where a provider call goes.
-  NVIDIA_BASE_URL: z
-    .url({ protocol: /^https?$/ })
-    .refine((value) => {
-      // Runs after a failed URL check too: only judge what parses.
-      const url = URL.canParse(value) ? new URL(value) : undefined;
-      return url === undefined || (url.username === "" && url.password === "");
-    }, "must not contain credentials")
-    .default(DEFAULT_NVIDIA_BASE_URL),
+  NVIDIA_BASE_URL: providerBaseUrl(DEFAULT_NVIDIA_BASE_URL),
+  OLLAMA_BASE_URL: providerBaseUrl(DEFAULT_OLLAMA_BASE_URL),
 });
 
 /** Holds the database password and operator API keys: never log it. */
@@ -132,6 +139,8 @@ export type AppConfig = Readonly<{
   maxActivePerProvider: number;
   /** Where the nvidia provider's OpenAI-compatible API lives. */
   nvidiaBaseUrl: string;
+  /** Where the ollama provider's OpenAI-compatible API lives (a local Ollama server). */
+  ollamaBaseUrl: string;
   /** `<PROVIDER>_API_KEY` of each enabled provider that has one, by provider id. Secrets. */
   operatorKeys: Readonly<Record<string, string>>;
 }>;
@@ -244,6 +253,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     maxActiveGenerations: parsed.MAX_ACTIVE_GENERATIONS,
     maxActivePerProvider: parsed.MAX_ACTIVE_PER_PROVIDER,
     nvidiaBaseUrl: parsed.NVIDIA_BASE_URL,
+    ollamaBaseUrl: parsed.OLLAMA_BASE_URL,
     operatorKeys: readOperatorKeys(providersEnabled, present),
   });
 }

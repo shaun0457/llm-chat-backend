@@ -15,6 +15,12 @@
           "maxOutputTokens": 2048
         }
       ]
+    },
+    "ollama": {
+      "defaultModel": "qwen2.5:0.5b",
+      "requiresKey": false,
+      "maxConcurrency": 2,
+      "models": [{ "id": "qwen2.5:0.5b", "contextWindow": 4096, "maxOutputTokens": 512 }]
     }
   }
 }

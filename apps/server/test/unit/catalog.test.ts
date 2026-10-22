@@ -41,6 +41,18 @@ describe("model catalog", () => {
     ]);
   });
 
+  it("ships the keyless ollama provider with one small model and a limit of 2 (#11)", () => {
+    // Re-run the CI local-llm job before changing the model or its limits.
+    const catalog = loadCatalog(DEFAULT_MODEL_CATALOG_PATH);
+
+    expect(catalog.provider("ollama")).toEqual({
+      requiresKey: false,
+      defaultModel: "qwen2.5:0.5b",
+      maxConcurrency: 2,
+      models: [{ id: "qwen2.5:0.5b", contextWindow: 4096, maxOutputTokens: 512 }],
+    });
+  });
+
   it("ships a default catalog with the keyless demo provider", () => {
     const catalog = loadCatalog(DEFAULT_MODEL_CATALOG_PATH);
 

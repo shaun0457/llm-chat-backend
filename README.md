@@ -25,11 +25,12 @@ repository runs and is documented at every step; what is not built yet is listed
 | Two or three build-versus-reuse decisions with their trade-offs | [Build vs reuse](#build-vs-reuse)                                                      |
 | Where the API documentation is                                  | [API documentation](#api-documentation)                                                |
 | Why it was built this way                                       | [`docs/adr`](docs/adr)                                                                 |
-| Bonus items: streaming, a local model, a public deployment      | [Streaming](#streaming-sse); the others: [What I would do next](#what-i-would-do-next) |
+| Bonus items: streaming, a local model, a public deployment      | [Streaming](#streaming-sse), [Local model](#local-model-ollama); deployment: to follow |
 
 ## Prerequisites
 
-- Docker (Compose v2), for the one-command stack and the integration tests
+- Docker with Compose v2.20 or later (the stack uses `depends_on: required: false`), for the
+  one-command stack and the integration tests
 - Node.js 22 (the image uses 22.23.3) and pnpm 9 (`corepack enable`), to develop and test
 
 ## Run with Docker
@@ -112,6 +113,7 @@ be positive whole numbers of milliseconds, at most one hour.
 | `MAX_ACTIVE_GENERATIONS`        | `8`                          | Active answers in this process at most; then 503 `server_busy` (1–10,000)                                       |
 | `MAX_ACTIVE_PER_PROVIDER`       | `4`                          | Active answers per provider unless its catalog entry sets `maxConcurrency`; then 503 `provider_busy` (1–10,000) |
 | `NVIDIA_BASE_URL`               | NVIDIA's public endpoint     | The `nvidia` provider's OpenAI-compatible API (`http`/`https`); clients can never choose a URL                  |
+| `OLLAMA_BASE_URL`               | `http://localhost:11434/v1`  | The `ollama` provider's OpenAI-compatible API (`http`/`https`); docker compose sets `http://ollama:11434/v1`    |
 | `<PROVIDER>_API_KEY`            | (none)                       | The server's own key for an enabled provider, e.g. `NVIDIA_API_KEY` (1–512 visible ASCII)                       |
 
 The model catalog lists, per provider, whether it needs an API key, its default model, its
@@ -230,6 +232,10 @@ flowchart LR
   subgraph compose["docker compose"]
     migrate["migrate<br/>one-shot: dist/migrate.js"]
     postgres[("postgres<br/>PostgreSQL 17")]
+    subgraph localllm["profile local-llm (optional)"]
+      ollamaPull["ollama-pull<br/>one-shot: pulls the catalogued model"]
+      ollama["ollama<br/>CPU only, 2 parallel answers, internal network"]
+    end
     subgraph api["api: dist/index.js, one process built by buildApp()"]
       routes["Fastify routes<br/>health · providers · sessions · messages<br/>zod schemas: validation and /openapi.json"]
       services["sessions service<br/>messages service: admission transaction<br/>stale reclaim on every session-scoped request"]
@@ -250,6 +256,8 @@ flowchart LR
   port --- demo
   port --- openai
   openai -- "the turn's key, server-defined base URL" --> nvidia
+  openai -. "no key, OLLAMA_BASE_URL" .-> ollama
+  ollamaPull -- "ollama pull" --> ollama
   migrate -- "advisory lock, Drizzle migrations" --> postgres
   services -- "row lock, reclaim, inserts, reads" --> postgres
   jobs -- "fenced UPDATEs" --> postgres
@@ -262,10 +270,12 @@ one admission transaction, and every generation runs as a job inside the same pr
 reach models only through the `LlmProvider` port; the `ProviderRegistry` maps the enabled
 provider ids from the model catalog to their adapters. `demo` answers in process without a
 key, and `nvidia` goes through `OpenAiCompatibleProvider` to NVIDIA's hosted API with the key
-decided for that turn. Each job ends at its generation deadline at the latest, and an answer
-whose job died with the process is failed as `interrupted` by the next request that touches its
-session ([Failure handling](#failure-handling)). PostgreSQL is the only shared state; memory
-holds what a restart may lose harmlessly (the text being streamed, abort controllers, capacity
+decided for that turn; `ollama`, with the `local-llm` profile, goes through the same adapter to
+a local Ollama server without a key ([Local model](#local-model-ollama)). Each job ends at its
+generation deadline at the latest, and an answer whose job died with the process is failed as
+`interrupted` by the next request that touches its session
+([Failure handling](#failure-handling)). PostgreSQL is the only shared state; memory holds what
+a restart may lose harmlessly (the text being streamed, abort controllers, capacity
 reservations).
 
 ### Sending a message
@@ -532,10 +542,11 @@ TERMINAL_WRITE_BUDGET_MS + RECLAIM_GRACE_MS` (240 s) after it started cannot hav
 
 ## Providers and API keys
 
-| Provider | Needs a key | Models (`config/models.json`)                  | Enable with                     |
-| -------- | ----------- | ---------------------------------------------- | ------------------------------- |
-| `demo`   | no          | `demo`: a fixed sentence, for trying the API   | (on by default)                 |
-| `nvidia` | yes         | `meta/llama-3.2-11b-vision-instruct` (default) | `PROVIDERS_ENABLED=demo,nvidia` |
+| Provider | Needs a key | Models (`config/models.json`)                  | Enable with                                                                                       |
+| -------- | ----------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `demo`   | no          | `demo`: a fixed sentence, for trying the API   | (on by default)                                                                                   |
+| `nvidia` | yes         | `meta/llama-3.2-11b-vision-instruct` (default) | `PROVIDERS_ENABLED=demo,nvidia`                                                                   |
+| `ollama` | no          | `qwen2.5:0.5b` (default), local, CPU only      | `PROVIDERS_ENABLED=demo,ollama` with the `local-llm` profile ([Local model](#local-model-ollama)) |
 
 `nvidia` talks to NVIDIA's hosted OpenAI-compatible API through the official `openai` SDK; any
 other OpenAI-compatible server can be added the same way. Only non-reasoning models are
@@ -600,6 +611,86 @@ again.
 429, 5xx, connection errors and timeouts are retried twice by the SDK before they fail.
 `errorDetail` is a short, scrubbed message (at most 500 characters), for example
 `The model provider answered HTTP 401: …`. See [ADR 0008](docs/adr/0008-llm-port-byok.md).
+
+## Local model (Ollama)
+
+An optional compose profile runs a small model on your own machine, with no key and no hosted
+provider. One command turns it on:
+
+```sh
+docker compose --env-file local-llm.env up --build
+curl -X POST localhost:3000/sessions -H 'content-type: application/json' \
+  -d '{"provider":"ollama"}'
+curl -X POST localhost:3000/sessions/<id>/messages -H 'content-type: application/json' \
+  -H 'Prefer: wait=180' -d '{"content":"What is 2+2? Answer with one number."}'
+```
+
+The profile adds two services. `ollama` runs a pinned `ollama/ollama` image on the internal
+network only (it is not published to the host) and keeps models in the `ollama-models` volume.
+`ollama-pull` is a one-shot job that starts once Ollama is healthy and pulls the catalogued
+model, `qwen2.5:0.5b` (about 400 MB). The API starts only after that job has exited 0. Later
+starts find the model in the volume and download nothing again. Without the profile none of
+this runs and the stack is unchanged.
+
+[`local-llm.env`](local-llm.env) sets two things: `COMPOSE_PROFILES=local-llm`, which starts
+the profile, and `PROVIDERS_ENABLED=demo,ollama`, which enables the provider; `demo` stays the
+default provider and every other setting keeps its default. With `--env-file`, compose does
+not read `.env`; to keep your own settings too, pass both, yours first:
+`docker compose --env-file .env --env-file local-llm.env up --build`. The profile alone does
+not enable the provider, and enabled without the profile, `ollama` stays listed but every
+answer fails as `llm_upstream_error`, because nothing answers at its address. Ollama is on its
+own compose network with the api; PostgreSQL is not on it.
+`docker compose --env-file local-llm.env down -v` also removes the model volume.
+
+The compose file repeats three catalog values: the model it pulls, `OLLAMA_NUM_PARALLEL`
+(the catalog's `maxConcurrency`) and the context (twice the `contextWindow`). A unit test
+keeps them in step with the shipped catalog; a different catalog (`MODEL_CATALOG_PATH`) needs
+the same changes in the compose file.
+
+- **Same adapter, different configuration.** `ollama` uses the OpenAI-compatible adapter that
+  `nvidia` uses, pointed at `OLLAMA_BASE_URL` and called with the placeholder key `no-key`,
+  which Ollama ignores. There is no Ollama-specific code path; only two adapter settings
+  differ. A request may take 120 s instead of 60 s to start and between chunks, since a CPU
+  model can need over a minute before its first token. A failed request is not retried, because
+  a retry would repeat the whole prompt evaluation inside the same 180 s deadline.
+- **Hardware.** CPU only; GPU configuration is out of scope. The model needs about 1 GB of
+  memory with two 8,192-token contexts. Any machine that runs Docker comfortably can run it,
+  but answers are slow.
+- **Speed.** Measured on a GitHub runner with 2 CPUs and 7.8 GiB of memory (2026-10-22,
+  [run 39755308412](https://github.com/shaun0457/llm-chat-backend/actions/runs/39755308412)):
+  the model download took 8 s; the first question took 1.1 s to the first token and 1.2 s in
+  all, including loading the model; with the model loaded, a short JSON answer took 0.16 s.
+  Two 512-token answers at once took about 36 s each, about 14 tokens per second per answer.
+  The whole CI job, with a cold model cache, took 3 min 22 s. A slower machine takes
+  proportionally longer, still well inside the 180 s deadline.
+- **The limit is 2.** Ollama answers `OLLAMA_NUM_PARALLEL=2` requests at a time, and the
+  catalog gives `ollama` the same number as `maxConcurrency`. A third concurrent send gets
+  503 `provider_busy` with `Retry-After: 10` at once and writes nothing. Without the limit,
+  Ollama would queue the third request while its 180 s generation deadline runs, and on a CPU
+  every queued answer would risk ending as `llm_timeout`.
+- **Context window and output.** The catalog's `contextWindow` is 4,096 tokens, and the
+  history budget keeps each prompt within it by an estimate. Ollama gives each request
+  `OLLAMA_CONTEXT_LENGTH=8192`, twice as much, because it does not reject a prompt longer than
+  its context: it silently drops the start. The headroom absorbs an estimate that is too low,
+  for example for digits, which this model reads one token each. (Ollama's OpenAI-compatible
+  endpoint cannot set the context per request.) Answers stop at the catalog's
+  `maxOutputTokens` of 512 (finish reason `length`).
+- **Why this model.** `qwen2.5:0.5b` is the instruction-tuned Qwen 2.5 with 0.5 billion
+  parameters, 4-bit quantised. It answers simple questions coherently, and it is not a
+  reasoning model: its answers carry no `<think>` blocks in the content.
+
+**Proven in CI.** The `local-llm` workflow brings this stack up on a GitHub runner and runs
+`apps/server/scripts/smoke-local-llm.ts` against it. The script asks "What is 2+2? Answer with
+one number." once as an event stream, which must end with `done`, and once as JSON with
+`Prefer: wait=180`, where a 202 is followed by polling. Both must end in a completed, non-empty
+answer without reasoning markers. Then two long answers run at once: a third send must get
+503 `provider_busy`; at least one of the two answers must stop at the 512-token limit (finish
+reason `length`), and neither may go past it. The workflow starts the stack with the command
+above. It runs on
+pushes to `main`, on pull requests that touch provider, catalog or compose files, on pull
+requests from this repository labelled `local-llm`, and by hand. It caches the model between
+runs and is not a required check. The script works against any base URL and provider, for
+example `node apps/server/scripts/smoke-local-llm.ts --base-url http://127.0.0.1:3000 --provider demo`.
 
 ## Build vs reuse
 
@@ -701,13 +792,21 @@ as history. It prints just the answers and their usage, and fails if a response 
 the container logs (which must not be empty) contain a key-shaped string. It runs after the
 adapter job, so the two never call NVIDIA at the same time. Neither job is a required check.
 
+**Against a real local model.** The `ollama` limit is an integration test with a fake
+provider registered as `ollama` (`test/integration/ollama-limit.test.ts`), and the adapter's
+wiring for it (base URL, the placeholder key `no-key`, the catalog's output limit) is tested
+against msw. A real Ollama runs only in the `local-llm` workflow
+([Local model](#local-model-ollama)); the smoke script that workflow runs has its own
+integration test against the app on a real socket.
+
 **Not tested on purpose.** The quality of real model answers (the live checks prove the path,
 not the content); mutation testing; load and performance; running more than one API process,
 which is out of scope. A response-conformance test against the OpenAPI document and
 property-based tests are listed under [What I would do next](#what-i-would-do-next).
 
 CI runs the same commands plus a container build-and-start check, a migration drift check, an
-OpenAPI drift check, a `docker compose` smoke test, a production dependency audit, a gitleaks
+OpenAPI drift check, a `docker compose` smoke test, the `local-llm` check (when it applies),
+a production dependency audit, a gitleaks
 secret scan and a commit-message check. CodeQL runs once the repository is public; code
 scanning on private repositories needs a paid license.
 
@@ -734,8 +833,6 @@ A first version of this list; the final submission pass completes it.
 
 **Still being built for v1**, each as its own ticket:
 
-- A local model via Ollama as an optional compose profile
-  ([#11](https://github.com/shaun0457/llm-chat-backend/issues/11))
 - Stopping a generation when its session is deleted, retention of inactive sessions, rate
   limits, security headers and CORS ([#12](https://github.com/shaun0457/llm-chat-backend/issues/12))
 - A public deployment of the demo ([#14](https://github.com/shaun0457/llm-chat-backend/issues/14))

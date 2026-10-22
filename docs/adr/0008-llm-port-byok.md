@@ -153,3 +153,12 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
 - Ordinary error messages could in principle contain a key the serializer cannot recognise;
   the adapter therefore only ever throws already-scrubbed `LlmError`s, and other code never
   sees a key.
+
+## Amendment (2026-10-22, issue #11): the local `ollama` provider
+
+`ollama` reuses `OpenAiCompatibleProvider` with two different settings: `timeout` 120 s instead
+of 60 s, and `maxRetries` 0 instead of 2 (`apps/server/src/llm/providers.ts`). A CPU model can
+need over a minute before its first token, and every retry would evaluate the whole prompt again
+inside the same 180 s generation deadline, so a retry would mostly turn an upstream error into a
+later `llm_timeout`. The 120 s also applies to every gap between chunks. `nvidia` keeps 60 s and
+two retries. Contract test: a 500 from the local model → one request, `llm_upstream_error`.
