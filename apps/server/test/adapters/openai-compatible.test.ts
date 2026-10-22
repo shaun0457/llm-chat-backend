@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { OpenAiCompatibleProvider } from "../../src/llm/openai-compatible.js";
 import type { LlmEvent, LlmRequest } from "../../src/llm/port.js";
 import {
   UPSTREAM_BASE_URL,
+  endlessErrorOf,
   errorOf,
   rawStream,
   slow,
@@ -261,9 +262,19 @@ describe("OpenAiCompatibleProvider", () => {
       upstream.reply(slow(2_000));
       const controller = new AbortController();
       const reason = new Error("caller stopped");
-      setTimeout(() => controller.abort(reason), 20);
 
-      await expect(collect(stream({ signal: controller.signal }))).rejects.toBe(reason);
+      const result = collect(stream({ signal: controller.signal }));
+      await vi.waitFor(() => expect(upstream.requests).toHaveLength(1));
+      controller.abort(reason);
+
+      await expect(result).rejects.toBe(reason);
+    });
+
+    it("reads only the start of an error body that never ends", { timeout: 10_000 }, async () => {
+      upstream.reply(endlessErrorOf(500));
+
+      await expect(collect(stream())).rejects.toMatchObject({ code: "llm_upstream_error" });
+      expect(upstream.requests).toHaveLength(3);
     });
   });
 

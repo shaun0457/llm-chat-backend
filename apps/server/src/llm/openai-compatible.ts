@@ -24,6 +24,37 @@ export type OpenAiCompatibleOptions = Readonly<{
 /** The SDK insists on a key; keyless servers (e.g. a local model) ignore this one. */
 const KEYLESS_PLACEHOLDER = "no-key";
 
+/** How much of an upstream error body is read at most. */
+const MAX_ERROR_BODY_BYTES = 8192;
+/** Statuses whose Response must not have a body. */
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([101, 103, 204, 205, 304]);
+
+/** The first `maxBytes` (roughly) of a body as text; the rest is never read. */
+async function readStart(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) {
+    return "";
+  }
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  try {
+    while (bytes < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      bytes += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } catch {
+    return text;
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
+
 function finishReason(value: string): LlmFinishReason {
   return value === "stop" || value === "length" ? value : "other";
 }
@@ -51,17 +82,21 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   ): AsyncIterable<LlmEvent> {
     // The SDK keeps only part of an error body; the mapping needs all of it (e.g. a vLLM or
     // problem-details message saying the context is too long). One client per call, so this
-    // holds the last failed response of this call only.
+    // holds the (bounded) body of this call's last failed response only.
     let errorBody: string | undefined;
     const recordingFetch: typeof fetch = async (input, init) => {
       const response = await fetch(input, init);
-      if (!response.ok) {
-        errorBody = await response
-          .clone()
-          .text()
-          .catch(() => undefined);
+      if (response.ok) {
+        return response;
       }
-      return response;
+      // An error body is read only up to a bound, and the SDK gets that bounded copy, so a
+      // huge or endless error body can neither fill memory nor hang the call.
+      errorBody = await readStart(response, MAX_ERROR_BODY_BYTES);
+      return new Response(NULL_BODY_STATUSES.has(response.status) ? null : errorBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     };
     const client = new OpenAI({
       apiKey: apiKey ?? KEYLESS_PLACEHOLDER,

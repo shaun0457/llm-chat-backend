@@ -96,6 +96,20 @@ export function errorOf(status: number, body: unknown): Responder {
     });
 }
 
+/** An upstream error whose body never ends: 1 KiB chunks for as long as it is read. */
+export function endlessErrorOf(status: number): Responder {
+  const piece = new TextEncoder().encode(`{"error":{"message":"${"x".repeat(1000)}`);
+  return () =>
+    new HttpResponse(
+      new ReadableStream({
+        pull(controller) {
+          controller.enqueue(piece);
+        },
+      }),
+      { status, headers: { "content-type": "application/json", "retry-after-ms": "0" } },
+    );
+}
+
 /** Never answers within `ms`: for the SDK's request timeout. */
 export function slow(ms: number): Responder {
   return async () => {
