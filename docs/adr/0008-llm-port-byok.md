@@ -54,7 +54,9 @@ include_usage: true } }, { signal })`. A keyless call passes the placeholder `no
   caller can tell it from an upstream failure. `LlmError` carries no `cause`, so nothing of the
   SDK error can be logged through it.
 
-- **Credential decision**, once per new turn inside the admission transaction, after the
+- **Credential decision** (superseded for keyless providers by the
+  [#33 amendment](#amendment-2026-10-22-issue-33-keyless-providers-never-receive-a-key): they
+  never receive a key), once per new turn inside the admission transaction, after the
   provider is resolved: the `X-LLM-Api-Key` header (validated by the route schema as 1–512
   visible ASCII characters, a 400 otherwise, never echoed) → the operator key
   `<PROVIDER>_API_KEY` of the turn's provider (read at startup for enabled providers only) →
