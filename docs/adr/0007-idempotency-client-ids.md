@@ -74,7 +74,7 @@ server generates a UUIDv7, and identical sends are not deduplicated.
   a call to the model.
 - Ids are global: a client cannot reuse an id across sessions, and an id taken by another
   session reveals that it is taken. Sessions are readable by anyone anyway (there is no
-  authentication; see the README's "What I would do next"), so this discloses nothing new.
+  authentication; see the README's "Limitations and next steps"), so this discloses nothing new.
   Once sessions have owners, the conflict details that tell "another session" and "an
   assistant message" apart should become one generic detail.
 - Provider and model are compared field by field with the stored turn, not resolved again:

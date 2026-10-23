@@ -1,7 +1,7 @@
 # One command: postgres (healthy) → migrate (one-shot, exits 0) → api on http://localhost:3000.
 # Defaults work without a .env file; copy .env.example to .env to change them.
 #
-# Profile local-llm (README "Local model (Ollama)") adds ollama (healthy) → ollama-pull (one-shot)
+# Profile local-llm (README "Local model (bonus 2.1)") adds ollama (healthy) → ollama-pull (one-shot)
 # before the api starts; local-llm.env turns on the profile and enables the provider:
 #   docker compose --env-file local-llm.env up --build
 
@@ -66,7 +66,7 @@ services:
       RATE_LIMIT_GENERAL_PER_MIN: ${RATE_LIMIT_GENERAL_PER_MIN:-120}
       RATE_LIMIT_SEND_PER_MIN: ${RATE_LIMIT_SEND_PER_MIN:-20}
       # Unset by default: the local stack has no proxy in front, no browser origins and no
-      # retention. See README "Security considerations" and "Data retention".
+      # retention. See .env.example for what each one does.
       TRUST_PROXY: ${TRUST_PROXY:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-}
