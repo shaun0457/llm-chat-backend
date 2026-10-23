@@ -21,7 +21,7 @@ Required sections: [architecture](#architecture), [how to run](#run-it), [tests]
 
 How I read the open points of the assignment:
 
-- No authentication, as the assignment allows. Sessions are therefore global: anyone who can reach the API can read and delete every session.
+- No authentication, as the assignment allows. Sessions are therefore global: anyone who can reach the API can read, change and delete every session.
 - Deleting a session is included, and removes its messages with it.
 - "Local database" means a database server started by Docker Compose next to the API, here PostgreSQL 17.
 - The response format is mine to choose, so a client can wait for JSON, poll, or stream.
@@ -74,12 +74,13 @@ pnpm --filter server migrate   # the API itself never migrates
 pnpm --filter server start     # http://localhost:3000
 ```
 
-Settings are validated at startup; `.env.example` lists them with their defaults.
+Settings are validated at startup by `apps/server/src/config.ts`, which lists every one with its
+limits. `.env.example` holds the ones compose passes on; a local run also uses `PORT` and `HOST`.
 
 ### Local model (bonus 2.1)
 
 ```sh
-docker compose --env-file .env --env-file local-llm.env up --build -d   # drop --env-file .env if you have none
+docker compose --env-file local-llm.env up --build -d
 until curl -sf localhost:3000/health/ready >/dev/null; do sleep 5; done
 SESSION_ID=$(curl -s -X POST localhost:3000/sessions -H 'content-type: application/json' \
   -d '{"provider":"ollama"}' | jq -r .id)
@@ -89,7 +90,8 @@ docker compose --env-file local-llm.env down
 ```
 
 This adds Ollama with `qwen2.5:0.5b` (about 400 MB), CPU only. `local-llm.env` sets
-`PROVIDERS_ENABLED=demo,ollama`, so `nvidia` is off in this stack. A CPU answer can take longer
+`PROVIDERS_ENABLED=demo,ollama`, so `nvidia` is off in this stack. To keep your `.env` settings
+as well, pass `--env-file .env` before `--env-file local-llm.env`, to both `up` and `down`. A CPU answer can take longer
 than the default 30 s wait, hence `Prefer: wait=120`. The first start is slow: the pinned
 `ollama/ollama:0.35.1` image is 9.37 GB because it bundles GPU runtimes, and the first `up` took
 about 23 minutes on my machine (a 4-CPU Docker VM over a home connection). Later starts reuse
@@ -137,16 +139,16 @@ Entry points in the code:
 
 ## Design decisions
 
-| Decision                                                                    | Rejected alternative                          | What it costs                                                                                                                    | ADR                                                                                 |
-| --------------------------------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| One process; PostgreSQL enforces the consistency rules                      | In-memory locks; a job queue with workers     | No scale-out or failover; capacity, rate limits and live streams are per process                                                 | [0003](docs/adr/0003-single-process-db-truth.md)                                    |
-| Fastify; one zod schema per route for validation, types and OpenAPI         | Express; NestJS; Hono                         | Responses are not yet checked against the document (#26); Fastify, zod and the type provider must stay compatible                | [0001](docs/adr/0001-stack-and-tooling.md)                                          |
-| PostgreSQL with Drizzle; migrations as a separate step                      | Prisma or Kysely; migrating at API startup    | drizzle-kit's defaults need checking (the list index needed `NULLS FIRST`); a deploy needs a migrate step                        | [0002](docs/adr/0002-postgres-drizzle-migrations.md)                                |
-| JSON waits 30 s, then 202 + `Location`; or SSE                              | Always wait; always 202                       | Clients must handle 202; the only way to stop an answer is to delete its session                                                 | [0004](docs/adr/0004-async-request-reply.md), [0006](docs/adr/0006-sse-reattach.md) |
-| A deadline per answer; dead answers failed by the next request              | Leases with heartbeats; a sweeper             | A crashed answer blocks its session until a request comes 240 s after it started; every request to one session runs one `UPDATE` | [0005](docs/adr/0005-deadline-reclaim.md)                                           |
-| The client may send its own message id, so a retry is never stored twice    | An `Idempotency-Key` table; dedupe by content | No id, no dedupe; content is compared exactly; "admitted once", not "the model ran once"                                         | [0007](docs/adr/0007-idempotency-client-ids.md)                                     |
-| One LLM port; an SDK client per call with the caller's key                  | A shared client per provider; stored keys     | The caller sends the key with every message, and a restart loses it                                                              | [0008](docs/adr/0008-llm-port-byok.md)                                              |
-| The model's reasoning is dropped, so the API stays the same for every model | Storing or streaming it                       | A client cannot show the model's reasoning                                                                                       | [0008](docs/adr/0008-llm-port-byok.md)                                              |
+| Decision                                                                    | Rejected alternative                          | What it costs                                                                                                                                                                | ADR                                                                                 |
+| --------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| One process; PostgreSQL enforces the consistency rules                      | In-memory locks; a job queue with workers     | No scale-out or failover; capacity, rate limits and live streams are per process                                                                                             | [0003](docs/adr/0003-single-process-db-truth.md)                                    |
+| Fastify; one zod schema per route for validation, types and OpenAPI         | Express; NestJS; Hono                         | Responses are not yet checked against the document ([#26](https://github.com/shaun0457/llm-chat-backend/issues/26)); Fastify, zod and the type provider must stay compatible | [0001](docs/adr/0001-stack-and-tooling.md)                                          |
+| PostgreSQL with Drizzle; migrations as a separate step                      | Prisma or Kysely; migrating at API startup    | drizzle-kit's defaults need checking (the list index needed `NULLS FIRST`); a deploy needs a migrate step                                                                    | [0002](docs/adr/0002-postgres-drizzle-migrations.md)                                |
+| JSON waits 30 s, then 202 + `Location`; or SSE                              | Always wait; always 202                       | Clients must handle 202; the only way to stop an answer is to delete its session                                                                                             | [0004](docs/adr/0004-async-request-reply.md), [0006](docs/adr/0006-sse-reattach.md) |
+| A deadline per answer; dead answers failed by the next request              | Leases with heartbeats; a sweeper             | A crashed answer blocks its session until a request comes 240 s after it started; every request to one session runs one `UPDATE`                                             | [0005](docs/adr/0005-deadline-reclaim.md)                                           |
+| The client may send its own message id, so a retry is never stored twice    | An `Idempotency-Key` table; dedupe by content | No id, no dedupe; content is compared exactly; "admitted once", not "the model ran once"                                                                                     | [0007](docs/adr/0007-idempotency-client-ids.md)                                     |
+| One LLM port; an SDK client per call with the caller's key                  | A shared client per provider; stored keys     | The caller sends the key with every message, and a restart loses it                                                                                                          | [0008](docs/adr/0008-llm-port-byok.md)                                              |
+| The model's reasoning is dropped, so the API stays the same for every model | Storing or streaming it                       | A client cannot show the model's reasoning                                                                                                                                   | [0008](docs/adr/0008-llm-port-byok.md)                                              |
 
 Why PostgreSQL even for one process: a deploy briefly runs the old and the new process side by
 side, and the consistency rules must hold across both ([ADR 0003](docs/adr/0003-single-process-db-truth.md)).
@@ -395,19 +397,22 @@ the deployment files. To deploy it I would:
 - run the image as one instance with managed PostgreSQL, `node dist/migrate.js` as the pre-deploy step, and no server API key;
 - set `TRUST_PROXY` to the proxy's addresses or CIDR ranges, or every client shares one rate-limit bucket;
 - give the platform a stop grace above 18 s (compose sets 20 s), so aborted answers can store their final state;
-- set the JSON wait below the proxy's timeout, and check that the proxy streams SSE without buffering.
+- set `JSON_MAX_WAIT_MS` below the proxy's timeout, and check that the proxy streams SSE without buffering;
+- expose only `/health` publicly, since `/health/ready` queries the database and is not rate limited;
+- set `RETENTION_DAYS` so anonymous sessions do not pile up, and `CORS_ORIGINS` for a browser client;
+- keep `MAX_ACTIVE_GENERATIONS` below the database pool size (node-postgres' default of 10).
 
 ## Limitations and next steps
 
 Not verified: answer quality, load, more than one API process, and SSE through a real proxy.
 
-| Limitation                                                                        | Why, or what I would do                                                                                  |
-| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| No authentication: anyone who can reach the API can read and delete every session | Not asked for; accounts and per-user ownership of sessions come before any real users                    |
-| One API instance: capacity, rate limits and live streams do not scale out         | See [Build vs reuse](#build-vs-reuse)                                                                    |
-| A crashed answer blocks its session until a request comes 240 s after it started  | Follows from having no lease or sweeper                                                                  |
-| A failed answer cannot be retried in place; the user sends the question again     | Retry as a new attempt of the same turn ([#13](https://github.com/shaun0457/llm-chat-backend/issues/13)) |
-| A send based on stale history is accepted, so two tabs can talk over each other   | Reject it ([#23](https://github.com/shaun0457/llm-chat-backend/issues/23))                               |
-| A server key can be spent by any client                                           | A public deployment would hold no key                                                                    |
-| Responses are not checked against the OpenAPI document                            | A conformance test ([#26](https://github.com/shaun0457/llm-chat-backend/issues/26))                      |
-| SSE and timeouts are unmeasured behind a real proxy                               | Deploy and measure ([#25](https://github.com/shaun0457/llm-chat-backend/issues/25))                      |
+| Limitation                                                                                | Why, or what I would do                                                                                  |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| No authentication: anyone who can reach the API can read, change and delete every session | Not asked for; accounts and per-user ownership of sessions come before any real users                    |
+| One API instance: capacity, rate limits and live streams do not scale out                 | See [Build vs reuse](#build-vs-reuse)                                                                    |
+| A crashed answer blocks its session until a request comes 240 s after it started          | Follows from having no lease or sweeper                                                                  |
+| A failed answer cannot be retried in place; the user sends the question again             | Retry as a new attempt of the same turn ([#13](https://github.com/shaun0457/llm-chat-backend/issues/13)) |
+| A send based on stale history is accepted, so two tabs can talk over each other           | Reject it ([#23](https://github.com/shaun0457/llm-chat-backend/issues/23))                               |
+| A server key can be spent by any client                                                   | A public deployment would hold no key                                                                    |
+| Responses are not checked against the OpenAPI document                                    | A conformance test ([#26](https://github.com/shaun0457/llm-chat-backend/issues/26))                      |
+| SSE and timeouts are unmeasured behind a real proxy                                       | Deploy and measure ([#25](https://github.com/shaun0457/llm-chat-backend/issues/25))                      |
